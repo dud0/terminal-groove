@@ -1,0 +1,25 @@
+[package]
+name = "terminal-groove"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A real-time terminal groovebox"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+cpal = "0.17"
+crossterm = "0.29"
+ratatui = { version = "0.30", features = ["crossterm"] }
+rtrb = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
