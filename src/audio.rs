@@ -1,5 +1,5 @@
 use crate::{
-    dsp::{Adsr, DcBlock, Delay, PolyBlepOsc, Reverb, Smoother, Svf, exp_map, safety},
+    dsp::{Adsr, Biquad, DcBlock, Delay, PolyBlepOsc, Reverb, Smoother, Svf, exp_map, safety},
     engine::{GateAction, StepClock, synth_action},
     model::{
         Globals, Instrument, ParameterLocks, Percent, ProjectV1, STEP_COUNT, StepEvent,
@@ -188,6 +188,128 @@ struct SynthVoice {
     delay_send: Smoother,
     reverb_send: Smoother,
 }
+
+const DRUM_SILENCE: f32 = 0.0001;
+
+struct DrumEnvelope {
+    value: f32,
+    start: f32,
+    peak: f32,
+    attack_samples: u32,
+    decay_samples: u32,
+    elapsed: u32,
+}
+impl DrumEnvelope {
+    fn new() -> Self {
+        Self {
+            value: DRUM_SILENCE,
+            start: DRUM_SILENCE,
+            peak: DRUM_SILENCE,
+            attack_samples: 1,
+            decay_samples: 1,
+            elapsed: 1,
+        }
+    }
+    fn trigger(&mut self, peak: f32, attack: f32, decay: f32, sr: f32) {
+        self.start = self.value.max(DRUM_SILENCE);
+        self.peak = peak;
+        self.attack_samples = (attack * sr).round().max(1.0) as u32;
+        self.decay_samples = (decay * sr).round().max(self.attack_samples as f32 + 1.0) as u32;
+        self.elapsed = 0;
+    }
+    fn next_value(&mut self) -> f32 {
+        if self.elapsed < self.attack_samples {
+            let t = self.elapsed as f32 / self.attack_samples as f32;
+            self.value = self.start * (self.peak / self.start).powf(t);
+        } else if self.elapsed < self.decay_samples {
+            let t = (self.elapsed - self.attack_samples) as f32
+                / (self.decay_samples - self.attack_samples) as f32;
+            self.value = self.peak * (DRUM_SILENCE / self.peak).powf(t);
+        } else {
+            self.value = DRUM_SILENCE;
+        }
+        self.elapsed = self.elapsed.saturating_add(1);
+        self.value
+    }
+}
+
+struct KickPitchEnvelope {
+    value: f32,
+    start: f32,
+    peak: f32,
+    settled: f32,
+    rise_samples: u32,
+    fall_samples: u32,
+    elapsed: u32,
+}
+impl KickPitchEnvelope {
+    fn new() -> Self {
+        Self {
+            value: 75.0,
+            start: 75.0,
+            peak: 75.0,
+            settled: 48.0,
+            rise_samples: 1,
+            fall_samples: 1,
+            elapsed: 1,
+        }
+    }
+    fn trigger(&mut self, tone: f32, decay: f32, sr: f32) {
+        self.start = self.value.max(20.0);
+        self.peak = 75.0 + tone * 145.0;
+        self.settled = 38.0 + tone * 20.0;
+        self.rise_samples = (0.0015 * sr).round().max(1.0) as u32;
+        self.fall_samples = (decay.min(0.13) * sr)
+            .round()
+            .max(self.rise_samples as f32 + 1.0) as u32;
+        self.elapsed = 0;
+    }
+    fn next_value(&mut self) -> f32 {
+        if self.elapsed < self.rise_samples {
+            let t = self.elapsed as f32 / self.rise_samples as f32;
+            self.value = self.start + (self.peak - self.start) * t;
+        } else if self.elapsed < self.fall_samples {
+            let t = (self.elapsed - self.rise_samples) as f32
+                / (self.fall_samples - self.rise_samples) as f32;
+            self.value = self.peak * (self.settled / self.peak).powf(t);
+        } else {
+            self.value = self.settled;
+        }
+        self.elapsed = self.elapsed.saturating_add(1);
+        self.value
+    }
+}
+
+struct DrumVoice {
+    envelope: DrumEnvelope,
+    kick_pitch: KickPitchEnvelope,
+    phase: f32,
+    filter: Biquad,
+    noise: u32,
+    tone: f32,
+    mix: [f32; 3],
+}
+impl DrumVoice {
+    fn new(seed: u32) -> Self {
+        Self {
+            envelope: DrumEnvelope::new(),
+            kick_pitch: KickPitchEnvelope::new(),
+            phase: 0.0,
+            filter: Biquad::new(),
+            noise: seed,
+            tone: 0.5,
+            mix: [0.0; 3],
+        }
+    }
+    fn noise(&mut self) -> f32 {
+        let mut x = self.noise;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.noise = x;
+        x as i32 as f32 / i32::MAX as f32
+    }
+}
 impl SynthVoice {
     fn new(sr: f32) -> Self {
         Self {
@@ -214,20 +336,8 @@ struct Renderer {
     playing: bool,
     sr: f32,
     status: Arc<AudioStatus>,
-    drum_amp: [f32; 3],
-    drum_phase: [f32; 3],
-    drum_tone: [f32; 3],
-    drum_decay: [f32; 3],
-    drum_mix: [[f32; 3]; 3],
-    preview_drum_amp: [f32; 3],
-    preview_drum_phase: [f32; 3],
-    preview_drum_tone: [f32; 3],
-    preview_drum_decay: [f32; 3],
-    preview_drum_mix: [[f32; 3]; 3],
-    noise: [u32; 3],
-    snare_phase2: f32,
-    snare_noise_filter: Svf,
-    hat_osc: [PolyBlepOsc; 6],
+    drums: [DrumVoice; 3],
+    preview_drums: [DrumVoice; 3],
     synth: [SynthVoice; 3],
     preview: [SynthVoice; 3],
     delay: Delay,
@@ -242,20 +352,12 @@ impl Renderer {
             playing: false,
             sr: sr as f32,
             status,
-            drum_amp: [0.0; 3],
-            drum_phase: [0.0; 3],
-            drum_tone: [0.5; 3],
-            drum_decay: [0.5; 3],
-            drum_mix: [[0.0; 3]; 3],
-            noise: [0x1234_abcd, 0x9137_2468, 0xdead_beef],
-            preview_drum_amp: [0.0; 3],
-            preview_drum_phase: [0.0; 3],
-            preview_drum_tone: [0.5; 3],
-            preview_drum_decay: [0.5; 3],
-            preview_drum_mix: [[0.0; 3]; 3],
-            snare_phase2: 0.0,
-            snare_noise_filter: Default::default(),
-            hat_osc: std::array::from_fn(|_| Default::default()),
+            drums: std::array::from_fn(|i| {
+                DrumVoice::new([0x1234_abcd, 0x9137_2468, 0xdead_beef][i])
+            }),
+            preview_drums: std::array::from_fn(|i| {
+                DrumVoice::new([0x4a31_27dd, 0xa187_4c29, 0x6d2b_f193][i])
+            }),
             synth: std::array::from_fn(|_| SynthVoice::new(sr as f32)),
             preview: std::array::from_fn(|_| SynthVoice::new(sr as f32)),
             delay: Delay::new(sr),
@@ -292,8 +394,10 @@ impl Renderer {
             AudioCommand::Stop => {
                 self.playing = false;
                 self.clock.reset();
-                self.drum_amp = [0.0; 3];
-                self.preview_drum_amp = [0.0; 3];
+                for voice in self.drums.iter_mut().chain(self.preview_drums.iter_mut()) {
+                    voice.envelope.value = DRUM_SILENCE;
+                    voice.envelope.elapsed = voice.envelope.decay_samples;
+                }
                 for v in self.synth.iter_mut().chain(self.preview.iter_mut()) {
                     v.env.gate_off();
                     v.active = false;
@@ -321,33 +425,64 @@ impl Renderer {
         let Instrument::Drum(p) = t.instrument else {
             return;
         };
-        self.drum_amp[track] = 1.0;
-        self.drum_phase[track] = 0.0;
-        if track == 1 {
-            self.snare_phase2 = 0.0;
-        }
-        self.drum_tone[track] = locks.tone.unwrap_or(p.tone).normalized();
-        self.drum_decay[track] = locks.decay.unwrap_or(p.decay).normalized();
-        self.drum_mix[track] = [
+        let tone = locks.tone.unwrap_or(p.tone).normalized();
+        let decay = locks.decay.unwrap_or(p.decay).normalized();
+        let mix = [
             locks.level.unwrap_or(t.level).normalized().powi(2),
             locks.delay_send.unwrap_or(t.delay_send).normalized(),
             locks.reverb_send.unwrap_or(t.reverb_send).normalized(),
         ];
+        Self::start_drum_voice(&mut self.drums[track], track, tone, decay, mix, self.sr);
     }
     fn trigger_preview_drum(&mut self, track: usize, locks: ParameterLocks) {
         let t = self.project.tracks[track];
         let Instrument::Drum(p) = t.instrument else {
             return;
         };
-        self.preview_drum_amp[track] = 1.0;
-        self.preview_drum_phase[track] = 0.0;
-        self.preview_drum_tone[track] = locks.tone.unwrap_or(p.tone).normalized();
-        self.preview_drum_decay[track] = locks.decay.unwrap_or(p.decay).normalized();
-        self.preview_drum_mix[track] = [
+        let tone = locks.tone.unwrap_or(p.tone).normalized();
+        let decay = locks.decay.unwrap_or(p.decay).normalized();
+        let mix = [
             locks.level.unwrap_or(t.level).normalized().powi(2),
             locks.delay_send.unwrap_or(t.delay_send).normalized(),
             locks.reverb_send.unwrap_or(t.reverb_send).normalized(),
         ];
+        Self::start_drum_voice(
+            &mut self.preview_drums[track],
+            track,
+            tone,
+            decay,
+            mix,
+            self.sr,
+        );
+    }
+    fn start_drum_voice(
+        voice: &mut DrumVoice,
+        track: usize,
+        tone: f32,
+        decay_control: f32,
+        mix: [f32; 3],
+        sr: f32,
+    ) {
+        let decay = match track {
+            0 => 0.08 + decay_control * 0.75,
+            1 => 0.05 + decay_control * 0.5,
+            _ => 0.025 + decay_control * 0.32,
+        };
+        let (attack, peak) = match track {
+            0 => (0.004, 1.2),
+            1 => (0.001, 0.85),
+            _ => (0.001, 0.55),
+        };
+        voice.tone = tone;
+        voice.mix = mix;
+        voice.envelope.trigger(peak, attack, decay, sr);
+        match track {
+            0 => voice.kick_pitch.trigger(tone, decay, sr),
+            1 => voice
+                .filter
+                .set_bandpass(800.0 + tone * 5200.0, 0.6 + tone * 5.0, sr),
+            _ => voice.filter.set_highpass(2800.0 + tone * 9000.0, 1.2, sr),
+        }
     }
     fn apply_synth_params(
         project: &AudioProject,
@@ -495,14 +630,6 @@ impl Renderer {
             }
         }
     }
-    fn noise(&mut self, i: usize) -> f32 {
-        let mut x = self.noise[i];
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.noise[i] = x;
-        x as i32 as f32 / i32::MAX as f32
-    }
     fn render_synth(v: &mut SynthVoice, sr: f32) -> (f32, f32, f32) {
         if v.remaining > 0 {
             v.remaining -= 1;
@@ -527,6 +654,29 @@ impl Renderer {
             reverb_send,
         )
     }
+    fn render_drum(voice: &mut DrumVoice, track: usize, sr: f32) -> (f32, f32, f32) {
+        let raw = match track {
+            0 => {
+                let hz = voice.kick_pitch.next_value();
+                let sample = (TAU * voice.phase).sin();
+                voice.phase = (voice.phase + hz / sr).fract();
+                sample
+            }
+            1 => {
+                let hz = 145.0 + voice.tone * 170.0;
+                let triangle = 1.0 - 4.0 * (voice.phase - 0.5).abs();
+                voice.phase = (voice.phase + hz / sr).fract();
+                let noise = voice.noise();
+                voice.filter.process(noise) * 0.75 + triangle * 0.35
+            }
+            _ => {
+                let noise = voice.noise();
+                voice.filter.process(noise)
+            }
+        };
+        let sample = raw * voice.envelope.next_value() * voice.mix[0] * 0.42;
+        (sample, voice.mix[1], voice.mix[2])
+    }
     fn next(&mut self) -> (f32, f32) {
         if self.playing {
             if let Some(step) = self.clock.tick() {
@@ -537,77 +687,19 @@ impl Renderer {
         let mut delay_in = 0.0;
         let mut reverb_in = 0.0;
         for i in 0..3 {
-            let tone = self.drum_tone[i];
-            let hz = match i {
-                0 => 35.0 + tone * 45.0 + self.drum_amp[i] * (80.0 + tone * 100.0),
-                1 => 120.0 + tone * 180.0,
-                _ => 4500.0 + tone * 6500.0,
-            };
-            self.drum_phase[i] = (self.drum_phase[i] + hz / self.sr).fract();
-            let noise = self.noise(i);
-            let raw = match i {
-                0 => (TAU * self.drum_phase[i]).sin() + noise * 0.12 * self.drum_amp[i].powi(8),
-                1 => {
-                    self.snare_phase2 = (self.snare_phase2 + (hz * 1.47) / self.sr).fract();
-                    let n = self.snare_noise_filter.lowpass(
-                        noise,
-                        2500.0 + tone * 7000.0,
-                        0.8,
-                        self.sr,
-                    );
-                    0.22 * (TAU * self.drum_phase[i]).sin()
-                        + 0.18 * (TAU * self.snare_phase2).sin()
-                        + 0.60 * n
-                }
-                _ => {
-                    let ratios = [1.0, 1.342, 1.613, 1.952, 2.431, 2.917];
-                    ratios
-                        .iter()
-                        .zip(&mut self.hat_osc)
-                        .map(|(ratio, osc)| {
-                            osc.next_square((2100.0 + tone * 900.0) * ratio, self.sr)
-                        })
-                        .sum::<f32>()
-                        / 6.0
-                }
-            };
-            let x = raw * self.drum_amp[i] * self.drum_mix[i][0] * 0.42;
+            let (x, delay_send, reverb_send) = Self::render_drum(&mut self.drums[i], i, self.sr);
             if !self.project.tracks[i].muted {
                 dry += x;
-                delay_in += x * self.drum_mix[i][1];
-                reverb_in += x * self.drum_mix[i][2];
+                delay_in += x * delay_send;
+                reverb_in += x * reverb_send;
             }
-            let seconds = match i {
-                0 => 0.05 + self.drum_decay[i] * 1.2,
-                1 => 0.04 + self.drum_decay[i] * 0.8,
-                _ => 0.015 + self.drum_decay[i] * 0.35,
-            };
-            self.drum_amp[i] *= (-1.0 / (seconds * self.sr)).exp();
         }
         for i in 0..3 {
-            let tone = self.preview_drum_tone[i];
-            let hz = [
-                55.0 + tone * 60.0,
-                180.0 + tone * 180.0,
-                5500.0 + tone * 5000.0,
-            ][i];
-            self.preview_drum_phase[i] = (self.preview_drum_phase[i] + hz / self.sr).fract();
-            let noise = self.noise(i);
-            let raw = match i {
-                0 => (TAU * self.preview_drum_phase[i]).sin(),
-                1 => 0.35 * (TAU * self.preview_drum_phase[i]).sin() + 0.65 * noise,
-                _ => noise,
-            };
-            let x = raw * self.preview_drum_amp[i] * self.preview_drum_mix[i][0] * 0.42;
+            let (x, delay_send, reverb_send) =
+                Self::render_drum(&mut self.preview_drums[i], i, self.sr);
             dry += x;
-            delay_in += x * self.preview_drum_mix[i][1];
-            reverb_in += x * self.preview_drum_mix[i][2];
-            let seconds = [
-                0.05 + self.preview_drum_decay[i] * 1.2,
-                0.04 + self.preview_drum_decay[i] * 0.8,
-                0.015 + self.preview_drum_decay[i] * 0.35,
-            ][i];
-            self.preview_drum_amp[i] *= (-1.0 / (seconds * self.sr)).exp();
+            delay_in += x * delay_send;
+            reverb_in += x * reverb_send;
         }
         for i in 0..3 {
             let (x, ds, rs) = Self::render_synth(&mut self.synth[i], self.sr);
@@ -675,6 +767,24 @@ pub fn render_offline(project: &ProjectV1, sample_rate: u32, frames: usize) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drum_envelope_reaches_peak_and_silence_at_programmed_times() {
+        let mut envelope = DrumEnvelope::new();
+        envelope.trigger(1.2, 0.004, 0.08, 1_000.0);
+        let at_peak = (0..=4).map(|_| envelope.next_value()).last().unwrap();
+        assert!((at_peak - 1.2).abs() < 0.0001);
+        let at_end = (5..=80).map(|_| envelope.next_value()).last().unwrap();
+        assert!((at_end - DRUM_SILENCE).abs() < 0.000001);
+    }
+    #[test]
+    fn kick_pitch_uses_browser_peak_and_settled_mappings() {
+        let mut pitch = KickPitchEnvelope::new();
+        pitch.trigger(0.5, 0.455, 10_000.0);
+        let at_peak = (0..=15).map(|_| pitch.next_value()).last().unwrap();
+        assert!((at_peak - 147.5).abs() < 0.001);
+        let settled = (16..=1_300).map(|_| pitch.next_value()).last().unwrap();
+        assert!((settled - 48.0).abs() < 0.001);
+    }
     #[test]
     fn snapshot_contains_all_steps_without_heap_backed_commands() {
         let p = ProjectV1::new();

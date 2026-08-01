@@ -188,6 +188,79 @@ impl Default for Svf {
     }
 }
 
+/// A transposed-direct-form-II biquad using the Web Audio/RBJ filter equations.
+/// Coefficients can be changed without clearing the delay state, matching a
+/// continuously running Web Audio `BiquadFilterNode`.
+pub struct Biquad {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+}
+
+impl Biquad {
+    pub fn new() -> Self {
+        Self {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+    fn set(&mut self, b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) {
+        self.b0 = b0 / a0;
+        self.b1 = b1 / a0;
+        self.b2 = b2 / a0;
+        self.a1 = a1 / a0;
+        self.a2 = a2 / a0;
+    }
+    fn common(frequency: f32, q: f32, sample_rate: f32) -> (f32, f32, f32) {
+        let frequency = frequency.clamp(1.0, sample_rate * 0.499);
+        let omega = 2.0 * PI * frequency / sample_rate;
+        let alpha = omega.sin() / (2.0 * q.max(0.0001));
+        (omega.cos(), omega.sin(), alpha)
+    }
+    pub fn set_bandpass(&mut self, frequency: f32, q: f32, sample_rate: f32) {
+        let (cos, _sin, alpha) = Self::common(frequency, q, sample_rate);
+        self.set(alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos, 1.0 - alpha);
+    }
+    pub fn set_highpass(&mut self, frequency: f32, q: f32, sample_rate: f32) {
+        let (cos, _sin, alpha) = Self::common(frequency, q, sample_rate);
+        self.set(
+            (1.0 + cos) * 0.5,
+            -(1.0 + cos),
+            (1.0 + cos) * 0.5,
+            1.0 + alpha,
+            -2.0 * cos,
+            1.0 - alpha,
+        );
+    }
+    pub fn process(&mut self, input: f32) -> f32 {
+        let output = self.b0 * input + self.z1;
+        self.z1 = self.b1 * input - self.a1 * output + self.z2;
+        self.z2 = self.b2 * input - self.a2 * output;
+        if output.is_finite() {
+            output
+        } else {
+            self.z1 = 0.0;
+            self.z2 = 0.0;
+            0.0
+        }
+    }
+}
+
+impl Default for Biquad {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Delay {
     left: Vec<f32>,
     right: Vec<f32>,
@@ -419,6 +492,22 @@ mod tests {
             for _ in 0..1000 {
                 assert!(f.lowpass(1., c, 10., 44100.).is_finite())
             }
+        }
+    }
+    #[test]
+    fn drum_biquad_filters_are_finite_and_reject_dc() {
+        for configure in [
+            Biquad::set_bandpass as fn(&mut Biquad, f32, f32, f32),
+            Biquad::set_highpass,
+        ] {
+            let mut filter = Biquad::new();
+            configure(&mut filter, 6_000.0, 5.6, 48_000.0);
+            let mut output = 0.0;
+            for _ in 0..48_000 {
+                output = filter.process(1.0);
+                assert!(output.is_finite());
+            }
+            assert!(output.abs() < 0.0001);
         }
     }
     #[test]
