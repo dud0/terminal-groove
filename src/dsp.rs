@@ -193,7 +193,127 @@ pub struct Delay {
     right: Vec<f32>,
     pos: usize,
     delay: usize,
+    old_delay: usize,
+    fade_remaining: usize,
+    fade_length: usize,
+    configured: bool,
     feedback: f32,
+}
+
+struct Comb {
+    buffer: Vec<f32>,
+    pos: usize,
+    damped: f32,
+}
+impl Comb {
+    fn new(size: usize) -> Self {
+        Self {
+            buffer: vec![0.0; size.max(2)],
+            pos: 0,
+            damped: 0.0,
+        }
+    }
+    fn process(&mut self, input: f32, feedback: f32, damping: f32) -> f32 {
+        let output = self.buffer[self.pos];
+        self.damped += (output - self.damped) * (1.0 - damping);
+        self.buffer[self.pos] = input + self.damped * feedback;
+        self.pos = (self.pos + 1) % self.buffer.len();
+        output
+    }
+    fn clear(&mut self) {
+        self.buffer.fill(0.0);
+        self.damped = 0.0;
+    }
+}
+
+struct Allpass {
+    buffer: Vec<f32>,
+    pos: usize,
+}
+impl Allpass {
+    fn new(size: usize) -> Self {
+        Self {
+            buffer: vec![0.0; size.max(2)],
+            pos: 0,
+        }
+    }
+    fn process(&mut self, input: f32) -> f32 {
+        let delayed = self.buffer[self.pos];
+        let output = delayed - input;
+        self.buffer[self.pos] = input + delayed * 0.5;
+        self.pos = (self.pos + 1) % self.buffer.len();
+        output
+    }
+    fn clear(&mut self) {
+        self.buffer.fill(0.0);
+    }
+}
+
+/// A compact Freeverb-style stereo reverberator with all storage allocated up front.
+pub struct Reverb {
+    left: [Comb; 4],
+    right: [Comb; 4],
+    allpass_l: [Allpass; 2],
+    allpass_r: [Allpass; 2],
+    feedback: f32,
+}
+impl Reverb {
+    pub fn new(sample_rate: u32) -> Self {
+        let scale = sample_rate as f32 / 44_100.0;
+        let size = |n: usize| (n as f32 * scale).round() as usize;
+        Self {
+            left: [
+                Comb::new(size(1116)),
+                Comb::new(size(1188)),
+                Comb::new(size(1277)),
+                Comb::new(size(1356)),
+            ],
+            right: [
+                Comb::new(size(1139)),
+                Comb::new(size(1211)),
+                Comb::new(size(1300)),
+                Comb::new(size(1379)),
+            ],
+            allpass_l: [Allpass::new(size(556)), Allpass::new(size(441))],
+            allpass_r: [Allpass::new(size(579)), Allpass::new(size(464))],
+            feedback: 0.82,
+        }
+    }
+    pub fn set_time(&mut self, seconds: f32) {
+        self.feedback = (0.55 + 0.41 * ((seconds.clamp(0.2, 10.0) - 0.2) / 9.8)).clamp(0.0, 0.96);
+    }
+    pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let input = (l + r) * 0.12;
+        let mut ol = 0.0;
+        let mut or = 0.0;
+        for comb in &mut self.left {
+            ol += comb.process(input, self.feedback, 0.25);
+        }
+        for comb in &mut self.right {
+            or += comb.process(input, self.feedback, 0.25);
+        }
+        for ap in &mut self.allpass_l {
+            ol = ap.process(ol);
+        }
+        for ap in &mut self.allpass_r {
+            or = ap.process(or);
+        }
+        (safety(ol * 0.25), safety(or * 0.25))
+    }
+    pub fn clear(&mut self) {
+        for c in &mut self.left {
+            c.clear();
+        }
+        for c in &mut self.right {
+            c.clear();
+        }
+        for a in &mut self.allpass_l {
+            a.clear();
+        }
+        for a in &mut self.allpass_r {
+            a.clear();
+        }
+    }
 }
 impl Delay {
     pub fn new(sample_rate: u32) -> Self {
@@ -203,17 +323,36 @@ impl Delay {
             right: vec![0.0; n],
             pos: 0,
             delay: 1,
+            old_delay: 1,
+            fade_remaining: 0,
+            fade_length: (sample_rate as usize / 100).max(1),
+            configured: false,
             feedback: 0.3,
         }
     }
     pub fn configure(&mut self, samples: usize, feedback: f32) {
-        self.delay = samples.clamp(1, self.left.len() - 1);
+        let next = samples.clamp(1, self.left.len() - 1);
+        if next != self.delay && self.configured {
+            self.old_delay = self.delay;
+            self.delay = next;
+            self.fade_remaining = self.fade_length;
+        } else {
+            self.delay = next;
+        }
+        self.configured = true;
         self.feedback = feedback.clamp(0.0, 0.95)
     }
     pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
         let read = (self.pos + self.left.len() - self.delay) % self.left.len();
-        let dl = self.left[read];
-        let dr = self.right[read];
+        let mut dl = self.left[read];
+        let mut dr = self.right[read];
+        if self.fade_remaining > 0 {
+            let old = (self.pos + self.left.len() - self.old_delay) % self.left.len();
+            let mix = 1.0 - self.fade_remaining as f32 / self.fade_length as f32;
+            dl = self.left[old] * (1.0 - mix) + dl * mix;
+            dr = self.right[old] * (1.0 - mix) + dr * mix;
+            self.fade_remaining -= 1;
+        }
         self.left[self.pos] = l + dr * self.feedback;
         self.right[self.pos] = r + dl * self.feedback;
         self.pos = (self.pos + 1) % self.left.len();
@@ -296,5 +435,27 @@ mod tests {
     fn nonfinite_safe() {
         assert_eq!(safety(f32::NAN), 0.0);
         assert!(safety(100.).abs() < 1.)
+    }
+    #[test]
+    fn smoother_reaches_target_without_jump() {
+        let mut s = Smoother::new(0.0);
+        s.set(1.0, 10);
+        let values = (0..10).map(|_| s.next_value()).collect::<Vec<_>>();
+        assert!((values[0] - 0.1).abs() < 0.0001);
+        assert!((values[9] - 1.0).abs() < 0.0001);
+        assert!(values.windows(2).all(|w| w[1] >= w[0]));
+    }
+    #[test]
+    fn reverb_is_finite_and_bounded_at_time_extremes() {
+        for time in [0.2, 10.0] {
+            let mut reverb = Reverb::new(8_000);
+            reverb.set_time(time);
+            for i in 0..40_000 {
+                let input = if i == 0 { 1.0 } else { 0.0 };
+                let (l, r) = reverb.process(input, input);
+                assert!(l.is_finite() && r.is_finite());
+                assert!(l.abs() <= 1.0 && r.abs() <= 1.0);
+            }
+        }
     }
 }

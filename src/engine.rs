@@ -6,7 +6,6 @@ pub enum EngineCommand {
     SetProject(ProjectV1),
     PlayPause,
     Stop,
-    Audition { track: u8, step: u8 },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transport {
@@ -135,7 +134,6 @@ impl Engine {
                 self.clock.reset();
                 self.voices = [false; 6]
             }
-            EngineCommand::Audition { .. } => {}
         }
     }
     pub fn tick(&mut self) -> Option<usize> {

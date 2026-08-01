@@ -226,7 +226,7 @@ impl fmt::Display for DelayDivision {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Globals {
     pub tempo_bpm: u16,
@@ -235,6 +235,17 @@ pub struct Globals {
     pub reverb_time_seconds: f32,
     pub key: PitchClass,
     pub scale: Scale,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlobalParameterId {
+    Tempo,
+    DelayDivision,
+    DelayFeedback,
+    ReverbTime,
+    Key,
+    Scale,
 }
 impl Default for Globals {
     fn default() -> Self {
@@ -258,13 +269,13 @@ pub enum TrackKind {
     Synth,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DrumParameters {
     pub tone: Percent,
     pub decay: Percent,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SynthParameters {
     pub waveform: Waveform,
@@ -277,14 +288,14 @@ pub struct SynthParameters {
     pub release: Percent,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Instrument {
     Drum(DrumParameters),
     Synth(SynthParameters),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParameterLocks {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -318,7 +329,7 @@ impl ParameterLocks {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StepEvent {
     Trigger {

@@ -1,6 +1,9 @@
 use crate::{
     audio::{Audio, AudioCommand},
-    model::{ParameterId, ParameterValue, ProjectV1, StepEvent, TrackKind, Waveform},
+    model::{
+        DelayDivision, GlobalParameterId, ParameterId, ParameterValue, Percent, ProjectV1, Scale,
+        StepEvent, TrackKind, Waveform,
+    },
     persistence,
     reducer::{Editor, Scope},
 };
@@ -18,7 +21,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Row, Table, Wrap},
 };
-use std::{io::stdout, path::PathBuf, time::Duration};
+use std::{io::stdout, path::PathBuf, sync::atomic::Ordering, time::Duration};
 
 struct TerminalGuard;
 impl TerminalGuard {
@@ -35,12 +38,22 @@ impl Drop for TerminalGuard {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Mode {
     Navigation,
     ParameterEdit(ParameterId),
+    GlobalEdit(GlobalParameterId),
+    TempoInput(String),
+    FileInput(FileAction, String),
+    OpenConfirm(PathBuf),
+    Error(String),
     Help,
     QuitConfirm,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FileAction {
+    SaveAs,
+    Open,
 }
 pub struct App {
     pub editor: Editor,
@@ -51,6 +64,8 @@ pub struct App {
     mode: Mode,
     status: String,
     path: Option<PathBuf>,
+    pending_open: Option<PathBuf>,
+    pending_quit: bool,
     quit: bool,
     playhead: Option<usize>,
     playing: bool,
@@ -66,6 +81,8 @@ impl App {
             mode: Mode::Navigation,
             status: "Ready".into(),
             path,
+            pending_open: None,
+            pending_quit: false,
             quit: false,
             playhead: None,
             playing: false,
@@ -84,6 +101,7 @@ pub fn run(project: ProjectV1, path: Option<PathBuf>, audio: &mut Audio) -> Resu
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut app = App::new(project, path);
     while !app.quit {
+        refresh_audio_status(&mut app, audio);
         terminal.draw(|f| draw(f, &app, audio))?;
         if event::poll(Duration::from_millis(8))? {
             if let Event::Key(k) = event::read()? {
@@ -97,6 +115,21 @@ pub fn run(project: ProjectV1, path: Option<PathBuf>, audio: &mut Audio) -> Resu
 }
 
 fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    if matches!(a.mode, Mode::Error(_)) {
+        if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
+            a.mode = Mode::Navigation;
+        }
+        return Ok(());
+    }
+    if matches!(a.mode, Mode::FileInput(_, _)) {
+        return handle_file_input(a, audio, k);
+    }
+    if matches!(a.mode, Mode::TempoInput(_)) {
+        return handle_tempo_input(a, audio, k);
+    }
+    if matches!(a.mode, Mode::OpenConfirm(_)) {
+        return handle_open_confirm(a, audio, k);
+    }
     if a.mode == Mode::Help {
         if matches!(k.code, KeyCode::Esc | KeyCode::Char('?')) {
             a.mode = Mode::Navigation
@@ -106,9 +139,14 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     if a.mode == Mode::QuitConfirm {
         match k.code {
             KeyCode::Char('s') | KeyCode::Char('S') => {
-                save(a)?;
-                if !a.editor.is_dirty() {
-                    a.quit = true
+                if a.path.is_none() {
+                    a.pending_quit = true;
+                    a.mode = Mode::FileInput(FileAction::SaveAs, String::new())
+                } else {
+                    save(a)?;
+                    if !a.editor.is_dirty() {
+                        a.quit = true
+                    }
                 }
             }
             KeyCode::Char('d') | KeyCode::Char('D') => a.quit = true,
@@ -119,26 +157,40 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     }
     if k.modifiers.contains(KeyModifiers::CONTROL) {
         match k.code {
-            KeyCode::Char('q') => {
+            KeyCode::Char('q' | 'Q') => {
                 if a.editor.is_dirty() {
                     a.mode = Mode::QuitConfirm
                 } else {
                     a.quit = true
                 }
             }
-            KeyCode::Char('s') => save(a)?,
-            KeyCode::Char('z') => {
-                if a.editor.undo() {
+            KeyCode::Char('s' | 'S') if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                a.mode = Mode::FileInput(FileAction::SaveAs, String::new())
+            }
+            KeyCode::Char('s' | 'S') => {
+                if a.path.is_some() {
+                    save(a)?
+                } else {
+                    a.mode = Mode::FileInput(FileAction::SaveAs, String::new())
+                }
+            }
+            KeyCode::Char('o' | 'O') => a.mode = Mode::FileInput(FileAction::Open, String::new()),
+            KeyCode::Char('z' | 'Z') => {
+                if audio.available_commands() == 0 {
+                    a.status = "Audio command queue full; undo rejected".into();
+                } else if a.editor.undo() {
                     a.status = "Undid edit".into();
-                    sync_project(a, audio)
+                    sync_project(a, audio);
                 } else {
                     a.status = "Nothing to undo".into()
                 }
             }
-            KeyCode::Char('y') => {
-                if a.editor.redo() {
+            KeyCode::Char('y' | 'Y') => {
+                if audio.available_commands() == 0 {
+                    a.status = "Audio command queue full; redo rejected".into();
+                } else if a.editor.redo() {
                     a.status = "Redid edit".into();
-                    sync_project(a, audio)
+                    sync_project(a, audio);
                 } else {
                     a.status = "Nothing to redo".into()
                 }
@@ -148,6 +200,9 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         return Ok(());
     }
     if matches!(a.mode, Mode::ParameterEdit(_)) && handle_parameter_key(a, audio, k)? {
+        return Ok(());
+    }
+    if matches!(a.mode, Mode::GlobalEdit(_)) && handle_global_key(a, audio, k)? {
         return Ok(());
     }
     match k.code {
@@ -165,6 +220,19 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
                 a.playing = false;
                 a.playhead = None;
                 a.status = "Stopped and reset".into()
+            } else {
+                a.status = "Audio command queue full".into()
+            }
+        }
+        KeyCode::Char('o') if a.row > 0 => {
+            if audio
+                .send(AudioCommand::Audition {
+                    track: (a.row - 1) as u8,
+                    step: a.step as u8,
+                })
+                .is_ok()
+            {
+                a.status = "Auditioning selection".into()
             } else {
                 a.status = "Audio command queue full".into()
             }
@@ -191,15 +259,23 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
                 a.step = (a.step + 1) % 16
             }
         }
+        KeyCode::Enter if a.row == 0 => enter_global_edit(a, global_id(a.global)),
         KeyCode::Enter if a.row > 0 => {
             let (track, step) = (a.row - 1, a.step);
-            if apply(a, |e| e.toggle_event(track, step)) {
-                sync_step(a, audio, track, step);
+            if apply(a, audio, |e| e.toggle_event(track, step))
+                && sync_project(a, audio)
+                && !a.playing
+                && a.editor.project.tracks[track].steps[step].is_some()
+            {
+                let _ = audio.send(AudioCommand::Audition {
+                    track: track as u8,
+                    step: step as u8,
+                });
             }
         }
         KeyCode::Backspace | KeyCode::Delete if a.row > 0 => {
             let (track, step) = (a.row - 1, a.step);
-            if apply(a, |e| e.clear(track, step)) {
+            if apply(a, audio, |e| e.clear(track, step)) {
                 sync_track(a, audio, track)
             }
         }
@@ -212,20 +288,31 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         }
         KeyCode::Char('m') if a.row > 0 => {
             let ti = a.row - 1;
+            if audio.available_commands() == 0 {
+                a.status = "Audio command queue full; edit rejected".into();
+                return Ok(());
+            }
             let _ = a.editor.edit(None, |p| {
                 p.tracks[ti].muted = !p.tracks[ti].muted;
                 Ok(())
             });
-            let muted = a.editor.project.tracks[ti].muted;
-            if audio
-                .send(AudioCommand::SetMute {
-                    track: ti as u8,
-                    muted,
-                })
-                .is_err()
-            {
-                a.editor.undo();
-                a.status = "Audio command queue full; edit rejected".into()
+            sync_project(a, audio);
+        }
+        KeyCode::Char(c) if a.row == 0 => {
+            if let Some(id) = global_shortcut(c) {
+                a.global = id as usize;
+                if id == GlobalParameterId::Scale {
+                    edit_global(a, audio, id, |g| {
+                        g.scale = if g.scale == Scale::Major {
+                            Scale::NaturalMinor
+                        } else {
+                            Scale::Major
+                        }
+                    });
+                    a.mode = Mode::Navigation;
+                } else {
+                    enter_global_edit(a, id)
+                }
             }
         }
         KeyCode::Char(c) if a.row > 0 && !(a.row > 3 && (c == 't' || ('1'..='8').contains(&c))) => {
@@ -240,20 +327,25 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         }
         KeyCode::Char('t') if a.row > 3 => {
             let (track, step) = (a.row - 1, a.step);
-            if apply(a, |e| e.toggle_tie(track, step)) {
+            if apply(a, audio, |e| e.toggle_tie(track, step)) {
                 sync_track(a, audio, track)
             }
         }
         KeyCode::Char(c @ '1'..='8') if a.row > 3 => {
             let (track, step) = (a.row - 1, a.step);
-            if apply(a, |e| {
+            if apply(a, audio, |e| {
                 e.set_note(track, step, c.to_digit(10).unwrap() as u8)
-            }) {
-                sync_track(a, audio, track)
+            }) && sync_project(a, audio)
+                && !a.playing
+            {
+                let _ = audio.send(AudioCommand::Audition {
+                    track: track as u8,
+                    step: step as u8,
+                });
             }
         }
-        KeyCode::Char('[') if a.row > 3 => change_octave(a, -1),
-        KeyCode::Char(']') if a.row > 3 => change_octave(a, 1),
+        KeyCode::Char('[') if a.row > 3 => change_octave(a, audio, -1),
+        KeyCode::Char(']') if a.row > 3 => change_octave(a, audio, 1),
         KeyCode::Esc => a.scope = Scope::Base,
         _ => {}
     }
@@ -330,11 +422,16 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
             Ok(true)
         }
         KeyCode::Enter | KeyCode::Esc => {
+            a.editor.end_coalescing();
             a.mode = Mode::Navigation;
             a.status = "Parameter editing finished".into();
             Ok(true)
         }
         KeyCode::Backspace | KeyCode::Delete if a.scope == Scope::Lock => {
+            if audio.available_commands() == 0 {
+                a.status = "Audio command queue full; edit rejected".into();
+                return Ok(true);
+            }
             match a.editor.clear_parameter_lock(track, a.step, parameter) {
                 Ok(true) => {
                     sync_step(a, audio, track, a.step);
@@ -383,6 +480,10 @@ fn set_parameter(
     value: ParameterValue,
     keep_editing: bool,
 ) -> bool {
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; edit rejected".into();
+        return false;
+    }
     let track = a.row - 1;
     let step = a.step;
     let key = keep_editing.then_some(coalesce_key(track, step, parameter));
@@ -413,6 +514,10 @@ fn coalesce_key(track: usize, step: usize, parameter: ParameterId) -> crate::red
 }
 
 fn toggle_waveform(a: &mut App, audio: &mut Audio) -> Result<()> {
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; edit rejected".into();
+        return Ok(());
+    }
     let track = a.row - 1;
     match a.editor.toggle_waveform(track, a.step, a.scope) {
         Ok(true) => {
@@ -438,8 +543,13 @@ fn waveform_name(a: &App, track: usize, step: usize) -> &'static str {
 }
 fn apply<F: FnOnce(&mut Editor) -> Result<bool, crate::reducer::EditError>>(
     a: &mut App,
+    audio: &Audio,
     f: F,
 ) -> bool {
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; edit rejected".into();
+        return false;
+    }
     match f(&mut a.editor) {
         Ok(true) => {
             a.status = "Edit applied".into();
@@ -456,21 +566,8 @@ fn apply<F: FnOnce(&mut Editor) -> Result<bool, crate::reducer::EditError>>(
     }
 }
 fn sync_step(a: &mut App, audio: &mut Audio, track: usize, step: usize) -> bool {
-    let event = a.editor.project.tracks[track].steps[step].clone();
-    if audio
-        .send(AudioCommand::SetStep {
-            track: track as u8,
-            step: step as u8,
-            event,
-        })
-        .is_err()
-    {
-        a.editor.undo();
-        a.status = "Audio command queue full; edit rejected".into();
-        false
-    } else {
-        true
-    }
+    let _ = (track, step);
+    sync_project(a, audio)
 }
 fn sync_parameter_change(a: &mut App, audio: &mut Audio, track: usize, step: usize) -> bool {
     if a.scope == Scope::Base {
@@ -480,17 +577,15 @@ fn sync_parameter_change(a: &mut App, audio: &mut Audio, track: usize, step: usi
     }
 }
 fn sync_track_parameters(a: &mut App, audio: &mut Audio, track: usize) -> bool {
-    let t = &a.editor.project.tracks[track];
-    if audio
-        .send(AudioCommand::SetTrackParameters {
-            track: track as u8,
-            level: t.level,
-            delay_send: t.delay_send,
-            reverb_send: t.reverb_send,
-            instrument: t.instrument.clone(),
-        })
-        .is_err()
-    {
+    let _ = track;
+    sync_project(a, audio)
+}
+fn sync_track(a: &mut App, audio: &mut Audio, track: usize) {
+    let _ = track;
+    sync_project(a, audio);
+}
+fn sync_project(a: &mut App, audio: &mut Audio) -> bool {
+    if audio.send(Audio::snapshot(&a.editor.project)).is_err() {
         a.editor.undo();
         a.status = "Audio command queue full; edit rejected".into();
         false
@@ -498,65 +593,18 @@ fn sync_track_parameters(a: &mut App, audio: &mut Audio, track: usize) -> bool {
         true
     }
 }
-fn sync_track(a: &mut App, audio: &mut Audio, track: usize) {
-    if audio.available_commands() < 16 {
-        a.editor.undo();
+fn change_octave(a: &mut App, audio: &mut Audio, d: i8) {
+    if audio.available_commands() == 0 {
         a.status = "Audio command queue full; edit rejected".into();
         return;
     }
-    for step in 0..16 {
-        let event = a.editor.project.tracks[track].steps[step].clone();
-        let _ = audio.send(AudioCommand::SetStep {
-            track: track as u8,
-            step: step as u8,
-            event,
-        });
-    }
-}
-fn sync_project(a: &mut App, audio: &mut Audio) {
-    for track in 0..6 {
-        for step in 0..16 {
-            let event = a.editor.project.tracks[track].steps[step].clone();
-            if audio
-                .send(AudioCommand::SetStep {
-                    track: track as u8,
-                    step: step as u8,
-                    event,
-                })
-                .is_err()
-            {
-                a.status = "Audio command queue full while synchronizing".into();
-                return;
-            }
-        }
-        let t = &a.editor.project.tracks[track];
-        if audio
-            .send(AudioCommand::SetTrackParameters {
-                track: track as u8,
-                level: t.level,
-                delay_send: t.delay_send,
-                reverb_send: t.reverb_send,
-                instrument: t.instrument.clone(),
-            })
-            .is_err()
-        {
-            a.status = "Audio command queue full while synchronizing".into();
-            return;
-        }
-        let muted = a.editor.project.tracks[track].muted;
-        let _ = audio.send(AudioCommand::SetMute {
-            track: track as u8,
-            muted,
-        });
-    }
-}
-fn change_octave(a: &mut App, d: i8) {
     let ti = a.row - 1;
     let _ = a.editor.edit(None, |p| {
         let old = p.tracks[ti].input_octave.unwrap();
         p.tracks[ti].input_octave = Some((old as i8 + d).clamp(0, 7) as u8);
         Ok(())
     });
+    sync_project(a, audio);
 }
 fn save(a: &mut App) -> Result<()> {
     if let Some(path) = a.path.clone() {
@@ -571,6 +619,309 @@ fn save(a: &mut App) -> Result<()> {
         a.status = "No path: start with a project path to enable Ctrl+S".into()
     }
     Ok(())
+}
+
+fn resolved_path(input: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(input);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
+}
+fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    let Mode::FileInput(action, mut input) = a.mode.clone() else {
+        return Ok(());
+    };
+    match k.code {
+        KeyCode::Esc => {
+            a.pending_open = None;
+            a.pending_quit = false;
+            a.mode = Mode::Navigation
+        }
+        KeyCode::Backspace => {
+            input.pop();
+            a.mode = Mode::FileInput(action, input)
+        }
+        KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
+            input.push(c);
+            a.mode = Mode::FileInput(action, input)
+        }
+        KeyCode::Enter => {
+            if input.is_empty() {
+                a.status = "Path cannot be empty".into();
+                return Ok(());
+            }
+            match resolved_path(&input) {
+                Ok(path) => match action {
+                    FileAction::SaveAs => {
+                        match persistence::save_atomic(&path, &a.editor.project) {
+                            Ok(()) => {
+                                a.path = Some(path.clone());
+                                a.editor.mark_saved();
+                                a.status = format!("Saved {}", path.display());
+                                a.mode = Mode::Navigation;
+                                if let Some(open) = a.pending_open.take() {
+                                    open_project(a, audio, open)
+                                } else if a.pending_quit {
+                                    a.quit = true
+                                }
+                            }
+                            Err(e) => a.mode = Mode::Error(e.to_string()),
+                        }
+                    }
+                    FileAction::Open => {
+                        if a.editor.is_dirty() {
+                            a.mode = Mode::OpenConfirm(path)
+                        } else {
+                            open_project(a, audio, path)
+                        }
+                    }
+                },
+                Err(e) => a.mode = Mode::Error(e.to_string()),
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+fn handle_open_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    let Mode::OpenConfirm(path) = a.mode.clone() else {
+        return Ok(());
+    };
+    match k.code {
+        KeyCode::Char('s' | 'S') => {
+            if a.path.is_none() {
+                a.pending_open = Some(path);
+                a.mode = Mode::FileInput(FileAction::SaveAs, String::new())
+            } else {
+                save(a)?;
+                if !a.editor.is_dirty() {
+                    open_project(a, audio, path)
+                }
+            }
+        }
+        KeyCode::Char('d' | 'D') => open_project(a, audio, path),
+        KeyCode::Esc | KeyCode::Char('c' | 'C') => a.mode = Mode::Navigation,
+        _ => {}
+    }
+    Ok(())
+}
+fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
+    match persistence::load(&path) {
+        Ok(project) => {
+            if audio.available_commands() < 2 {
+                a.mode = Mode::Error("Audio command queue full; project was not opened".into());
+                return;
+            }
+            let _ = audio.send(AudioCommand::Stop);
+            if audio.send(Audio::snapshot(&project)).is_err() {
+                a.mode = Mode::Error("Audio command queue full; project was not opened".into());
+                return;
+            }
+            a.editor.replace_loaded(project);
+            a.path = Some(path.clone());
+            a.row = 0;
+            a.global = 0;
+            a.step = 0;
+            a.scope = Scope::Base;
+            a.playing = false;
+            a.playhead = None;
+            a.status = format!("Opened {}", path.display());
+            a.mode = Mode::Navigation;
+        }
+        Err(e) => a.mode = Mode::Error(e.to_string()),
+    }
+}
+
+fn global_id(index: usize) -> GlobalParameterId {
+    [
+        GlobalParameterId::Tempo,
+        GlobalParameterId::DelayDivision,
+        GlobalParameterId::DelayFeedback,
+        GlobalParameterId::ReverbTime,
+        GlobalParameterId::Key,
+        GlobalParameterId::Scale,
+    ][index]
+}
+fn global_shortcut(c: char) -> Option<GlobalParameterId> {
+    match c {
+        't' => Some(GlobalParameterId::Tempo),
+        'y' => Some(GlobalParameterId::DelayDivision),
+        'f' => Some(GlobalParameterId::DelayFeedback),
+        'r' => Some(GlobalParameterId::ReverbTime),
+        'k' => Some(GlobalParameterId::Key),
+        's' => Some(GlobalParameterId::Scale),
+        _ => None,
+    }
+}
+fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
+    a.mode = if id == GlobalParameterId::Tempo {
+        Mode::TempoInput(String::new())
+    } else {
+        Mode::GlobalEdit(id)
+    };
+    a.status = format!("Editing {}", global_name(id));
+}
+fn global_name(id: GlobalParameterId) -> &'static str {
+    match id {
+        GlobalParameterId::Tempo => "tempo",
+        GlobalParameterId::DelayDivision => "delay division",
+        GlobalParameterId::DelayFeedback => "delay feedback",
+        GlobalParameterId::ReverbTime => "reverb time",
+        GlobalParameterId::Key => "key",
+        GlobalParameterId::Scale => "scale",
+    }
+}
+fn edit_global<F: FnOnce(&mut crate::model::Globals)>(
+    a: &mut App,
+    audio: &mut Audio,
+    id: GlobalParameterId,
+    f: F,
+) {
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; edit rejected".into();
+        return;
+    }
+    let changed = a
+        .editor
+        .edit(
+            Some(crate::reducer::CoalesceKey(usize::MAX, 0, id as u8)),
+            |p| {
+                f(&mut p.globals);
+                Ok(())
+            },
+        )
+        .unwrap_or(false);
+    if changed && sync_project(a, audio) {
+        a.status = format!("{} updated", global_name(id))
+    }
+}
+fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+    let Mode::GlobalEdit(id) = a.mode else {
+        return Ok(false);
+    };
+    match k.code {
+        KeyCode::Esc | KeyCode::Enter => {
+            a.editor.end_coalescing();
+            a.mode = Mode::Navigation
+        }
+        KeyCode::Char(c) => {
+            if let Some(next) = global_shortcut(c) {
+                a.global = next as usize;
+                enter_global_edit(a, next)
+            } else if id == GlobalParameterId::DelayFeedback {
+                if let Some(v) = crate::reducer::percentage_key(c) {
+                    let v = Percent::new(v.get().min(95)).unwrap();
+                    edit_global(a, audio, id, move |g| g.delay_feedback = v);
+                    a.mode = Mode::Navigation
+                }
+            }
+        }
+        KeyCode::Up | KeyCode::Down => {
+            let direction = if k.code == KeyCode::Up { 1 } else { -1 };
+            match id {
+                GlobalParameterId::DelayDivision => edit_global(a, audio, id, move |g| {
+                    let i = DelayDivision::ALL
+                        .iter()
+                        .position(|x| *x == g.delay_division)
+                        .unwrap() as i32;
+                    g.delay_division = DelayDivision::ALL[(i + direction).clamp(0, 10) as usize]
+                }),
+                GlobalParameterId::DelayFeedback => {
+                    let d: i16 = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                        10
+                    } else {
+                        1
+                    };
+                    let direction = direction as i16;
+                    edit_global(a, audio, id, move |g| {
+                        g.delay_feedback = Percent::new(
+                            (g.delay_feedback.get() as i16 + direction * d).clamp(0, 95) as u8,
+                        )
+                        .unwrap()
+                    })
+                }
+                GlobalParameterId::ReverbTime => {
+                    let d = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                        1.0
+                    } else {
+                        0.1
+                    };
+                    edit_global(a, audio, id, move |g| {
+                        g.reverb_time_seconds = ((g.reverb_time_seconds + direction as f32 * d)
+                            * 10.0)
+                            .round()
+                            .clamp(2.0, 100.0)
+                            / 10.0
+                    })
+                }
+                GlobalParameterId::Key => {
+                    edit_global(a, audio, id, move |g| g.key = g.key.shifted(direction))
+                }
+                GlobalParameterId::Scale => edit_global(a, audio, id, |g| {
+                    g.scale = if g.scale == Scale::Major {
+                        Scale::NaturalMinor
+                    } else {
+                        Scale::Major
+                    }
+                }),
+                GlobalParameterId::Tempo => {}
+            }
+        }
+        _ => {}
+    }
+    Ok(true)
+}
+fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    let Mode::TempoInput(mut input) = a.mode.clone() else {
+        return Ok(());
+    };
+    match k.code {
+        KeyCode::Esc => {
+            a.editor.end_coalescing();
+            a.mode = Mode::Navigation
+        }
+        KeyCode::Backspace => {
+            input.pop();
+            a.mode = Mode::TempoInput(input)
+        }
+        KeyCode::Char(c @ '0'..='9') if input.len() < 3 => {
+            input.push(c);
+            a.mode = Mode::TempoInput(input)
+        }
+        KeyCode::Up | KeyCode::Down => {
+            let d = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                5
+            } else {
+                1
+            };
+            let d = if k.code == KeyCode::Up { d } else { -d };
+            edit_global(a, audio, GlobalParameterId::Tempo, move |g| {
+                g.tempo_bpm = (g.tempo_bpm as i16 + d).clamp(40, 240) as u16
+            })
+        }
+        KeyCode::Enter => match input.parse::<u16>() {
+            Ok(v @ 40..=240) => {
+                edit_global(a, audio, GlobalParameterId::Tempo, move |g| g.tempo_bpm = v);
+                a.editor.end_coalescing();
+                a.mode = Mode::Navigation
+            }
+            _ => a.status = "Tempo must be an integer from 40 to 240".into(),
+        },
+        _ => {}
+    }
+    Ok(())
+}
+fn refresh_audio_status(a: &mut App, audio: &Audio) {
+    a.playing = audio.status.running.load(Ordering::Acquire);
+    let p = audio.status.playhead.load(Ordering::Acquire);
+    a.playhead = (p < 16).then_some(p as usize);
+    if audio.status.failed.load(Ordering::Acquire) {
+        a.status = "Audio stream failed; editing and saving remain available".into()
+    } else if audio.status.non_finite.swap(false, Ordering::AcqRel) {
+        a.status = "Audio DSP produced a non-finite value; output was silenced".into()
+    }
 }
 
 fn parameter_name(parameter: ParameterId) -> &'static str {
@@ -597,10 +948,17 @@ fn scope_name(scope: Scope) -> &'static str {
     }
 }
 
-fn mode_name(mode: Mode) -> String {
+fn mode_name(mode: &Mode) -> String {
     match mode {
         Mode::Navigation => "Navigation".into(),
-        Mode::ParameterEdit(parameter) => format!("Parameter edit ({})", parameter_name(parameter)),
+        Mode::ParameterEdit(parameter) => {
+            format!("Parameter edit ({})", parameter_name(*parameter))
+        }
+        Mode::GlobalEdit(id) => format!("Global edit ({})", global_name(*id)),
+        Mode::TempoInput(_) => "Tempo numeric input".into(),
+        Mode::FileInput(_, _) => "File-path input".into(),
+        Mode::OpenConfirm(_) => "Unsaved confirmation".into(),
+        Mode::Error(_) => "Error dialog".into(),
         Mode::Help => "Help".into(),
         Mode::QuitConfirm => "Unsaved confirmation".into(),
     }
@@ -885,7 +1243,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         chunks[3],
     );
     f.render_widget(
-        Paragraph::new(format!("Mode: {} | {}", mode_name(a.mode), a.status)),
+        Paragraph::new(format!("Mode: {} | {}", mode_name(&a.mode), a.status)),
         chunks[4],
     );
     f.render_widget(Paragraph::new("↑↓ row  ←→ step/control  Enter event  1-8 note  t tie  p BASE/LOCK  m mute  Space play/pause  . stop  ? help  Ctrl+S save  Ctrl+Q quit\nParams: L level  Y delay  B reverb  T tone  D decay  W waveform(S/Q)  C cutoff  Q resonance  F filter-env  A attack  S sustain  R release").wrap(Wrap{trim:true}),chunks[5]);
@@ -904,6 +1262,46 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             "Unsaved changes",
             "Save [S]  Discard [D]  Cancel [Esc]",
         )
+    }
+    match &a.mode {
+        Mode::TempoInput(input) => popup(
+            f,
+            area,
+            "Tempo numeric input",
+            &format!("Tempo: {input}_\nEnter confirms  Esc cancels  ↑/↓ adjusts current tempo"),
+        ),
+        Mode::FileInput(action, input) => {
+            let title = if *action == FileAction::Open {
+                "Open project"
+            } else {
+                "Save project as"
+            };
+            let resolved = resolved_path(input)
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            popup(
+                f,
+                area,
+                title,
+                &format!("Path: {input}_\nResolved: {resolved}\nEnter confirms  Esc cancels"),
+            );
+        }
+        Mode::OpenConfirm(path) => popup(
+            f,
+            area,
+            "Unsaved changes",
+            &format!(
+                "Open {}?\nSave [S]  Discard [D]  Cancel [Esc]",
+                path.display()
+            ),
+        ),
+        Mode::Error(message) => popup(
+            f,
+            area,
+            "Error",
+            &format!("{message}\n\nEnter or Esc closes"),
+        ),
+        _ => {}
     }
 }
 fn popup(f: &mut ratatui::Frame, area: Rect, title: &str, text: &str) {
@@ -926,6 +1324,21 @@ fn popup(f: &mut ratatui::Frame, area: Rect, title: &str, text: &str) {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    fn rendered(app: &App, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_with_device(frame, app, "null"))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
 
     #[test]
     fn parameter_shortcuts_follow_track_context() {
@@ -973,5 +1386,39 @@ mod tests {
             .collect::<String>();
         assert!(rendered.contains("L80Y0B0T50D35"));
         assert!(rendered.contains("L80Y0B0WSC65Q10F25A0D25S70R15"));
+    }
+
+    #[test]
+    fn small_terminal_replaces_main_layout() {
+        let app = App::new(ProjectV1::new(), None);
+        let screen = rendered(&app, 79, 23);
+        assert!(screen.contains("terminal-groove needs 80x24"));
+        assert!(screen.contains("Current: 79x23"));
+    }
+
+    #[test]
+    fn every_overlay_mode_has_a_visible_name() {
+        assert_eq!(mode_name(&Mode::Navigation), "Navigation");
+        assert_eq!(
+            mode_name(&Mode::TempoInput(String::new())),
+            "Tempo numeric input"
+        );
+        assert_eq!(
+            mode_name(&Mode::FileInput(FileAction::Open, String::new())),
+            "File-path input"
+        );
+        assert_eq!(mode_name(&Mode::Error("bad".into())), "Error dialog");
+        assert_eq!(mode_name(&Mode::Help), "Help");
+    }
+
+    #[test]
+    fn global_shortcuts_select_all_six_controls() {
+        assert_eq!(global_shortcut('t'), Some(GlobalParameterId::Tempo));
+        assert_eq!(global_shortcut('y'), Some(GlobalParameterId::DelayDivision));
+        assert_eq!(global_shortcut('f'), Some(GlobalParameterId::DelayFeedback));
+        assert_eq!(global_shortcut('r'), Some(GlobalParameterId::ReverbTime));
+        assert_eq!(global_shortcut('k'), Some(GlobalParameterId::Key));
+        assert_eq!(global_shortcut('s'), Some(GlobalParameterId::Scale));
+        assert_eq!(global_shortcut('v'), None);
     }
 }

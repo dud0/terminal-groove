@@ -71,6 +71,11 @@ impl Editor {
     pub fn mark_saved(&mut self) {
         self.saved = self.project.clone();
     }
+    pub fn end_coalescing(&mut self) {
+        if let Some(revision) = self.undo.back_mut() {
+            revision.coalesce = None;
+        }
+    }
     pub fn replace_loaded(&mut self, p: ProjectV1) {
         self.project = p.clone();
         self.saved = p;
@@ -161,7 +166,7 @@ impl Editor {
                 return Err(EditError::InvalidStep);
             }
             let locks = match t.steps[step].take() {
-                Some(e) => e.locks().clone(),
+                Some(e) => *e.locks(),
                 None => Default::default(),
             };
             let octave = t.input_octave.unwrap();
@@ -190,7 +195,7 @@ impl Editor {
                     Ok(())
                 }
                 old => {
-                    let locks = old.as_ref().map(|x| x.locks().clone()).unwrap_or_default();
+                    let locks = old.as_ref().map(|x| *x.locks()).unwrap_or_default();
                     t.steps[step] = Some(StepEvent::Tie { locks });
                     if tie_source(&t.steps, step).is_none() {
                         t.steps[step] = old;
