@@ -117,7 +117,7 @@ Every track has base parameter values. A step may contain a sparse set of parame
 - Synth locks on a tie can update waveform, filter, envelope settings, level, and sends without retriggering the note. Changing attack during a tie does not restart the attack phase.
 - Clearing an event also clears every lock on that step.
 
-The UI has a persistent parameter scope with two visibly labelled states: `BASE` and `LOCK`. `p` toggles the scope on a track. The scope persists while moving between steps on that track and resets to `BASE` when the user changes tracks, selects the global row, or presses `Esc` from navigation mode.
+The UI has a persistent parameter scope with two visibly labelled states: `BASE` and `LOCK`. `p` toggles the scope on a track. The scope persists while moving between steps and tracks, and resets to `BASE` when the user selects the global row or presses `Esc` from navigation mode.
 
 In `LOCK` scope, attempting to edit a parameter on an empty step is rejected. When a lock does not yet exist, arrow editing begins from the inherited base value. `Backspace` or `Delete` while editing a locked parameter removes only that lock and exits parameter editing.
 
@@ -250,7 +250,7 @@ The application uses ordinary portable terminal press events. It must not requir
 ### 5.1 Navigation mode
 
 - Up/down moves between physically adjacent sequencer rows, preserving the selected cell's 32-column position. It moves within a track's continuation row when present and otherwise into the adjacent track; unavailable columns clamp to the destination row's final valid step. Vertical navigation clamps at the global row and final track row.
-- Up from Track 1's first row selects the global row; down from the global row selects Track 1 step 1. Changing tracks or selecting globals resets parameter scope to `BASE`; moving within a track preserves it.
+- Up from Track 1's first row selects the global row; down from the global row selects Track 1 step 1. Selecting globals resets parameter scope to `BASE`; moving within or between tracks preserves it.
 - On a track, left/right moves the selected step and wraps within its current length.
 - Shift+left/right moves between 16-step banks, preserving the within-bank offset when it exists and clamping within a partial final bank.
 - On the global row, left/right cycles through global parameters and wraps.

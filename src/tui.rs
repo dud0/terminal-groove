@@ -510,7 +510,6 @@ fn move_step_vertical(a: &mut App, down: bool) {
             let destination = track + 1;
             a.row = destination + 1;
             a.step = column.min(a.editor.project.tracks[destination].steps.len() - 1);
-            a.scope = Scope::Base;
         }
     } else if step_row > 0 {
         a.step -= STEP_ROW_SIZE;
@@ -523,7 +522,6 @@ fn move_step_vertical(a: &mut App, down: bool) {
         a.row = destination + 1;
         a.step = ((destination_length - 1) / STEP_ROW_SIZE * STEP_ROW_SIZE + column)
             .min(destination_length - 1);
-        a.scope = Scope::Base;
     }
 }
 
@@ -2514,6 +2512,27 @@ mod tests {
     }
 
     #[test]
+    fn lock_values_remain_displayed_after_track_navigation() {
+        let mut project = ProjectV2::new();
+        project.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            locks: crate::model::ParameterLocks {
+                level: Some(Percent::new(25).unwrap()),
+                ..Default::default()
+            },
+        });
+        let mut app = App::new(project, None);
+        app.row = 1;
+        app.scope = Scope::Lock;
+        move_step_vertical(&mut app, true);
+        move_step_vertical(&mut app, false);
+        assert_eq!((app.row, app.step, app.scope), (1, 0, Scope::Lock));
+
+        let (value, origin) = displayed_parameter(&app, 0, 0, ParameterId::Level).unwrap();
+        assert_eq!(value, ParameterValue::Percent(Percent::new(25).unwrap()));
+        assert_eq!(origin, ValueOrigin::Lock);
+    }
+
+    #[test]
     fn active_parameter_gets_a_visible_fader_outline_and_physical_readout() {
         let mut app = App::new(ProjectV2::new(), None);
         app.row = 4;
@@ -2679,7 +2698,7 @@ mod tests {
 
         move_step_vertical(&mut app, true);
         move_step_vertical(&mut app, true);
-        assert_eq!((app.row, app.step, app.scope), (2, 5, Scope::Base));
+        assert_eq!((app.row, app.step, app.scope), (2, 5, Scope::Lock));
         app.step = 19;
         move_step_vertical(&mut app, true);
         assert_eq!((app.row, app.step), (3, 19));
