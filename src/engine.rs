@@ -36,6 +36,9 @@ impl StepClock {
         self.phase = 0.;
         self.next_step = 0
     }
+    pub fn restart_timing(&mut self) {
+        self.phase = 0.;
+    }
     pub fn step_samples(&self) -> f64 {
         self.sample_rate * 60.0 / (self.bpm as f64 * 4.0)
     }

@@ -322,7 +322,7 @@ Adding or replacing a trigger or note automatically auditions it only while tran
 
 ### 6.1 Layout
 
-At `80x24` or larger, the normal screen contains:
+At `100x24` or larger, the normal screen contains:
 
 1. Header: application name, project filename or `Untitled`, dirty marker, audio device/status, transport state, and tempo.
 2. Global row: the six global controls and their current values.
@@ -335,13 +335,16 @@ Step cells use these textual forms:
 
 - `.` empty
 - `x` drum trigger
-- `1`–`8` synth note degree
+- `D:O` synth note degree `D` at octave `O`
+- `D*O` synth note degree `D` at octave `O` with one or more locks
 - `-` tie
 - `*` additional lock marker
 
 The selected cell and currently playing cell have independent styling. If both refer to the same cell, the combined style must still communicate both states. Mute, event type, and lock state must not rely on color alone.
 
-When the terminal is smaller than `80x24`, replace the main layout with the current size, required size, and quit/help keys. The project and audio engine remain active so resizing restores the normal view.
+Each synth row includes its current input octave in the track label (for example, `Synth 1 O3`).
+
+When the terminal is smaller than `100x24`, replace the main layout with the current size, required size, and quit/help keys. The project and audio engine remain active so resizing restores the normal view.
 
 ### 6.2 Modes and overlays
 
@@ -591,7 +594,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 
 ### 12.3 TUI and reducer tests
 
-- Ratatui `TestBackend` rendering at `80x24` and larger
+- Ratatui `TestBackend` rendering at `100x24` and larger
 - Small-terminal resize screen
 - Independent playhead and cursor styling
 - Non-color event and lock indicators
@@ -616,7 +619,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 
 ### 12.5 Manual acceptance scenarios
 
-1. Start an untitled project in an `80x24` terminal, move to each row, enter events, and see all state and shortcuts without opening help.
+1. Start an untitled project in a `100x24` terminal, move to each row, enter events, and see all state and shortcuts without opening help.
 2. Build and hear a drum loop using Enter, edit tone/decay, mute tracks, and use both effect sends.
 3. Enter synth degrees and octave changes, create ordinary and loop-wrapped ties, and hear correct mono envelope behavior.
 4. Add base values and locks while stopped and playing; verify locks apply only on their step and live edits take effect on the next pass.

@@ -69,6 +69,7 @@ pub struct App {
     quit: bool,
     playhead: Option<usize>,
     playing: bool,
+    paused: bool,
 }
 impl App {
     pub fn new(project: ProjectV1, path: Option<PathBuf>) -> Self {
@@ -86,6 +87,7 @@ impl App {
             quit: false,
             playhead: None,
             playing: false,
+            paused: false,
         }
     }
 }
@@ -210,6 +212,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         KeyCode::Char(' ') => {
             if audio.send(AudioCommand::PlayPause).is_ok() {
                 a.playing = !a.playing;
+                a.paused = !a.playing;
                 a.status = if a.playing { "Playing" } else { "Paused" }.into()
             } else {
                 a.status = "Audio command queue full".into()
@@ -218,6 +221,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         KeyCode::Char('.') => {
             if audio.send(AudioCommand::Stop).is_ok() {
                 a.playing = false;
+                a.paused = false;
                 a.playhead = None;
                 a.status = "Stopped and reset".into()
             } else {
@@ -315,6 +319,8 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
                 }
             }
         }
+        KeyCode::Char('[') if a.row > 3 => change_octave(a, audio, -1),
+        KeyCode::Char(']') if a.row > 3 => change_octave(a, audio, 1),
         KeyCode::Char(c) if a.row > 0 && !(a.row > 3 && (c == 't' || ('1'..='8').contains(&c))) => {
             if let Some(parameter) = parameter_shortcut(a.editor.project.tracks[a.row - 1].kind, c)
             {
@@ -344,8 +350,6 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
                 });
             }
         }
-        KeyCode::Char('[') if a.row > 3 => change_octave(a, audio, -1),
-        KeyCode::Char(']') if a.row > 3 => change_octave(a, audio, 1),
         KeyCode::Esc => a.scope = Scope::Base,
         _ => {}
     }
@@ -594,17 +598,29 @@ fn sync_project(a: &mut App, audio: &mut Audio) -> bool {
     }
 }
 fn change_octave(a: &mut App, audio: &mut Audio, d: i8) {
+    let ti = a.row - 1;
+    let track_name = a.editor.project.tracks[ti].name.clone();
+    let old = a.editor.project.tracks[ti].input_octave.unwrap();
+    let new = adjusted_octave(old, d);
+    if old == new {
+        a.status = format!("{track_name} input octave already at {new}");
+        return;
+    }
     if audio.available_commands() == 0 {
         a.status = "Audio command queue full; edit rejected".into();
         return;
     }
-    let ti = a.row - 1;
-    let _ = a.editor.edit(None, |p| {
-        let old = p.tracks[ti].input_octave.unwrap();
-        p.tracks[ti].input_octave = Some((old as i8 + d).clamp(0, 7) as u8);
+    let changed = a.editor.edit(None, |p| {
+        p.tracks[ti].input_octave = Some(new);
         Ok(())
     });
-    sync_project(a, audio);
+    if matches!(changed, Ok(true)) && sync_project(a, audio) {
+        a.status = format!("{track_name} input octave: {new}");
+    }
+}
+
+fn adjusted_octave(octave: u8, delta: i8) -> u8 {
+    (octave as i8 + delta).clamp(0, 7) as u8
 }
 fn save(a: &mut App) -> Result<()> {
     if let Some(path) = a.path.clone() {
@@ -726,6 +742,7 @@ fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
             a.step = 0;
             a.scope = Scope::Base;
             a.playing = false;
+            a.paused = false;
             a.playhead = None;
             a.status = format!("Opened {}", path.display());
             a.mode = Mode::Navigation;
@@ -915,6 +932,7 @@ fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()>
 }
 fn refresh_audio_status(a: &mut App, audio: &Audio) {
     a.playing = audio.status.running.load(Ordering::Acquire);
+    a.paused = audio.status.paused.load(Ordering::Acquire);
     let p = audio.status.playhead.load(Ordering::Acquire);
     a.playhead = (p < 16).then_some(p as usize);
     if audio.status.failed.load(Ordering::Acquire) {
@@ -998,6 +1016,32 @@ fn parameter_summary(t: &crate::model::Track) -> String {
     }
 }
 
+fn track_label(t: &crate::model::Track) -> String {
+    if t.kind == TrackKind::Synth {
+        format!("{} O{}", t.name, t.input_octave.unwrap_or(3))
+    } else {
+        t.name.clone()
+    }
+}
+
+fn step_cell(event: Option<&StepEvent>) -> String {
+    match event {
+        None => " . ".into(),
+        Some(StepEvent::Trigger { locks }) if locks.is_empty() => " x ".into(),
+        Some(StepEvent::Trigger { .. }) => "x* ".into(),
+        Some(StepEvent::Note {
+            degree,
+            octave,
+            locks,
+        }) => format!(
+            "{degree}{}{octave}",
+            if locks.is_empty() { ':' } else { '*' }
+        ),
+        Some(StepEvent::Tie { locks }) if locks.is_empty() => " - ".into(),
+        Some(StepEvent::Tie { .. }) => "-* ".into(),
+    }
+}
+
 fn value_text(value: ParameterValue) -> String {
     match value {
         ParameterValue::Percent(value) => value.get().to_string(),
@@ -1042,6 +1086,58 @@ fn effective_parameter_summary(a: &App, track: usize, step: usize) -> String {
             value(ParameterId::Sustain),
             value(ParameterId::Release)
         ),
+    }
+}
+
+fn physical_parameter_summary(a: &App, track: usize, step: usize) -> String {
+    let t = &a.editor.project.tracks[track];
+    let value = |parameter| {
+        a.editor
+            .parameter_value(track, step, Scope::Lock, parameter)
+            .or_else(|_| {
+                a.editor
+                    .parameter_value(track, step, Scope::Base, parameter)
+            })
+            .ok()
+    };
+    let percent = |parameter| match value(parameter) {
+        Some(ParameterValue::Percent(v)) => v.get(),
+        _ => 0,
+    };
+    match t.kind {
+        TrackKind::Kick => format!(
+            "Physical: peak {:.0} Hz, fundamental {:.0} Hz, decay {:.0} ms",
+            75.0 + percent(ParameterId::Tone) as f32 * 1.45,
+            38.0 + percent(ParameterId::Tone) as f32 * 0.20,
+            80.0 + percent(ParameterId::Decay) as f32 * 7.5
+        ),
+        TrackKind::Snare => format!(
+            "Physical: body {:.0} Hz, noise {:.0} Hz, decay {:.0} ms",
+            145.0 + percent(ParameterId::Tone) as f32 * 1.7,
+            800.0 + percent(ParameterId::Tone) as f32 * 52.0,
+            50.0 + percent(ParameterId::Decay) as f32 * 5.0
+        ),
+        TrackKind::Hat => format!(
+            "Physical: high-pass {:.1} kHz, decay {:.0} ms",
+            2.8 + percent(ParameterId::Tone) as f32 * 0.09,
+            25.0 + percent(ParameterId::Decay) as f32 * 3.2
+        ),
+        TrackKind::Synth => {
+            let cutoff = crate::dsp::exp_map(percent(ParameterId::Cutoff), 20.0, 20_000.0);
+            let time = |parameter, min, max| crate::dsp::exp_map(percent(parameter), min, max);
+            format!(
+                "Physical: cutoff {:.0} Hz, Q {:.2}, A {:.3}s D {:.3}s R {:.3}s",
+                cutoff,
+                0.707 + percent(ParameterId::Resonance) as f32 / 100.0 * (10.0 - 0.707),
+                if percent(ParameterId::Attack) == 0 {
+                    0.0
+                } else {
+                    time(ParameterId::Attack, 0.001, 2.0)
+                },
+                time(ParameterId::Decay, 0.005, 3.0),
+                time(ParameterId::Release, 0.005, 5.0)
+            )
+        }
     }
 }
 
@@ -1097,10 +1193,10 @@ fn draw(f: &mut ratatui::Frame, a: &App, audio: &Audio) {
 
 fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     let area = f.area();
-    if area.width < 80 || area.height < 24 {
+    if area.width < 100 || area.height < 24 {
         f.render_widget(
             Paragraph::new(format!(
-                "terminal-groove needs 80x24\nCurrent: {}x{}\nCtrl+Q quit  ? help",
+                "terminal-groove needs 100x24\nCurrent: {}x{}\nCtrl+Q quit  ? help",
                 area.width, area.height
             ))
             .block(Block::bordered().title("Terminal too small")),
@@ -1126,7 +1222,13 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .unwrap_or("Untitled");
-    let transport = if a.playing { "PLAY" } else { "STOP/PAUSE" };
+    let transport = if a.playing {
+        "PLAY"
+    } else if a.paused {
+        "PAUSE"
+    } else {
+        "STOP"
+    };
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
@@ -1173,24 +1275,8 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     let rows = a.editor.project.tracks.iter().enumerate().map(|(ti, t)| {
         let mut cells: Vec<ratatui::widgets::Cell> = Vec::with_capacity(19);
         cells.push(if t.muted { "M".into() } else { " ".into() });
-        cells.push(t.name.clone().into());
+        cells.push(track_label(t).into());
         for (si, s) in t.steps.iter().enumerate() {
-            let (symbol, lock) = match s {
-                None => (".", false),
-                Some(StepEvent::Trigger { locks }) => ("x", !locks.is_empty()),
-                Some(StepEvent::Note { degree, locks, .. }) => (
-                    ("12345678"
-                        .get(*degree as usize - 1..*degree as usize)
-                        .unwrap()),
-                    !locks.is_empty(),
-                ),
-                Some(StepEvent::Tie { locks }) => ("-", !locks.is_empty()),
-            };
-            let text = if lock {
-                format!("{symbol}*")
-            } else {
-                format!(" {symbol}")
-            };
             let mut style = Style::default();
             if a.row == ti + 1 && a.step == si {
                 style = style.reversed()
@@ -1198,24 +1284,27 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             if a.playhead == Some(si) {
                 style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
             }
-            cells.push(ratatui::widgets::Cell::from(text).style(style))
+            cells.push(ratatui::widgets::Cell::from(step_cell(s.as_ref())).style(style))
         }
         cells.push(ratatui::widgets::Cell::from(parameter_summary(t)));
         Row::new(cells)
     });
-    let mut widths = vec![Constraint::Length(1), Constraint::Length(7)];
-    widths.extend((0..16).map(|_| Constraint::Length(2)));
+    let mut widths = vec![Constraint::Length(1), Constraint::Length(10)];
+    widths.extend((0..16).map(|_| Constraint::Length(3)));
     widths.push(Constraint::Length(38));
     f.render_widget(
         Table::new(rows, widths)
             .column_spacing(0)
             .header(Row::new(
                 std::iter::once(" ")
-                    .chain(std::iter::once("Track"))
-                    .chain((1..=16).map(|n| if n % 4 == 1 { "|" } else { " " }))
+                    .chain(std::iter::once("Track / O"))
+                    .chain((1..=16).map(|n| if n % 4 == 1 { " | " } else { "   " }))
                     .chain(std::iter::once("Base params (%)")),
             ))
-            .block(Block::bordered().title("Pattern  . empty  x trigger  1-8 note  - tie  * lock")),
+            .block(
+                Block::bordered()
+                    .title("Pattern  . empty  x trigger  D:O note  D*O locked note  - tie  * lock"),
+            ),
         chunks[2],
     );
     let detail = if a.row == 0 {
@@ -1227,15 +1316,22 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             .as_ref()
             .map(lock_names)
             .unwrap_or_else(|| "none".into());
+        let input_octave = if t.kind == TrackKind::Synth {
+            format!(" | input octave {}", t.input_octave.unwrap_or(3))
+        } else {
+            String::new()
+        };
         format!(
-            "{} | step {} | {:?} | mute {} | locks: {}\nBase     {}\nEffective {}",
+            "{} | step {} | {:?} | mute {} | locks: {}{}\nBase     {}\nEffective {}\n{}",
             scope_name(a.scope),
             a.step + 1,
             t.kind,
             t.muted,
             locks,
+            input_octave,
             parameter_summary(t),
-            effective_parameter_summary(a, track, a.step)
+            effective_parameter_summary(a, track, a.step),
+            physical_parameter_summary(a, track, a.step)
         )
     };
     f.render_widget(
@@ -1246,13 +1342,13 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         Paragraph::new(format!("Mode: {} | {}", mode_name(&a.mode), a.status)),
         chunks[4],
     );
-    f.render_widget(Paragraph::new("↑↓ row  ←→ step/control  Enter event  1-8 note  t tie  p BASE/LOCK  m mute  Space play/pause  . stop  ? help  Ctrl+S save  Ctrl+Q quit\nParams: L level  Y delay  B reverb  T tone  D decay  W waveform(S/Q)  C cutoff  Q resonance  F filter-env  A attack  S sustain  R release").wrap(Wrap{trim:true}),chunks[5]);
+    f.render_widget(Paragraph::new("↑↓ row  ←→ step/control  Enter event  1-8 note  [ ] input octave  t tie  p BASE/LOCK  m mute  Space play/pause  . stop  ? help  Ctrl+S save  Ctrl+Q quit\nParams: V level  Y delay  B reverb  T tone  D decay  W waveform(S/Q)  C cutoff  Shift+R resonance  F filter-env  A attack  S sustain  R release").wrap(Wrap{trim:true}),chunks[5]);
     if a.mode == Mode::Help {
         popup(
             f,
             area,
             "Help",
-            "All sound is synthesized.\nNavigation: arrows, Enter, Delete.\nTracks: p scope, v level, m mute, y delay, b reverb.\nDrums: t tone, d decay. Synth: 1-8 note, [ ] octave, t tie, w waveform, c cutoff, R resonance, f envelope, a/d/s/r ADSR.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nNavigation: arrows, Enter, Delete.\nTracks: p scope, v level, m mute, y delay, b reverb.\nDrums: t tone, d decay. Synth: 1-8 note, [ ] input octave, t tie, w waveform, c cutoff, R resonance, f envelope, a/d/s/r ADSR.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -1371,10 +1467,25 @@ mod tests {
     }
 
     #[test]
-    fn screen_renders_all_track_parameters_at_minimum_size() {
-        let backend = TestBackend::new(80, 24);
+    fn screen_renders_octaves_and_parameters_at_minimum_size() {
+        let backend = TestBackend::new(100, 24);
+        let mut project = ProjectV1::new();
+        project.tracks[3].input_octave = Some(4);
+        project.tracks[3].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            locks: Default::default(),
+        });
+        project.tracks[3].steps[1] = Some(StepEvent::Note {
+            degree: 2,
+            octave: 4,
+            locks: crate::model::ParameterLocks {
+                cutoff: Some(Percent::new(50).unwrap()),
+                ..Default::default()
+            },
+        });
         let mut terminal = Terminal::new(backend).unwrap();
-        let app = App::new(ProjectV1::new(), None);
+        let app = App::new(project, None);
         terminal
             .draw(|frame| draw_with_device(frame, &app, "null"))
             .unwrap();
@@ -1386,14 +1497,54 @@ mod tests {
             .collect::<String>();
         assert!(rendered.contains("L80Y0B0T50D35"));
         assert!(rendered.contains("L80Y0B0WSC65Q10F25A0D25S70R15"));
+        assert!(rendered.contains("Synth 1 O4"));
+        assert!(rendered.contains("1:3"));
+        assert!(rendered.contains("2*4"));
     }
 
     #[test]
     fn small_terminal_replaces_main_layout() {
         let app = App::new(ProjectV1::new(), None);
-        let screen = rendered(&app, 79, 23);
-        assert!(screen.contains("terminal-groove needs 80x24"));
-        assert!(screen.contains("Current: 79x23"));
+        let screen = rendered(&app, 99, 24);
+        assert!(screen.contains("terminal-groove needs 100x24"));
+        assert!(screen.contains("Current: 99x24"));
+    }
+
+    #[test]
+    fn step_cells_show_note_octaves_and_locks() {
+        assert_eq!(step_cell(None), " . ");
+        assert_eq!(
+            step_cell(Some(&StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                locks: Default::default(),
+            })),
+            "1:3"
+        );
+        assert_eq!(
+            step_cell(Some(&StepEvent::Note {
+                degree: 2,
+                octave: 4,
+                locks: crate::model::ParameterLocks {
+                    cutoff: Some(Percent::new(50).unwrap()),
+                    ..Default::default()
+                },
+            })),
+            "2*4"
+        );
+        assert_eq!(
+            step_cell(Some(&StepEvent::Tie {
+                locks: Default::default(),
+            })),
+            " - "
+        );
+    }
+
+    #[test]
+    fn input_octave_adjustment_clamps_to_supported_range() {
+        assert_eq!(adjusted_octave(3, 1), 4);
+        assert_eq!(adjusted_octave(0, -1), 0);
+        assert_eq!(adjusted_octave(7, 1), 7);
     }
 
     #[test]

@@ -65,6 +65,7 @@ pub enum AudioCommand {
 }
 pub struct AudioStatus {
     pub running: AtomicBool,
+    pub paused: AtomicBool,
     pub playhead: AtomicU8,
     pub failed: AtomicBool,
     pub non_finite: AtomicBool,
@@ -73,6 +74,7 @@ impl Default for AudioStatus {
     fn default() -> Self {
         Self {
             running: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
             playhead: AtomicU8::new(u8::MAX),
             failed: AtomicBool::new(false),
             non_finite: AtomicBool::new(false),
@@ -117,18 +119,26 @@ pub fn output_device_names() -> Result<Vec<String>> {
 fn choose_device(requested: Option<&str>) -> Result<Device> {
     let host = cpal::default_host();
     if let Some(name) = requested {
-        let matches = host
+        let devices = host
             .output_devices()
             .context("could not enumerate audio outputs")?
+            .collect::<Vec<_>>();
+        let candidates = devices
+            .iter()
+            .filter_map(|d| d.name().ok())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let matches = devices
+            .into_iter()
             .filter(|d| d.name().ok().as_deref() == Some(name))
             .collect::<Vec<_>>();
         match matches.len() {
             1 => Ok(matches.into_iter().next().unwrap()),
             0 => bail!(
-                "audio output `{name}` was not found; run `terminal-groove --list-audio-devices`"
+                "audio output `{name}` was not found; available outputs: {candidates}; run `terminal-groove --list-audio-devices`"
             ),
             n => bail!(
-                "audio output name `{name}` is ambiguous ({n} matches); use an exact unique name from `terminal-groove --list-audio-devices`"
+                "audio output name `{name}` is ambiguous ({n} matches); available outputs: {candidates}; use an exact unique name from `terminal-groove --list-audio-devices`"
             ),
         }
     } else {
@@ -170,6 +180,7 @@ pub fn open(requested: Option<&str>, project: &ProjectV1) -> Result<Audio> {
 fn mark_failed(status: &AudioStatus) {
     status.failed.store(true, Ordering::Release);
     status.running.store(false, Ordering::Release);
+    status.paused.store(false, Ordering::Release);
     status.playhead.store(u8::MAX, Ordering::Release);
 }
 
@@ -287,7 +298,9 @@ struct DrumVoice {
     filter: Biquad,
     noise: u32,
     tone: f32,
-    mix: [f32; 3],
+    level: Smoother,
+    delay_send: Smoother,
+    reverb_send: Smoother,
 }
 impl DrumVoice {
     fn new(seed: u32) -> Self {
@@ -298,7 +311,9 @@ impl DrumVoice {
             filter: Biquad::new(),
             noise: seed,
             tone: 0.5,
-            mix: [0.0; 3],
+            level: Smoother::new(0.0),
+            delay_send: Smoother::new(0.0),
+            reverb_send: Smoother::new(0.0),
         }
     }
     fn noise(&mut self) -> f32 {
@@ -343,6 +358,7 @@ struct Renderer {
     delay: Delay,
     reverb: Reverb,
     dc: DcBlock,
+    mute: [Smoother; TRACK_COUNT],
 }
 impl Renderer {
     fn new(project: AudioProject, sr: u32, status: Arc<AudioStatus>) -> Self {
@@ -363,6 +379,7 @@ impl Renderer {
             delay: Delay::new(sr),
             reverb: Reverb::new(sr),
             dc: Default::default(),
+            mute: std::array::from_fn(|i| Smoother::new((!project.tracks[i].muted) as u8 as f32)),
         };
         r.configure_effects();
         r
@@ -379,11 +396,25 @@ impl Renderer {
         self.reverb
             .set_time(self.project.globals.reverb_time_seconds);
     }
+    fn update_mutes(&mut self, immediate: bool) {
+        let smoothing = if immediate {
+            0
+        } else {
+            (self.sr * 0.005) as u32
+        };
+        for (i, mute) in self.mute.iter_mut().enumerate() {
+            mute.set((!self.project.tracks[i].muted) as u8 as f32, smoothing);
+        }
+    }
     fn command(&mut self, command: AudioCommand) {
         match command {
             AudioCommand::PlayPause => {
+                if !self.playing && self.status.paused.load(Ordering::Acquire) {
+                    self.clock.restart_timing();
+                }
                 self.playing = !self.playing;
                 self.status.running.store(self.playing, Ordering::Release);
+                self.status.paused.store(!self.playing, Ordering::Release);
                 if !self.playing {
                     for v in &mut self.synth {
                         v.env.gate_off();
@@ -406,11 +437,13 @@ impl Renderer {
                 self.delay.clear();
                 self.reverb.clear();
                 self.status.running.store(false, Ordering::Release);
+                self.status.paused.store(false, Ordering::Release);
                 self.status.playhead.store(u8::MAX, Ordering::Release);
             }
             AudioCommand::ReplaceProject(project) => {
                 self.project = project;
                 self.configure_effects();
+                self.update_mutes(false);
             }
             AudioCommand::Audition { track, step } => self.audition(track as usize, step as usize),
         }
@@ -427,12 +460,7 @@ impl Renderer {
         };
         let tone = locks.tone.unwrap_or(p.tone).normalized();
         let decay = locks.decay.unwrap_or(p.decay).normalized();
-        let mix = [
-            locks.level.unwrap_or(t.level).normalized().powi(2),
-            locks.delay_send.unwrap_or(t.delay_send).normalized(),
-            locks.reverb_send.unwrap_or(t.reverb_send).normalized(),
-        ];
-        Self::start_drum_voice(&mut self.drums[track], track, tone, decay, mix, self.sr);
+        Self::start_drum_voice(&mut self.drums[track], track, tone, decay, self.sr);
     }
     fn trigger_preview_drum(&mut self, track: usize, locks: ParameterLocks) {
         let t = self.project.tracks[track];
@@ -441,26 +469,23 @@ impl Renderer {
         };
         let tone = locks.tone.unwrap_or(p.tone).normalized();
         let decay = locks.decay.unwrap_or(p.decay).normalized();
-        let mix = [
-            locks.level.unwrap_or(t.level).normalized().powi(2),
-            locks.delay_send.unwrap_or(t.delay_send).normalized(),
-            locks.reverb_send.unwrap_or(t.reverb_send).normalized(),
-        ];
-        Self::start_drum_voice(
-            &mut self.preview_drums[track],
-            track,
-            tone,
-            decay,
-            mix,
-            self.sr,
-        );
+        Self::start_drum_voice(&mut self.preview_drums[track], track, tone, decay, self.sr);
+        let voice = &mut self.preview_drums[track];
+        voice
+            .level
+            .set(locks.level.unwrap_or(t.level).normalized().powi(2), 0);
+        voice
+            .delay_send
+            .set(locks.delay_send.unwrap_or(t.delay_send).normalized(), 0);
+        voice
+            .reverb_send
+            .set(locks.reverb_send.unwrap_or(t.reverb_send).normalized(), 0);
     }
     fn start_drum_voice(
         voice: &mut DrumVoice,
         track: usize,
         tone: f32,
         decay_control: f32,
-        mix: [f32; 3],
         sr: f32,
     ) {
         let decay = match track {
@@ -474,7 +499,6 @@ impl Renderer {
             _ => (0.001, 0.55),
         };
         voice.tone = tone;
-        voice.mix = mix;
         voice.envelope.trigger(peak, attack, decay, sr);
         match track {
             0 => voice.kick_pitch.trigger(tone, decay, sr),
@@ -483,6 +507,24 @@ impl Renderer {
                 .set_bandpass(800.0 + tone * 5200.0, 0.6 + tone * 5.0, sr),
             _ => voice.filter.set_highpass(2800.0 + tone * 9000.0, 1.2, sr),
         }
+    }
+    fn update_drum_mix(&mut self, track: usize, step: usize) {
+        let t = self.project.tracks[track];
+        let locks = self.locks_at(track, step);
+        let smoothing = (self.sr * 0.005) as u32;
+        let voice = &mut self.drums[track];
+        voice.level.set(
+            locks.level.unwrap_or(t.level).normalized().powi(2),
+            smoothing,
+        );
+        voice.delay_send.set(
+            locks.delay_send.unwrap_or(t.delay_send).normalized(),
+            smoothing,
+        );
+        voice.reverb_send.set(
+            locks.reverb_send.unwrap_or(t.reverb_send).normalized(),
+            smoothing,
+        );
     }
     fn apply_synth_params(
         project: &AudioProject,
@@ -498,11 +540,12 @@ impl Renderer {
         voice.wave = locks.waveform.unwrap_or(p.waveform);
         let cutoff = locks.cutoff.unwrap_or(p.cutoff).get();
         let smoothing = (sr * 0.005) as u32;
-        voice
-            .cutoff
-            .set(exp_map(cutoff, 40.0, (sr * 0.42).max(41.0)), smoothing);
+        voice.cutoff.set(
+            exp_map(cutoff, 20.0, 20_000.0_f32.min(sr * 0.45)),
+            smoothing,
+        );
         voice.resonance.set(
-            0.55 + locks.resonance.unwrap_or(p.resonance).normalized() * 11.0,
+            0.707 + locks.resonance.unwrap_or(p.resonance).normalized() * (10.0 - 0.707),
             smoothing,
         );
         voice.filter_env = locks
@@ -584,6 +627,7 @@ impl Renderer {
         for track in 0..TRACK_COUNT {
             let t = self.project.tracks[track];
             if track < 3 {
+                self.update_drum_mix(track, step);
                 if let Some(StepEvent::Trigger { locks }) = t.steps[step] {
                     self.trigger_drum(track, locks);
                 }
@@ -643,7 +687,8 @@ impl Renderer {
             Waveform::Square => v.osc.next_square(v.freq, sr),
         };
         let env = v.env.next_sample();
-        let cutoff = (v.cutoff.next_value() * (1.0 + env * v.filter_env * 7.0)).min(sr * 0.45);
+        let cutoff = (v.cutoff.next_value() * 2.0_f32.powf(env * v.filter_env * 6.0))
+            .min(20_000.0_f32.min(sr * 0.45));
         let resonance = v.resonance.next_value();
         let level = v.level.next_value();
         let delay_send = v.delay_send.next_value();
@@ -674,8 +719,12 @@ impl Renderer {
                 voice.filter.process(noise)
             }
         };
-        let sample = raw * voice.envelope.next_value() * voice.mix[0] * 0.42;
-        (sample, voice.mix[1], voice.mix[2])
+        let sample = raw * voice.envelope.next_value() * voice.level.next_value() * 0.42;
+        (
+            sample,
+            voice.delay_send.next_value(),
+            voice.reverb_send.next_value(),
+        )
     }
     fn next(&mut self) -> (f32, f32) {
         if self.playing {
@@ -688,11 +737,10 @@ impl Renderer {
         let mut reverb_in = 0.0;
         for i in 0..3 {
             let (x, delay_send, reverb_send) = Self::render_drum(&mut self.drums[i], i, self.sr);
-            if !self.project.tracks[i].muted {
-                dry += x;
-                delay_in += x * delay_send;
-                reverb_in += x * reverb_send;
-            }
+            let gain = self.mute[i].next_value();
+            dry += x * gain;
+            delay_in += x * delay_send * gain;
+            reverb_in += x * reverb_send * gain;
         }
         for i in 0..3 {
             let (x, delay_send, reverb_send) =
@@ -703,11 +751,10 @@ impl Renderer {
         }
         for i in 0..3 {
             let (x, ds, rs) = Self::render_synth(&mut self.synth[i], self.sr);
-            if !self.project.tracks[i + 3].muted {
-                dry += x;
-                delay_in += x * ds;
-                reverb_in += x * rs;
-            }
+            let gain = self.mute[i + 3].next_value();
+            dry += x * gain;
+            delay_in += x * ds * gain;
+            reverb_in += x * rs * gain;
             let (x, ds, rs) = Self::render_synth(&mut self.preview[i], self.sr);
             dry += x;
             delay_in += x * ds;
@@ -805,5 +852,76 @@ mod tests {
         assert_eq!(a, b);
         assert!(a.iter().all(|(l, r)| l.is_finite() && r.is_finite()));
         assert!(a.iter().any(|(l, _)| l.abs() > 0.001));
+    }
+
+    #[test]
+    fn resume_triggers_the_next_step_immediately() {
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(
+            AudioProject::from_project(&ProjectV1::new()),
+            48_000,
+            status,
+        );
+        renderer.command(AudioCommand::PlayPause);
+        assert_eq!(renderer.clock.next_step, 0);
+        renderer.next();
+        assert_eq!(renderer.clock.next_step, 1);
+        renderer.command(AudioCommand::PlayPause);
+        for _ in 0..100 {
+            renderer.next();
+        }
+        renderer.command(AudioCommand::PlayPause);
+        renderer.next();
+        assert_eq!(renderer.clock.next_step, 2);
+    }
+
+    #[test]
+    fn drum_mixer_lock_reverts_on_the_following_boundary() {
+        let mut project = ProjectV1::new();
+        project.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            locks: ParameterLocks {
+                level: Some(Percent::ZERO),
+                ..Default::default()
+            },
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.boundary(0);
+        let locked = (0..40)
+            .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr).0)
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+        renderer.boundary(1);
+        let restored = (0..40)
+            .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr).0)
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+        assert_eq!(locked, 0.0);
+        assert!(restored > 0.0001);
+    }
+
+    #[test]
+    fn synth_filter_mappings_match_the_specified_limits() {
+        let project = AudioProject::from_project(&ProjectV1::new());
+        let mut voice = SynthVoice::new(48_000.0);
+        let mut locks = ParameterLocks {
+            cutoff: Percent::new(0),
+            resonance: Percent::new(0),
+            ..Default::default()
+        };
+        Renderer::apply_synth_params(&project, 48_000.0, 3, locks, &mut voice);
+        for _ in 0..240 {
+            voice.cutoff.next_value();
+            voice.resonance.next_value();
+        }
+        assert!((voice.cutoff.next_value() - 20.0).abs() < 0.001);
+        assert!((voice.resonance.next_value() - 0.707).abs() < 0.001);
+        locks.cutoff = Percent::new(100);
+        locks.resonance = Percent::new(100);
+        Renderer::apply_synth_params(&project, 48_000.0, 3, locks, &mut voice);
+        for _ in 0..240 {
+            voice.cutoff.next_value();
+            voice.resonance.next_value();
+        }
+        assert!((voice.cutoff.next_value() - 20_000.0).abs() < 0.01);
+        assert!((voice.resonance.next_value() - 10.0).abs() < 0.001);
     }
 }

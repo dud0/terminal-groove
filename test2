@@ -1,0 +1,322 @@
+{
+  "format_version": 1,
+  "globals": {
+    "tempo_bpm": 120,
+    "delay_division": "eighth",
+    "delay_feedback": 30,
+    "reverb_time_seconds": 2.5,
+    "key": "C",
+    "scale": "major"
+  },
+  "tracks": [
+    {
+      "kind": "kick",
+      "name": "Kick",
+      "level": 80,
+      "muted": false,
+      "delay_send": 0,
+      "reverb_send": 0,
+      "instrument": {
+        "tone": 34,
+        "decay": 35
+      },
+      "steps": [
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "kind": "snare",
+      "name": "Snare",
+      "level": 91,
+      "muted": false,
+      "delay_send": 0,
+      "reverb_send": 90,
+      "instrument": {
+        "tone": 39,
+        "decay": 26
+      },
+      "steps": [
+        null,
+        null,
+        null,
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "kind": "hat",
+      "name": "Hi-hat",
+      "level": 48,
+      "muted": false,
+      "delay_send": 0,
+      "reverb_send": 0,
+      "instrument": {
+        "tone": 26,
+        "decay": 45
+      },
+      "steps": [
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        null
+      ]
+    },
+    {
+      "kind": "synth",
+      "name": "Synth 1",
+      "level": 59,
+      "muted": false,
+      "delay_send": 0,
+      "reverb_send": 0,
+      "instrument": {
+        "waveform": "saw",
+        "cutoff": 44,
+        "resonance": 10,
+        "filter_envelope": 51,
+        "attack": 8,
+        "decay": 25,
+        "sustain": 70,
+        "release": 44
+      },
+      "steps": [
+        {
+          "type": "note",
+          "degree": 1,
+          "octave": 3,
+          "locks": {}
+        },
+        null,
+        null,
+        {
+          "type": "note",
+          "degree": 2,
+          "octave": 3,
+          "locks": {}
+        },
+        null,
+        null,
+        {
+          "type": "note",
+          "degree": 4,
+          "octave": 3,
+          "locks": {}
+        },
+        null,
+        null,
+        {
+          "type": "note",
+          "degree": 5,
+          "octave": 3,
+          "locks": {}
+        },
+        null,
+        {
+          "type": "note",
+          "degree": 2,
+          "octave": 3,
+          "locks": {}
+        },
+        {
+          "type": "note",
+          "degree": 1,
+          "octave": 3,
+          "locks": {}
+        },
+        {
+          "type": "note",
+          "degree": 3,
+          "octave": 3,
+          "locks": {}
+        },
+        {
+          "type": "note",
+          "degree": 4,
+          "octave": 3,
+          "locks": {}
+        },
+        {
+          "type": "note",
+          "degree": 5,
+          "octave": 3,
+          "locks": {}
+        }
+      ],
+      "input_degree": 5,
+      "input_octave": 3
+    },
+    {
+      "kind": "synth",
+      "name": "Synth 2",
+      "level": 80,
+      "muted": true,
+      "delay_send": 0,
+      "reverb_send": 90,
+      "instrument": {
+        "waveform": "saw",
+        "cutoff": 44,
+        "resonance": 10,
+        "filter_envelope": 25,
+        "attack": 0,
+        "decay": 25,
+        "sustain": 70,
+        "release": 15
+      },
+      "steps": [
+        {
+          "type": "note",
+          "degree": 7,
+          "octave": 3,
+          "locks": {}
+        },
+        null,
+        null,
+        {
+          "type": "note",
+          "degree": 4,
+          "octave": 3,
+          "locks": {}
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "input_degree": 4,
+      "input_octave": 3
+    },
+    {
+      "kind": "synth",
+      "name": "Synth 3",
+      "level": 80,
+      "muted": true,
+      "delay_send": 0,
+      "reverb_send": 0,
+      "instrument": {
+        "waveform": "saw",
+        "cutoff": 65,
+        "resonance": 10,
+        "filter_envelope": 25,
+        "attack": 0,
+        "decay": 25,
+        "sustain": 70,
+        "release": 15
+      },
+      "steps": [
+        {
+          "type": "note",
+          "degree": 3,
+          "octave": 3,
+          "locks": {}
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "input_degree": 3,
+      "input_octave": 3
+    }
+  ]
+}
