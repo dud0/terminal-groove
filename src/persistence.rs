@@ -1,4 +1,4 @@
-use crate::model::ProjectV4;
+use crate::model::ProjectV5;
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
@@ -25,8 +25,6 @@ pub enum ProjectIoError {
         #[source]
         source: crate::model::ValidationError,
     },
-    #[error("invalid version 3 project in {path}: {message}")]
-    Migration { path: PathBuf, message: String },
     #[error("could not save {path}: {source}")]
     Save {
         path: PathBuf,
@@ -35,45 +33,28 @@ pub enum ProjectIoError {
     },
 }
 
-pub fn load(path: &Path) -> Result<ProjectV4, ProjectIoError> {
-    load_with_info(path).map(|loaded| loaded.project)
-}
-
-#[derive(Debug)]
-pub struct LoadedProject {
-    pub project: ProjectV4,
-    pub migrated_from: Option<u32>,
-}
-
-pub fn load_with_info(path: &Path) -> Result<LoadedProject, ProjectIoError> {
+pub fn load(path: &Path) -> Result<ProjectV5, ProjectIoError> {
     let bytes = fs::read(path).map_err(|source| ProjectIoError::Read {
         path: path.into(),
         source,
     })?;
-    let mut value: serde_json::Value =
+    let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    let migrated_from = match version {
-        Some(4) => None,
-        Some(3) => {
-            migrate_v3(&mut value).map_err(|message| ProjectIoError::Migration {
-                path: path.into(),
-                message,
-            })?;
-            Some(3)
-        }
+    match version {
+        Some(5) => {}
         Some(version) => {
             return Err(ProjectIoError::Validation {
                 path: path.into(),
                 source: crate::model::ValidationError::Version(version as u32),
             });
         }
-        None => None,
-    };
-    let project: ProjectV4 =
+        None => {}
+    }
+    let project: ProjectV5 =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
@@ -84,48 +65,10 @@ pub fn load_with_info(path: &Path) -> Result<LoadedProject, ProjectIoError> {
             path: path.into(),
             source,
         })?;
-    Ok(LoadedProject {
-        project,
-        migrated_from,
-    })
+    Ok(project)
 }
 
-fn migrate_v3(value: &mut serde_json::Value) -> Result<(), String> {
-    value["format_version"] = 4.into();
-    let Some(tracks) = value
-        .get_mut("tracks")
-        .and_then(serde_json::Value::as_array_mut)
-    else {
-        return Ok(());
-    };
-    for (track_index, track) in tracks.iter_mut().enumerate() {
-        let Some(steps) = track
-            .get_mut("steps")
-            .and_then(serde_json::Value::as_array_mut)
-        else {
-            continue;
-        };
-        for (step_index, step) in steps.iter_mut().enumerate() {
-            let Some(event) = step.as_object_mut() else {
-                continue;
-            };
-            if event.contains_key("velocity") {
-                return Err(format!(
-                    "tracks[{track_index}].steps[{step_index}]: unexpected velocity field"
-                ));
-            }
-            if matches!(
-                event.get("type").and_then(serde_json::Value::as_str),
-                Some("trigger" | "note")
-            ) {
-                event.insert("velocity".into(), 100.into());
-            }
-        }
-    }
-    Ok(())
-}
-
-pub fn save_atomic(path: &Path, project: &ProjectV4) -> Result<(), ProjectIoError> {
+pub fn save_atomic(path: &Path, project: &ProjectV5) -> Result<(), ProjectIoError> {
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
@@ -167,7 +110,7 @@ mod tests {
     fn round_trip_and_newline() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("x.groove.json");
-        let p = ProjectV4::new();
+        let p = ProjectV5::new();
         save_atomic(&f, &p).unwrap();
         assert_eq!(load(&f).unwrap(), p);
         assert!(fs::read(&f).unwrap().ends_with(b"\n"));
@@ -185,8 +128,8 @@ mod tests {
     }
     #[test]
     fn default_schema_uses_required_names() {
-        let value = serde_json::to_value(ProjectV4::new()).unwrap();
-        assert_eq!(value["format_version"], 4);
+        let value = serde_json::to_value(ProjectV5::new()).unwrap();
+        assert_eq!(value["format_version"], 5);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["tracks"].as_array().unwrap().len(), 6);
@@ -199,7 +142,7 @@ mod tests {
     fn mixed_track_lengths_round_trip_and_format_v2_is_rejected() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("mixed.groove.json");
-        let mut project = ProjectV4::new();
+        let mut project = ProjectV5::new();
         for (track, length) in project.tracks.iter_mut().zip([1, 7, 16, 31, 32, 64]) {
             track.steps.resize(length, None);
         }
@@ -219,79 +162,41 @@ mod tests {
     }
 
     #[test]
-    fn format_v3_events_migrate_to_full_velocity_without_rewriting_the_file() {
+    fn older_project_versions_are_rejected_without_migration() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("legacy.groove.json");
-        let mut project = ProjectV4::new();
-        project.tracks[0].steps[0] = Some(crate::model::StepEvent::Trigger {
-            velocity: crate::model::DEFAULT_DRUM_VELOCITY,
-            locks: Default::default(),
-        });
-        project.tracks[3].steps[0] = Some(crate::model::StepEvent::Note {
-            degree: 1,
-            octave: 3,
-            velocity: crate::model::DEFAULT_NOTE_VELOCITY,
-            locks: Default::default(),
-        });
-        let mut value = serde_json::to_value(project).unwrap();
-        value["format_version"] = 3.into();
-        value["tracks"][0]["steps"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("velocity");
-        value["tracks"][3]["steps"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("velocity");
-        fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
-
-        let loaded = load_with_info(&path).unwrap();
-        assert_eq!(loaded.migrated_from, Some(3));
-        assert_eq!(
-            loaded.project.tracks[0].steps[0]
-                .as_ref()
-                .unwrap()
-                .velocity(),
-            crate::model::Percent::new(100)
-        );
-        assert_eq!(
-            loaded.project.tracks[3].steps[0]
-                .as_ref()
-                .unwrap()
-                .velocity(),
-            crate::model::Percent::new(100)
-        );
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&fs::read(&path).unwrap()).unwrap()["format_version"],
-            3
-        );
+        for version in 1..=4 {
+            let mut value = serde_json::to_value(ProjectV5::new()).unwrap();
+            value["format_version"] = version.into();
+            fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            assert!(matches!(
+                load(&path),
+                Err(ProjectIoError::Validation {
+                    source: crate::model::ValidationError::Version(v), ..
+                }) if v == version
+            ));
+        }
     }
 
     #[test]
-    fn format_v3_rejects_a_velocity_field_instead_of_silently_overwriting_it() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("invalid-legacy.groove.json");
-        let mut project = ProjectV4::new();
-        project.tracks[0].steps[0] = Some(crate::model::StepEvent::Trigger {
-            velocity: crate::model::DEFAULT_DRUM_VELOCITY,
-            locks: Default::default(),
-        });
-        let mut value = serde_json::to_value(project).unwrap();
-        value["format_version"] = 3.into();
-        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-
-        assert!(matches!(
-            load_with_info(&path),
-            Err(ProjectIoError::Migration { .. })
-        ));
+    fn bundled_projects_are_valid_version_five_files() {
+        for json in [
+            include_str!("../beat"),
+            include_str!("../beat2"),
+            include_str!("../test1"),
+            include_str!("../test2"),
+        ] {
+            let project: ProjectV5 = serde_json::from_str(json).unwrap();
+            project.validate().unwrap();
+        }
     }
 
     #[test]
     fn lfo_schema_round_trips_synced_and_free_rates() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("lfos.groove.json");
-        let mut project = ProjectV4::new();
-        project.tracks[0].lfos.tone = Some(crate::model::LfoConfig {
+        let mut project = ProjectV5::new();
+        project.tracks[0].lfos.tune = Some(crate::model::LfoConfig {
             waveform: crate::model::LfoWaveform::SampleAndHold,
             rate: crate::model::LfoRate::Free {
                 rate_percent: crate::model::Percent::new(75).unwrap(),
@@ -313,13 +218,13 @@ mod tests {
     fn lfo_schema_rejects_unknown_and_missing_fields() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("invalid-lfo.groove.json");
-        let mut value = serde_json::to_value(ProjectV4::new()).unwrap();
+        let mut value = serde_json::to_value(ProjectV5::new()).unwrap();
         value["tracks"][0]["lfos"]["wat"] =
             serde_json::to_value(crate::model::LfoConfig::default()).unwrap();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
 
-        let mut value = serde_json::to_value(ProjectV4::new()).unwrap();
+        let mut value = serde_json::to_value(ProjectV5::new()).unwrap();
         value["tracks"][0].as_object_mut().unwrap().remove("lfos");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));

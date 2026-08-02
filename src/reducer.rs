@@ -1,7 +1,6 @@
 use crate::model::{
-    DEFAULT_DRUM_VELOCITY, DEFAULT_NOTE_VELOCITY, LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT,
-    ParameterId, ParameterLocks, ParameterValue, Percent, ProjectV4, StepEvent, TrackKind,
-    Waveform, tie_source,
+    Instrument, LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterLocks,
+    ParameterValue, Percent, ProjectV5, StepEvent, TrackKind, Waveform, tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -24,7 +23,8 @@ pub enum EditError {
     InvalidTie,
     InvalidLength,
     CannotDouble,
-    NoVelocity,
+    NoAccent,
+    NoSlide,
 }
 impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,7 +41,8 @@ impl std::fmt::Display for EditError {
                 Self::InvalidTie => "tie requires a preceding note",
                 Self::InvalidLength => "track length must be between 1 and 64 steps",
                 Self::CannotDouble => "track is longer than 32 steps and cannot be doubled",
-                Self::NoVelocity => "velocity requires a trigger or note",
+                Self::NoAccent => "accent requires a trigger or note",
+                Self::NoSlide => "slide requires a Bass note",
             }
         )
     }
@@ -49,8 +50,8 @@ impl std::fmt::Display for EditError {
 
 #[derive(Clone)]
 struct Revision {
-    before: ProjectV4,
-    after: ProjectV4,
+    before: ProjectV5,
+    after: ProjectV5,
     coalesce: Option<CoalesceKey>,
     at: Instant,
 }
@@ -58,13 +59,13 @@ struct Revision {
 pub struct CoalesceKey(pub usize, pub usize, pub u8);
 
 pub struct Editor {
-    pub project: ProjectV4,
-    saved: ProjectV4,
+    pub project: ProjectV5,
+    saved: ProjectV5,
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
 }
 impl Editor {
-    pub fn new(project: ProjectV4) -> Self {
+    pub fn new(project: ProjectV5) -> Self {
         Self {
             saved: project.clone(),
             project,
@@ -83,7 +84,7 @@ impl Editor {
             revision.coalesce = None;
         }
     }
-    pub fn replace_loaded(&mut self, p: ProjectV4) {
+    pub fn replace_loaded(&mut self, p: ProjectV5) {
         self.project = p.clone();
         self.saved = p;
         self.undo.clear();
@@ -91,7 +92,7 @@ impl Editor {
     }
     pub fn edit<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
     where
-        F: FnOnce(&mut ProjectV4) -> Result<(), EditError>,
+        F: FnOnce(&mut ProjectV5) -> Result<(), EditError>,
     {
         let before = self.project.clone();
         f(&mut self.project)?;
@@ -149,16 +150,24 @@ impl Editor {
                 clear_with_ties(t, step);
                 return Ok(());
             }
-            t.steps[step] = Some(if t.kind == TrackKind::Synth {
+            t.steps[step] = Some(if t.kind == TrackKind::Bass {
+                StepEvent::BassNote {
+                    degree: t.input_degree.unwrap(),
+                    octave: t.input_octave.unwrap(),
+                    accent: false,
+                    slide: false,
+                    locks: Default::default(),
+                }
+            } else if t.kind == TrackKind::Synth {
                 StepEvent::Note {
                     degree: t.input_degree.unwrap(),
                     octave: t.input_octave.unwrap(),
-                    velocity: DEFAULT_NOTE_VELOCITY,
+                    accent: false,
                     locks: Default::default(),
                 }
             } else {
                 StepEvent::Trigger {
-                    velocity: DEFAULT_DRUM_VELOCITY,
+                    accent: false,
                     locks: Default::default(),
                 }
             });
@@ -168,26 +177,40 @@ impl Editor {
     pub fn set_note(&mut self, track: usize, step: usize, degree: u8) -> Result<bool, EditError> {
         self.edit(None, move |p| {
             let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
-            if t.kind != TrackKind::Synth {
+            if !matches!(t.kind, TrackKind::Bass | TrackKind::Synth) {
                 return Err(EditError::NotSynth);
             }
             if step >= t.steps.len() || !(1..=8).contains(&degree) {
                 return Err(EditError::InvalidStep);
             }
-            let (locks, velocity) = match t.steps[step].take() {
-                Some(StepEvent::Note {
-                    velocity, locks, ..
-                }) => (locks, velocity),
-                Some(event) => (*event.locks(), DEFAULT_NOTE_VELOCITY),
-                None => (Default::default(), DEFAULT_NOTE_VELOCITY),
+            let (locks, accent, slide) = match t.steps[step].take() {
+                Some(StepEvent::BassNote {
+                    accent,
+                    slide,
+                    locks,
+                    ..
+                }) => (locks, accent, slide),
+                Some(StepEvent::Note { accent, locks, .. }) => (locks, accent, false),
+                Some(event) => (*event.locks(), false, false),
+                None => (Default::default(), false, false),
             };
             let octave = t.input_octave.unwrap();
             t.input_degree = Some(degree);
-            t.steps[step] = Some(StepEvent::Note {
-                degree,
-                octave,
-                velocity,
-                locks,
+            t.steps[step] = Some(if t.kind == TrackKind::Bass {
+                StepEvent::BassNote {
+                    degree,
+                    octave,
+                    accent,
+                    slide,
+                    locks,
+                }
+            } else {
+                StepEvent::Note {
+                    degree,
+                    octave,
+                    accent,
+                    locks,
+                }
             });
             cleanup_invalid_ties(t);
             Ok(())
@@ -196,7 +219,7 @@ impl Editor {
     pub fn toggle_tie(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
         self.edit(None, move |p| {
             let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
-            if t.kind != TrackKind::Synth {
+            if !matches!(t.kind, TrackKind::Bass | TrackKind::Synth) {
                 return Err(EditError::NotSynth);
             }
             if step >= t.steps.len() {
@@ -276,7 +299,7 @@ impl Editor {
         )
     }
 
-    pub fn velocity_value(&self, track: usize, step: usize) -> Result<Percent, EditError> {
+    pub fn accent_value(&self, track: usize, step: usize) -> Result<bool, EditError> {
         self.project
             .tracks
             .get(track)
@@ -285,18 +308,12 @@ impl Editor {
             .get(step)
             .ok_or(EditError::InvalidStep)?
             .as_ref()
-            .and_then(StepEvent::velocity)
-            .ok_or(EditError::NoVelocity)
+            .and_then(StepEvent::accent)
+            .ok_or(EditError::NoAccent)
     }
 
-    pub fn set_velocity(
-        &mut self,
-        track: usize,
-        step: usize,
-        velocity: Percent,
-        key: Option<CoalesceKey>,
-    ) -> Result<bool, EditError> {
-        self.edit(key, move |project| {
+    pub fn toggle_accent(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
+        self.edit(None, move |project| {
             let event = project
                 .tracks
                 .get_mut(track)
@@ -305,8 +322,30 @@ impl Editor {
                 .get_mut(step)
                 .ok_or(EditError::InvalidStep)?
                 .as_mut()
-                .ok_or(EditError::NoVelocity)?;
-            *event.velocity_mut().ok_or(EditError::NoVelocity)? = velocity;
+                .ok_or(EditError::NoAccent)?;
+            let accent = event.accent_mut().ok_or(EditError::NoAccent)?;
+            *accent = !*accent;
+            Ok(())
+        })
+    }
+
+    pub fn toggle_slide(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
+        self.edit(None, move |project| {
+            let t = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if t.kind != TrackKind::Bass {
+                return Err(EditError::NoSlide);
+            }
+            let event = t
+                .steps
+                .get_mut(step)
+                .ok_or(EditError::InvalidStep)?
+                .as_mut()
+                .ok_or(EditError::NoSlide)?;
+            let slide = event.slide_mut().ok_or(EditError::NoSlide)?;
+            *slide = !*slide;
             Ok(())
         })
     }
@@ -455,41 +494,59 @@ fn track_parameter(
         ParameterId::Level => ParameterValue::Percent(t.level),
         ParameterId::DelaySend => ParameterValue::Percent(t.delay_send),
         ParameterId::ReverbSend => ParameterValue::Percent(t.reverb_send),
-        ParameterId::Tone => match &t.instrument {
-            crate::model::Instrument::Drum(p) => ParameterValue::Percent(p.tone),
-            crate::model::Instrument::Synth(_) => return Err(EditError::InvalidParameter),
+        ParameterId::Tune => match t.instrument {
+            Instrument::Kick(p) => ParameterValue::Percent(p.tune),
+            Instrument::Snare(p) => ParameterValue::Percent(p.tune),
+            Instrument::Hat(p) => ParameterValue::Percent(p.tune),
+            _ => return Err(EditError::InvalidParameter),
         },
-        ParameterId::Decay => match &t.instrument {
-            crate::model::Instrument::Drum(p) => ParameterValue::Percent(p.decay),
-            crate::model::Instrument::Synth(p) => ParameterValue::Percent(p.decay),
+        ParameterId::Tone => match t.instrument {
+            Instrument::Snare(p) => ParameterValue::Percent(p.tone),
+            _ => return Err(EditError::InvalidParameter),
         },
-        ParameterId::Waveform => match &t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => ParameterValue::Waveform(p.waveform),
+        ParameterId::Snappy => match t.instrument {
+            Instrument::Snare(p) => ParameterValue::Percent(p.snappy),
+            _ => return Err(EditError::InvalidParameter),
         },
-        ParameterId::Cutoff => match &t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => ParameterValue::Percent(p.cutoff),
+        ParameterId::Decay => match t.instrument {
+            Instrument::Kick(p) => ParameterValue::Percent(p.decay),
+            Instrument::Hat(p) => ParameterValue::Percent(p.decay),
+            Instrument::Bass(p) => ParameterValue::Percent(p.decay),
+            Instrument::Synth(p) => ParameterValue::Percent(p.decay),
+            _ => return Err(EditError::InvalidParameter),
         },
-        ParameterId::Resonance => match &t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => ParameterValue::Percent(p.resonance),
+        ParameterId::Waveform => match t.instrument {
+            Instrument::Bass(p) => ParameterValue::Waveform(p.waveform),
+            Instrument::Synth(p) => ParameterValue::Waveform(p.waveform),
+            _ => return Err(EditError::InvalidParameter),
         },
-        ParameterId::FilterEnvelope => match &t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => ParameterValue::Percent(p.filter_envelope),
+        ParameterId::Cutoff => match t.instrument {
+            Instrument::Bass(p) => ParameterValue::Percent(p.cutoff),
+            Instrument::Synth(p) => ParameterValue::Percent(p.cutoff),
+            _ => return Err(EditError::InvalidParameter),
         },
-        ParameterId::Attack => match &t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => ParameterValue::Percent(p.attack),
+        ParameterId::Resonance => match t.instrument {
+            Instrument::Bass(p) => ParameterValue::Percent(p.resonance),
+            Instrument::Synth(p) => ParameterValue::Percent(p.resonance),
+            _ => return Err(EditError::InvalidParameter),
         },
-        ParameterId::Sustain => match &t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => ParameterValue::Percent(p.sustain),
+        ParameterId::FilterEnvelope => match t.instrument {
+            Instrument::Bass(p) => ParameterValue::Percent(p.filter_envelope),
+            Instrument::Synth(p) => ParameterValue::Percent(p.filter_envelope),
+            _ => return Err(EditError::InvalidParameter),
         },
-        ParameterId::Release => match &t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => ParameterValue::Percent(p.release),
+        ParameterId::Attack => match t.instrument {
+            Instrument::Kick(p) => ParameterValue::Percent(p.attack),
+            Instrument::Synth(p) => ParameterValue::Percent(p.attack),
+            _ => return Err(EditError::InvalidParameter),
+        },
+        ParameterId::Sustain => match t.instrument {
+            Instrument::Synth(p) => ParameterValue::Percent(p.sustain),
+            _ => return Err(EditError::InvalidParameter),
+        },
+        ParameterId::Release => match t.instrument {
+            Instrument::Synth(p) => ParameterValue::Percent(p.release),
+            _ => return Err(EditError::InvalidParameter),
         },
     };
     Ok(value)
@@ -504,41 +561,59 @@ fn set_track_parameter(
         (ParameterId::Level, ParameterValue::Percent(v)) => t.level = v,
         (ParameterId::DelaySend, ParameterValue::Percent(v)) => t.delay_send = v,
         (ParameterId::ReverbSend, ParameterValue::Percent(v)) => t.reverb_send = v,
+        (ParameterId::Tune, ParameterValue::Percent(v)) => match &mut t.instrument {
+            Instrument::Kick(p) => p.tune = v,
+            Instrument::Snare(p) => p.tune = v,
+            Instrument::Hat(p) => p.tune = v,
+            _ => return Err(EditError::InvalidParameter),
+        },
         (ParameterId::Tone, ParameterValue::Percent(v)) => match &mut t.instrument {
-            crate::model::Instrument::Drum(p) => p.tone = v,
-            crate::model::Instrument::Synth(_) => return Err(EditError::InvalidParameter),
+            Instrument::Snare(p) => p.tone = v,
+            _ => return Err(EditError::InvalidParameter),
+        },
+        (ParameterId::Snappy, ParameterValue::Percent(v)) => match &mut t.instrument {
+            Instrument::Snare(p) => p.snappy = v,
+            _ => return Err(EditError::InvalidParameter),
         },
         (ParameterId::Decay, ParameterValue::Percent(v)) => match &mut t.instrument {
-            crate::model::Instrument::Drum(p) => p.decay = v,
-            crate::model::Instrument::Synth(p) => p.decay = v,
+            Instrument::Kick(p) => p.decay = v,
+            Instrument::Hat(p) => p.decay = v,
+            Instrument::Bass(p) => p.decay = v,
+            Instrument::Synth(p) => p.decay = v,
+            _ => return Err(EditError::InvalidParameter),
         },
         (ParameterId::Waveform, ParameterValue::Waveform(v)) => match &mut t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => p.waveform = v,
+            Instrument::Bass(p) => p.waveform = v,
+            Instrument::Synth(p) => p.waveform = v,
+            _ => return Err(EditError::InvalidParameter),
         },
         (ParameterId::Cutoff, ParameterValue::Percent(v)) => match &mut t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => p.cutoff = v,
+            Instrument::Bass(p) => p.cutoff = v,
+            Instrument::Synth(p) => p.cutoff = v,
+            _ => return Err(EditError::InvalidParameter),
         },
         (ParameterId::Resonance, ParameterValue::Percent(v)) => match &mut t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => p.resonance = v,
+            Instrument::Bass(p) => p.resonance = v,
+            Instrument::Synth(p) => p.resonance = v,
+            _ => return Err(EditError::InvalidParameter),
         },
         (ParameterId::FilterEnvelope, ParameterValue::Percent(v)) => match &mut t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => p.filter_envelope = v,
+            Instrument::Bass(p) => p.filter_envelope = v,
+            Instrument::Synth(p) => p.filter_envelope = v,
+            _ => return Err(EditError::InvalidParameter),
         },
         (ParameterId::Attack, ParameterValue::Percent(v)) => match &mut t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => p.attack = v,
+            Instrument::Kick(p) => p.attack = v,
+            Instrument::Synth(p) => p.attack = v,
+            _ => return Err(EditError::InvalidParameter),
         },
         (ParameterId::Sustain, ParameterValue::Percent(v)) => match &mut t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => p.sustain = v,
+            Instrument::Synth(p) => p.sustain = v,
+            _ => return Err(EditError::InvalidParameter),
         },
         (ParameterId::Release, ParameterValue::Percent(v)) => match &mut t.instrument {
-            crate::model::Instrument::Drum(_) => return Err(EditError::InvalidParameter),
-            crate::model::Instrument::Synth(p) => p.release = v,
+            Instrument::Synth(p) => p.release = v,
+            _ => return Err(EditError::InvalidParameter),
         },
         _ => return Err(EditError::InvalidParameter),
     }
@@ -550,7 +625,9 @@ fn lock_parameter(l: &ParameterLocks, parameter: ParameterId) -> Option<Paramete
         ParameterId::Level => l.level.map(ParameterValue::Percent),
         ParameterId::DelaySend => l.delay_send.map(ParameterValue::Percent),
         ParameterId::ReverbSend => l.reverb_send.map(ParameterValue::Percent),
+        ParameterId::Tune => l.tune.map(ParameterValue::Percent),
         ParameterId::Tone => l.tone.map(ParameterValue::Percent),
+        ParameterId::Snappy => l.snappy.map(ParameterValue::Percent),
         ParameterId::Decay => l.decay.map(ParameterValue::Percent),
         ParameterId::Waveform => l.waveform.map(ParameterValue::Waveform),
         ParameterId::Cutoff => l.cutoff.map(ParameterValue::Percent),
@@ -571,7 +648,9 @@ fn set_lock_parameter(
         (ParameterId::Level, ParameterValue::Percent(v)) => l.level = Some(v),
         (ParameterId::DelaySend, ParameterValue::Percent(v)) => l.delay_send = Some(v),
         (ParameterId::ReverbSend, ParameterValue::Percent(v)) => l.reverb_send = Some(v),
+        (ParameterId::Tune, ParameterValue::Percent(v)) => l.tune = Some(v),
         (ParameterId::Tone, ParameterValue::Percent(v)) => l.tone = Some(v),
+        (ParameterId::Snappy, ParameterValue::Percent(v)) => l.snappy = Some(v),
         (ParameterId::Decay, ParameterValue::Percent(v)) => l.decay = Some(v),
         (ParameterId::Waveform, ParameterValue::Waveform(v)) => l.waveform = Some(v),
         (ParameterId::Cutoff, ParameterValue::Percent(v)) => l.cutoff = Some(v),
@@ -590,7 +669,9 @@ fn clear_lock_parameter(l: &mut ParameterLocks, parameter: ParameterId) {
         ParameterId::Level => l.level = None,
         ParameterId::DelaySend => l.delay_send = None,
         ParameterId::ReverbSend => l.reverb_send = None,
+        ParameterId::Tune => l.tune = None,
         ParameterId::Tone => l.tone = None,
+        ParameterId::Snappy => l.snappy = None,
         ParameterId::Decay => l.decay = None,
         ParameterId::Waveform => l.waveform = None,
         ParameterId::Cutoff => l.cutoff = None,
@@ -632,7 +713,7 @@ mod tests {
     use super::*;
     #[test]
     fn undo_dirty_redo() {
-        let mut e = Editor::new(ProjectV4::new());
+        let mut e = Editor::new(ProjectV5::new());
         e.toggle_event(0, 0).unwrap();
         assert!(e.is_dirty());
         assert!(e.undo());
@@ -642,7 +723,7 @@ mod tests {
     }
     #[test]
     fn edit_invalidates_redo() {
-        let mut e = Editor::new(ProjectV4::new());
+        let mut e = Editor::new(ProjectV5::new());
         e.toggle_event(0, 0).unwrap();
         e.undo();
         e.toggle_event(0, 1).unwrap();
@@ -650,7 +731,7 @@ mod tests {
     }
     #[test]
     fn tie_cleanup_is_atomic() {
-        let mut e = Editor::new(ProjectV4::new());
+        let mut e = Editor::new(ProjectV5::new());
         e.set_note(3, 0, 1).unwrap();
         e.toggle_tie(3, 1).unwrap();
         e.toggle_tie(3, 2).unwrap();
@@ -669,83 +750,56 @@ mod tests {
     }
 
     #[test]
-    fn new_events_use_distinct_velocity_defaults() {
-        let mut editor = Editor::new(ProjectV4::new());
+    fn new_events_are_unaccented_and_bass_notes_do_not_slide() {
+        let mut editor = Editor::new(ProjectV5::new());
         editor.toggle_event(0, 0).unwrap();
         editor.toggle_event(3, 0).unwrap();
-        assert_eq!(
-            editor.project.tracks[0].steps[0]
-                .as_ref()
-                .unwrap()
-                .velocity(),
-            Some(DEFAULT_DRUM_VELOCITY)
-        );
-        assert_eq!(
-            editor.project.tracks[3].steps[0]
-                .as_ref()
-                .unwrap()
-                .velocity(),
-            Some(DEFAULT_NOTE_VELOCITY)
-        );
+        assert_eq!(editor.accent_value(0, 0), Ok(false));
+        assert!(matches!(
+            editor.project.tracks[3].steps[0],
+            Some(StepEvent::BassNote {
+                accent: false,
+                slide: false,
+                ..
+            })
+        ));
     }
 
     #[test]
-    fn note_replacement_preserves_velocity_but_tie_to_note_uses_the_default() {
-        let mut editor = Editor::new(ProjectV4::new());
+    fn accent_and_slide_are_undoable_and_rejected_where_incompatible() {
+        let mut editor = Editor::new(ProjectV5::new());
         editor.set_note(3, 0, 1).unwrap();
-        editor
-            .set_velocity(3, 0, Percent::new(42).unwrap(), None)
-            .unwrap();
+        editor.toggle_accent(3, 0).unwrap();
+        editor.toggle_slide(3, 0).unwrap();
         editor.set_note(3, 0, 5).unwrap();
-        assert_eq!(editor.velocity_value(3, 0).unwrap().get(), 42);
-
+        assert_eq!(editor.accent_value(3, 0), Ok(true));
+        assert!(matches!(
+            editor.project.tracks[3].steps[0],
+            Some(StepEvent::BassNote { slide: true, .. })
+        ));
         editor.toggle_tie(3, 1).unwrap();
-        editor.set_note(3, 1, 2).unwrap();
-        assert_eq!(editor.velocity_value(3, 1), Ok(DEFAULT_NOTE_VELOCITY));
-    }
-
-    #[test]
-    fn velocity_edits_are_event_local_undoable_and_rejected_on_ties_or_empty_steps() {
-        let mut editor = Editor::new(ProjectV4::new());
-        assert_eq!(
-            editor.set_velocity(0, 0, Percent::new(20).unwrap(), None),
-            Err(EditError::NoVelocity)
-        );
-        editor.set_note(3, 0, 1).unwrap();
-        editor.toggle_tie(3, 1).unwrap();
-        assert_eq!(
-            editor.set_velocity(3, 1, Percent::new(20).unwrap(), None),
-            Err(EditError::NoVelocity)
-        );
-        editor.mark_saved();
-        editor
-            .set_velocity(3, 0, Percent::new(35).unwrap(), None)
-            .unwrap();
-        assert!(editor.is_dirty());
+        assert_eq!(editor.toggle_accent(3, 1), Err(EditError::NoAccent));
+        assert_eq!(editor.toggle_slide(4, 0), Err(EditError::NoSlide));
         assert!(editor.undo());
-        assert_eq!(editor.velocity_value(3, 0), Ok(DEFAULT_NOTE_VELOCITY));
-        assert!(!editor.is_dirty());
-        assert!(editor.redo());
-        assert_eq!(editor.velocity_value(3, 0).unwrap().get(), 35);
     }
 
     #[test]
     fn edits_all_track_parameter_kinds() {
-        let mut e = Editor::new(ProjectV4::new());
+        let mut e = Editor::new(ProjectV5::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
 
         e.set_parameter(0, 0, Scope::Base, ParameterId::Level, p(61), None)
             .unwrap();
-        e.set_parameter(0, 0, Scope::Base, ParameterId::Tone, p(72), None)
+        e.set_parameter(0, 0, Scope::Base, ParameterId::Tune, p(72), None)
             .unwrap();
         e.set_parameter(0, 0, Scope::Base, ParameterId::Decay, p(34), None)
             .unwrap();
         assert_eq!(e.project.tracks[0].level.get(), 61);
-        let crate::model::Instrument::Drum(drum) = &e.project.tracks[0].instrument else {
-            panic!("expected drum")
+        let crate::model::Instrument::Kick(kick) = &e.project.tracks[0].instrument else {
+            panic!("expected kick")
         };
-        assert_eq!(drum.tone.get(), 72);
-        assert_eq!(drum.decay.get(), 34);
+        assert_eq!(kick.tune.get(), 72);
+        assert_eq!(kick.decay.get(), 34);
 
         for (parameter, value) in [
             (ParameterId::Cutoff, 41),
@@ -756,11 +810,11 @@ mod tests {
             (ParameterId::Sustain, 74),
             (ParameterId::Release, 18),
         ] {
-            e.set_parameter(3, 0, Scope::Base, parameter, p(value), None)
+            e.set_parameter(4, 0, Scope::Base, parameter, p(value), None)
                 .unwrap();
         }
         e.set_parameter(
-            3,
+            4,
             0,
             Scope::Base,
             ParameterId::Waveform,
@@ -768,7 +822,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let crate::model::Instrument::Synth(synth) = &e.project.tracks[3].instrument else {
+        let crate::model::Instrument::Synth(synth) = &e.project.tracks[4].instrument else {
             panic!("expected synth")
         };
         assert_eq!(synth.waveform, Waveform::Square);
@@ -783,7 +837,7 @@ mod tests {
 
     #[test]
     fn lock_edits_inherit_and_clear_one_parameter() {
-        let mut e = Editor::new(ProjectV4::new());
+        let mut e = Editor::new(ProjectV5::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
         e.toggle_event(0, 0).unwrap();
         assert_eq!(
@@ -792,7 +846,7 @@ mod tests {
         );
         e.set_parameter(0, 0, Scope::Lock, ParameterId::Level, p(20), None)
             .unwrap();
-        e.set_parameter(0, 0, Scope::Lock, ParameterId::Tone, p(90), None)
+        e.set_parameter(0, 0, Scope::Lock, ParameterId::Tune, p(90), None)
             .unwrap();
         assert_eq!(
             e.parameter_value(0, 0, Scope::Lock, ParameterId::Level),
@@ -803,7 +857,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .locks()
-                .tone
+                .tune
                 .unwrap()
                 .get(),
             90
@@ -818,14 +872,14 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .locks()
-                .tone
+                .tune
                 .is_some()
         );
     }
 
     #[test]
     fn incompatible_and_empty_locks_are_rejected() {
-        let mut e = Editor::new(ProjectV4::new());
+        let mut e = Editor::new(ProjectV5::new());
         let value = ParameterValue::Percent(Percent::new(10).unwrap());
         assert_eq!(
             e.set_parameter(0, 0, Scope::Lock, ParameterId::Cutoff, value, None),
@@ -844,7 +898,7 @@ mod tests {
 
     #[test]
     fn resize_cleans_wrapped_ties_and_undo_restores_them() {
-        let mut e = Editor::new(ProjectV4::new());
+        let mut e = Editor::new(ProjectV5::new());
         e.set_track_length(3, 4, None).unwrap();
         e.set_note(3, 3, 1).unwrap();
         e.toggle_tie(3, 0).unwrap();
@@ -859,13 +913,13 @@ mod tests {
         ));
         assert!(matches!(
             e.project.tracks[3].steps[3],
-            Some(StepEvent::Note { .. })
+            Some(StepEvent::BassNote { .. })
         ));
     }
 
     #[test]
     fn duplicate_track_copies_events_locks_and_is_one_undo_step() {
-        let mut e = Editor::new(ProjectV4::new());
+        let mut e = Editor::new(ProjectV5::new());
         e.set_track_length(3, 4, None).unwrap();
         e.set_note(3, 3, 2).unwrap();
         e.set_parameter(
@@ -889,7 +943,7 @@ mod tests {
 
     #[test]
     fn duplicate_rejects_lengths_above_32_without_state_change() {
-        let mut e = Editor::new(ProjectV4::new());
+        let mut e = Editor::new(ProjectV5::new());
         e.set_track_length(0, 33, None).unwrap();
         e.mark_saved();
         assert_eq!(e.duplicate_track(0), Err(EditError::CannotDouble));
@@ -899,7 +953,7 @@ mod tests {
 
     #[test]
     fn lfo_assignment_is_validated_and_undoable() {
-        let mut editor = Editor::new(ProjectV4::new());
+        let mut editor = Editor::new(ProjectV5::new());
         let config = LfoConfig::default();
         editor
             .set_lfo(3, ParameterId::Cutoff, Some(config), None)

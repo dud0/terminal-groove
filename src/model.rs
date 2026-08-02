@@ -6,8 +6,6 @@ pub const MAX_STEP_COUNT: usize = 64;
 pub const STEP_BANK_SIZE: usize = 16;
 pub const STEP_ROW_SIZE: usize = 32;
 pub const TRACK_COUNT: usize = 6;
-pub const DEFAULT_NOTE_VELOCITY: Percent = Percent(70);
-pub const DEFAULT_DRUM_VELOCITY: Percent = Percent(100);
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ValidationError {
@@ -406,13 +404,37 @@ pub enum TrackKind {
     Kick,
     Snare,
     Hat,
+    Bass,
     Synth,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DrumParameters {
+pub struct KickParameters {
+    pub tune: Percent,
+    pub decay: Percent,
+    pub attack: Percent,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnareParameters {
+    pub tune: Percent,
     pub tone: Percent,
+    pub snappy: Percent,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HatParameters {
+    pub tune: Percent,
+    pub decay: Percent,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BassParameters {
+    pub waveform: Waveform,
+    pub cutoff: Percent,
+    pub resonance: Percent,
+    pub filter_envelope: Percent,
     pub decay: Percent,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -431,7 +453,10 @@ pub struct SynthParameters {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Instrument {
-    Drum(DrumParameters),
+    Kick(KickParameters),
+    Snare(SnareParameters),
+    Hat(HatParameters),
+    Bass(BassParameters),
     Synth(SynthParameters),
 }
 
@@ -445,7 +470,11 @@ pub struct ParameterLocks {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverb_send: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tune: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tone: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snappy: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decay: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -470,7 +499,11 @@ pub struct LfoAssignments {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<LfoConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tune: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tone: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snappy: Option<LfoConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decay: Option<LfoConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -491,7 +524,9 @@ impl LfoAssignments {
     pub fn get(&self, parameter: ParameterId) -> Option<LfoConfig> {
         match parameter {
             ParameterId::Level => self.level,
+            ParameterId::Tune => self.tune,
             ParameterId::Tone => self.tone,
+            ParameterId::Snappy => self.snappy,
             ParameterId::Decay => self.decay,
             ParameterId::Cutoff => self.cutoff,
             ParameterId::Resonance => self.resonance,
@@ -506,7 +541,9 @@ impl LfoAssignments {
     pub fn set(&mut self, parameter: ParameterId, config: Option<LfoConfig>) -> bool {
         let slot = match parameter {
             ParameterId::Level => &mut self.level,
+            ParameterId::Tune => &mut self.tune,
             ParameterId::Tone => &mut self.tone,
+            ParameterId::Snappy => &mut self.snappy,
             ParameterId::Decay => &mut self.decay,
             ParameterId::Cutoff => &mut self.cutoff,
             ParameterId::Resonance => &mut self.resonance,
@@ -532,13 +569,20 @@ impl ParameterLocks {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StepEvent {
     Trigger {
-        velocity: Percent,
+        accent: bool,
+        locks: ParameterLocks,
+    },
+    BassNote {
+        degree: u8,
+        octave: u8,
+        accent: bool,
+        slide: bool,
         locks: ParameterLocks,
     },
     Note {
         degree: u8,
         octave: u8,
-        velocity: Percent,
+        accent: bool,
         locks: ParameterLocks,
     },
     Tie {
@@ -548,26 +592,43 @@ pub enum StepEvent {
 impl StepEvent {
     pub fn locks(&self) -> &ParameterLocks {
         match self {
-            Self::Trigger { locks, .. } | Self::Note { locks, .. } | Self::Tie { locks } => locks,
+            Self::Trigger { locks, .. }
+            | Self::BassNote { locks, .. }
+            | Self::Note { locks, .. }
+            | Self::Tie { locks } => locks,
         }
     }
     pub fn locks_mut(&mut self) -> &mut ParameterLocks {
         match self {
-            Self::Trigger { locks, .. } | Self::Note { locks, .. } | Self::Tie { locks } => locks,
+            Self::Trigger { locks, .. }
+            | Self::BassNote { locks, .. }
+            | Self::Note { locks, .. }
+            | Self::Tie { locks } => locks,
         }
     }
 
-    pub fn velocity(&self) -> Option<Percent> {
+    pub fn accent(&self) -> Option<bool> {
         match self {
-            Self::Trigger { velocity, .. } | Self::Note { velocity, .. } => Some(*velocity),
+            Self::Trigger { accent, .. }
+            | Self::BassNote { accent, .. }
+            | Self::Note { accent, .. } => Some(*accent),
             Self::Tie { .. } => None,
         }
     }
 
-    pub fn velocity_mut(&mut self) -> Option<&mut Percent> {
+    pub fn accent_mut(&mut self) -> Option<&mut bool> {
         match self {
-            Self::Trigger { velocity, .. } | Self::Note { velocity, .. } => Some(velocity),
+            Self::Trigger { accent, .. }
+            | Self::BassNote { accent, .. }
+            | Self::Note { accent, .. } => Some(accent),
             Self::Tie { .. } => None,
+        }
+    }
+
+    pub fn slide_mut(&mut self) -> Option<&mut bool> {
+        match self {
+            Self::BassNote { slide, .. } => Some(slide),
+            _ => None,
         }
     }
 }
@@ -593,7 +654,7 @@ pub struct Track {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectV4 {
+pub struct ProjectV5 {
     pub format_version: u32,
     pub globals: Globals,
     pub tracks: Vec<Track>,
@@ -602,61 +663,108 @@ pub struct ProjectV4 {
 fn p(n: u8) -> Percent {
     Percent(n)
 }
-impl ProjectV4 {
+impl ProjectV5 {
     pub fn new() -> Self {
-        let drum = |kind: TrackKind, name: &str, tone: u8, decay: u8| Track {
+        let track = |kind: TrackKind, name: &str, instrument: Instrument| Track {
             kind,
             name: name.into(),
             level: p(80),
             muted: false,
             delay_send: p(0),
             reverb_send: p(0),
-            instrument: Instrument::Drum(DrumParameters {
-                tone: p(tone),
-                decay: p(decay),
-            }),
+            instrument,
             lfos: LfoAssignments::default(),
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: None,
             input_octave: None,
         };
-        let synth = |name: &str| Track {
-            kind: TrackKind::Synth,
+        let synth = |kind: TrackKind, name: &str, instrument: Instrument| Track {
+            kind,
             name: name.into(),
             level: p(80),
             muted: false,
             delay_send: p(0),
             reverb_send: p(0),
-            instrument: Instrument::Synth(SynthParameters {
-                waveform: Waveform::Saw,
-                cutoff: p(65),
-                resonance: p(10),
-                filter_envelope: p(25),
-                attack: p(0),
-                decay: p(25),
-                sustain: p(70),
-                release: p(15),
-            }),
+            instrument,
             lfos: LfoAssignments::default(),
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: Some(1),
             input_octave: Some(3),
         };
         Self {
-            format_version: 4,
+            format_version: 5,
             globals: Globals::default(),
             tracks: vec![
-                drum(TrackKind::Kick, "Kick", 50, 35),
-                drum(TrackKind::Snare, "Snare", 50, 35),
-                drum(TrackKind::Hat, "Hi-hat", 60, 20),
-                synth("Synth 1"),
-                synth("Synth 2"),
-                synth("Synth 3"),
+                track(
+                    TrackKind::Kick,
+                    "Kick",
+                    Instrument::Kick(KickParameters {
+                        tune: p(50),
+                        decay: p(35),
+                        attack: p(35),
+                    }),
+                ),
+                track(
+                    TrackKind::Snare,
+                    "Snare",
+                    Instrument::Snare(SnareParameters {
+                        tune: p(50),
+                        tone: p(50),
+                        snappy: p(55),
+                    }),
+                ),
+                track(
+                    TrackKind::Hat,
+                    "Hi-hat",
+                    Instrument::Hat(HatParameters {
+                        tune: p(50),
+                        decay: p(20),
+                    }),
+                ),
+                synth(
+                    TrackKind::Bass,
+                    "Bass",
+                    Instrument::Bass(BassParameters {
+                        waveform: Waveform::Saw,
+                        cutoff: p(45),
+                        resonance: p(55),
+                        filter_envelope: p(65),
+                        decay: p(40),
+                    }),
+                ),
+                synth(
+                    TrackKind::Synth,
+                    "Synth 2",
+                    Instrument::Synth(SynthParameters {
+                        waveform: Waveform::Saw,
+                        cutoff: p(65),
+                        resonance: p(10),
+                        filter_envelope: p(25),
+                        attack: p(0),
+                        decay: p(25),
+                        sustain: p(70),
+                        release: p(15),
+                    }),
+                ),
+                synth(
+                    TrackKind::Synth,
+                    "Synth 3",
+                    Instrument::Synth(SynthParameters {
+                        waveform: Waveform::Saw,
+                        cutoff: p(65),
+                        resonance: p(10),
+                        filter_envelope: p(25),
+                        attack: p(0),
+                        decay: p(25),
+                        sustain: p(70),
+                        release: p(15),
+                    }),
+                ),
             ],
         }
     }
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 4 {
+        if self.format_version != 5 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -666,7 +774,7 @@ impl ProjectV4 {
             (TrackKind::Kick, "Kick"),
             (TrackKind::Snare, "Snare"),
             (TrackKind::Hat, "Hi-hat"),
-            (TrackKind::Synth, "Synth 1"),
+            (TrackKind::Bass, "Bass"),
             (TrackKind::Synth, "Synth 2"),
             (TrackKind::Synth, "Synth 3"),
         ];
@@ -684,10 +792,18 @@ impl ProjectV4 {
             if !(MIN_STEP_COUNT..=MAX_STEP_COUNT).contains(&t.steps.len()) {
                 return Err(ValidationError::StepCount(ti, t.steps.len()));
             }
-            let synth = t.kind == TrackKind::Synth;
-            if synth != matches!(t.instrument, Instrument::Synth(_))
-                || synth != t.input_degree.is_some()
-                || synth != t.input_octave.is_some()
+            let pitched = matches!(t.kind, TrackKind::Bass | TrackKind::Synth);
+            let instrument_ok = matches!(
+                (t.kind, t.instrument),
+                (TrackKind::Kick, Instrument::Kick(_))
+                    | (TrackKind::Snare, Instrument::Snare(_))
+                    | (TrackKind::Hat, Instrument::Hat(_))
+                    | (TrackKind::Bass, Instrument::Bass(_))
+                    | (TrackKind::Synth, Instrument::Synth(_))
+            );
+            if !instrument_ok
+                || pitched != t.input_degree.is_some()
+                || pitched != t.input_octave.is_some()
             {
                 return Err(ValidationError::TrackOrder(ti, expected[ti].1));
             }
@@ -705,23 +821,29 @@ impl ProjectV4 {
             for (si, event) in t.steps.iter().enumerate() {
                 if let Some(event) = event {
                     let event_ok = matches!(
-                        (synth, event),
-                        (false, StepEvent::Trigger { .. })
-                            | (true, StepEvent::Note { .. })
-                            | (true, StepEvent::Tie { .. })
+                        (t.kind, event),
+                        (
+                            TrackKind::Kick | TrackKind::Snare | TrackKind::Hat,
+                            StepEvent::Trigger { .. }
+                        ) | (TrackKind::Bass, StepEvent::BassNote { .. })
+                            | (TrackKind::Bass, StepEvent::Tie { .. })
+                            | (TrackKind::Synth, StepEvent::Note { .. })
+                            | (TrackKind::Synth, StepEvent::Tie { .. })
                     );
                     if !event_ok {
                         return Err(ValidationError::EventKind(ti, si));
                     }
-                    if let StepEvent::Note { degree, octave, .. } = event {
+                    if let StepEvent::Note { degree, octave, .. }
+                    | StepEvent::BassNote { degree, octave, .. } = event
+                    {
                         if !(1..=8).contains(degree) || *octave > 7 {
                             return Err(ValidationError::EventKind(ti, si));
                         }
                     }
-                    validate_locks(ti, si, synth, event.locks())?;
+                    validate_locks(ti, si, t.kind, event.locks())?;
                 }
             }
-            if synth {
+            if pitched {
                 validate_ties(ti, &t.steps)?;
             }
         }
@@ -742,7 +864,7 @@ impl ProjectV4 {
             .map(|m| 440.0 * 2.0_f32.powf((m as f32 - 69.0) / 12.0))
     }
 }
-impl Default for ProjectV4 {
+impl Default for ProjectV5 {
     fn default() -> Self {
         Self::new()
     }
@@ -751,28 +873,28 @@ impl Default for ProjectV4 {
 fn validate_locks(
     ti: usize,
     si: usize,
-    synth: bool,
+    kind: TrackKind,
     l: &ParameterLocks,
 ) -> Result<(), ValidationError> {
-    let bad = if synth {
-        if l.tone.is_some() { Some("tone") } else { None }
-    } else if l.waveform.is_some() {
-        Some("waveform")
-    } else if l.cutoff.is_some() {
-        Some("cutoff")
-    } else if l.resonance.is_some() {
-        Some("resonance")
-    } else if l.filter_envelope.is_some() {
-        Some("filter_envelope")
-    } else if l.attack.is_some() {
-        Some("attack")
-    } else if l.sustain.is_some() {
-        Some("sustain")
-    } else if l.release.is_some() {
-        Some("release")
-    } else {
-        None
-    };
+    let present = [
+        (ParameterId::Level, l.level.is_some()),
+        (ParameterId::DelaySend, l.delay_send.is_some()),
+        (ParameterId::ReverbSend, l.reverb_send.is_some()),
+        (ParameterId::Tune, l.tune.is_some()),
+        (ParameterId::Tone, l.tone.is_some()),
+        (ParameterId::Snappy, l.snappy.is_some()),
+        (ParameterId::Decay, l.decay.is_some()),
+        (ParameterId::Waveform, l.waveform.is_some()),
+        (ParameterId::Cutoff, l.cutoff.is_some()),
+        (ParameterId::Resonance, l.resonance.is_some()),
+        (ParameterId::FilterEnvelope, l.filter_envelope.is_some()),
+        (ParameterId::Attack, l.attack.is_some()),
+        (ParameterId::Sustain, l.sustain.is_some()),
+        (ParameterId::Release, l.release.is_some()),
+    ];
+    let bad = present.into_iter().find_map(|(parameter, present)| {
+        (present && !parameter.is_valid_for(kind)).then_some(parameter.name())
+    });
     bad.map_or(Ok(()), |name| Err(ValidationError::Lock(ti, si, name)))
 }
 
@@ -792,7 +914,7 @@ pub fn tie_source(steps: &[Step], at: usize) -> Option<usize> {
     let mut i = (at + step_count - 1) % step_count;
     for _ in 0..step_count {
         match &steps[i] {
-            Some(StepEvent::Note { .. }) => return Some(i),
+            Some(StepEvent::Note { .. } | StepEvent::BassNote { .. }) => return Some(i),
             Some(StepEvent::Tie { .. }) => i = (i + step_count - 1) % step_count,
             _ => return None,
         }
@@ -821,7 +943,9 @@ pub enum ParameterId {
     Level,
     DelaySend,
     ReverbSend,
+    Tune,
     Tone,
+    Snappy,
     Decay,
     Waveform,
     Cutoff,
@@ -839,11 +963,13 @@ pub enum ParameterValue {
 }
 
 impl ParameterId {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::Level,
         Self::DelaySend,
         Self::ReverbSend,
+        Self::Tune,
         Self::Tone,
+        Self::Snappy,
         Self::Decay,
         Self::Waveform,
         Self::Cutoff,
@@ -856,15 +982,18 @@ impl ParameterId {
 
     pub const fn is_valid_for(self, kind: TrackKind) -> bool {
         match self {
-            Self::Level | Self::DelaySend | Self::ReverbSend | Self::Decay => true,
-            Self::Tone => !matches!(kind, TrackKind::Synth),
-            Self::Waveform
-            | Self::Cutoff
-            | Self::Resonance
-            | Self::FilterEnvelope
-            | Self::Attack
-            | Self::Sustain
-            | Self::Release => matches!(kind, TrackKind::Synth),
+            Self::Level | Self::DelaySend | Self::ReverbSend => true,
+            Self::Tune => matches!(kind, TrackKind::Kick | TrackKind::Snare | TrackKind::Hat),
+            Self::Tone | Self::Snappy => matches!(kind, TrackKind::Snare),
+            Self::Decay => matches!(
+                kind,
+                TrackKind::Kick | TrackKind::Hat | TrackKind::Bass | TrackKind::Synth
+            ),
+            Self::Attack => matches!(kind, TrackKind::Kick | TrackKind::Synth),
+            Self::Waveform | Self::Cutoff | Self::Resonance | Self::FilterEnvelope => {
+                matches!(kind, TrackKind::Bass | TrackKind::Synth)
+            }
+            Self::Sustain | Self::Release => matches!(kind, TrackKind::Synth),
         }
     }
 
@@ -873,18 +1002,8 @@ impl ParameterId {
     }
 
     pub const fn supports_lfo(self, kind: TrackKind) -> bool {
-        match self {
-            Self::Level => true,
-            Self::Tone => !matches!(kind, TrackKind::Synth),
-            Self::Decay => true,
-            Self::Cutoff
-            | Self::Resonance
-            | Self::FilterEnvelope
-            | Self::Attack
-            | Self::Sustain
-            | Self::Release => matches!(kind, TrackKind::Synth),
-            Self::DelaySend | Self::ReverbSend | Self::Waveform => false,
-        }
+        self.is_valid_for(kind)
+            && !matches!(self, Self::DelaySend | Self::ReverbSend | Self::Waveform)
     }
 
     pub const fn name(self) -> &'static str {
@@ -892,7 +1011,9 @@ impl ParameterId {
             Self::Level => "level",
             Self::DelaySend => "delay_send",
             Self::ReverbSend => "reverb_send",
+            Self::Tune => "tune",
             Self::Tone => "tone",
+            Self::Snappy => "snappy",
             Self::Decay => "decay",
             Self::Waveform => "waveform",
             Self::Cutoff => "cutoff",
@@ -917,11 +1038,11 @@ mod tests {
     use super::*;
     #[test]
     fn default_valid() {
-        ProjectV4::new().validate().unwrap();
+        ProjectV5::new().validate().unwrap();
     }
     #[test]
     fn scale_and_frequency() {
-        let mut p = ProjectV4::new();
+        let mut p = ProjectV5::new();
         assert_eq!(p.note_midi(8, 3), Some(60));
         p.globals.key = PitchClass::A;
         assert!((p.note_frequency(1, 4).unwrap() - 440.0).abs() < 0.001);
@@ -939,7 +1060,7 @@ mod tests {
         s[15] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
-            velocity: DEFAULT_NOTE_VELOCITY,
+            accent: false,
             locks: Default::default(),
         });
         s[0] = Some(StepEvent::Tie {
@@ -949,14 +1070,15 @@ mod tests {
     }
     #[test]
     fn variable_step_counts_and_wrapped_ties_validate() {
-        let mut project = ProjectV4::new();
+        let mut project = ProjectV5::new();
         project.tracks[0].steps = vec![None; 1];
         project.tracks[1].steps = vec![None; MAX_STEP_COUNT];
         project.tracks[3].steps = vec![None; 3];
-        project.tracks[3].steps[2] = Some(StepEvent::Note {
+        project.tracks[3].steps[2] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
-            velocity: DEFAULT_NOTE_VELOCITY,
+            accent: false,
+            slide: false,
             locks: Default::default(),
         });
         project.tracks[3].steps[0] = Some(StepEvent::Tie {
@@ -985,42 +1107,36 @@ mod tests {
         assert!(serde_json::from_str::<Percent>("101").is_err());
     }
     #[test]
-    fn velocity_is_required_on_sound_starting_events_and_forbidden_on_ties() {
+    fn accent_and_slide_event_fields_are_strict() {
         let trigger = StepEvent::Trigger {
-            velocity: DEFAULT_DRUM_VELOCITY,
+            accent: false,
             locks: Default::default(),
         };
         let note = StepEvent::Note {
             degree: 1,
             octave: 3,
-            velocity: DEFAULT_NOTE_VELOCITY,
+            accent: false,
             locks: Default::default(),
         };
-        assert_eq!(
-            serde_json::to_value(trigger).unwrap()["velocity"],
-            DEFAULT_DRUM_VELOCITY.get()
-        );
-        assert_eq!(
-            serde_json::to_value(note).unwrap()["velocity"],
-            DEFAULT_NOTE_VELOCITY.get()
-        );
+        assert_eq!(serde_json::to_value(trigger).unwrap()["accent"], false);
+        assert_eq!(serde_json::to_value(note).unwrap()["accent"], false);
         assert!(serde_json::from_str::<StepEvent>(r#"{"type":"trigger","locks":{}}"#).is_err());
         assert!(
             serde_json::from_str::<StepEvent>(
-                r#"{"type":"note","degree":1,"octave":3,"velocity":101,"locks":{}}"#
+                r#"{"type":"note","degree":1,"octave":3,"accent":false,"slide":true,"locks":{}}"#
             )
             .is_err()
         );
         assert!(
-            serde_json::from_str::<StepEvent>(r#"{"type":"tie","velocity":70,"locks":{}}"#)
+            serde_json::from_str::<StepEvent>(r#"{"type":"tie","accent":true,"locks":{}}"#)
                 .is_err()
         );
     }
     #[test]
     fn lock_compatibility_matches_track_kind() {
-        let mut drum = ProjectV4::new();
+        let mut drum = ProjectV5::new();
         drum.tracks[0].steps[0] = Some(StepEvent::Trigger {
-            velocity: DEFAULT_DRUM_VELOCITY,
+            accent: false,
             locks: ParameterLocks {
                 cutoff: Percent::new(50),
                 ..Default::default()
@@ -1031,11 +1147,11 @@ mod tests {
             Err(ValidationError::Lock(0, 0, "cutoff"))
         ));
 
-        let mut synth = ProjectV4::new();
-        synth.tracks[3].steps[0] = Some(StepEvent::Note {
+        let mut synth = ProjectV5::new();
+        synth.tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
-            velocity: DEFAULT_NOTE_VELOCITY,
+            accent: false,
             locks: ParameterLocks {
                 tone: Percent::new(50),
                 ..Default::default()
@@ -1043,14 +1159,14 @@ mod tests {
         });
         assert!(matches!(
             synth.validate(),
-            Err(ValidationError::Lock(3, 0, "tone"))
+            Err(ValidationError::Lock(4, 0, "tone"))
         ));
     }
     #[test]
     fn all_keys_map_degrees() {
         for key in PitchClass::ALL {
             for scale in [Scale::Major, Scale::NaturalMinor] {
-                let mut p = ProjectV4::new();
+                let mut p = ProjectV5::new();
                 p.globals.key = key;
                 p.globals.scale = scale;
                 for degree in 1..=8 {
@@ -1091,14 +1207,14 @@ mod tests {
                 < 0.001
         );
 
-        let mut project = ProjectV4::new();
+        let mut project = ProjectV5::new();
         project.tracks[0].lfos.cutoff = Some(LfoConfig::default());
         assert_eq!(project.validate(), Err(ValidationError::Lfo(0, "cutoff")));
         project.tracks[0].lfos.cutoff = None;
         project.tracks[3].lfos.tone = Some(LfoConfig::default());
         assert_eq!(project.validate(), Err(ValidationError::Lfo(3, "tone")));
         project.tracks[3].lfos.tone = None;
-        project.tracks[3].lfos.release = Some(LfoConfig::default());
+        project.tracks[4].lfos.release = Some(LfoConfig::default());
         project.validate().unwrap();
     }
 }

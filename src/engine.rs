@@ -1,11 +1,9 @@
-use crate::model::{
-    DelayDivision, Percent, ProjectV4, StepEvent, TRACK_COUNT, TrackKind, tie_source,
-};
+use crate::model::{DelayDivision, ProjectV5, StepEvent, TRACK_COUNT, TrackKind, tie_source};
 
 #[derive(Clone, Debug)]
 pub enum EngineCommand {
-    ReplaceProject(ProjectV4),
-    SetProject(ProjectV4),
+    ReplaceProject(ProjectV5),
+    SetProject(ProjectV5),
     PlayPause,
     Stop,
 }
@@ -63,7 +61,8 @@ pub enum GateAction {
     Trigger {
         degree: u8,
         octave: u8,
-        velocity: Percent,
+        accent: bool,
+        slide: bool,
     },
     Hold,
     Release,
@@ -73,12 +72,25 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
         Some(StepEvent::Note {
             degree,
             octave,
-            velocity,
+            accent,
             ..
         }) => GateAction::Trigger {
             degree: *degree,
             octave: *octave,
-            velocity: *velocity,
+            accent: *accent,
+            slide: false,
+        },
+        Some(StepEvent::BassNote {
+            degree,
+            octave,
+            accent,
+            slide,
+            ..
+        }) => GateAction::Trigger {
+            degree: *degree,
+            octave: *octave,
+            accent: *accent,
+            slide: *slide,
         },
         Some(StepEvent::Tie { .. }) if voice_active => GateAction::Hold,
         Some(StepEvent::Tie { .. }) => tie_source(steps, step)
@@ -86,12 +98,25 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
                 Some(StepEvent::Note {
                     degree,
                     octave,
-                    velocity,
+                    accent,
                     ..
                 }) => Some(GateAction::Trigger {
                     degree,
                     octave,
-                    velocity,
+                    accent,
+                    slide: false,
+                }),
+                Some(StepEvent::BassNote {
+                    degree,
+                    octave,
+                    accent,
+                    slide,
+                    ..
+                }) => Some(GateAction::Trigger {
+                    degree,
+                    octave,
+                    accent,
+                    slide,
                 }),
                 _ => None,
             })
@@ -100,7 +125,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
     }
 }
 
-pub fn effective_level(project: &ProjectV4, track: usize, step: usize) -> f32 {
+pub fn effective_level(project: &ProjectV5, track: usize, step: usize) -> f32 {
     let t = &project.tracks[track];
     if t.muted {
         return 0.0;
@@ -117,7 +142,7 @@ pub fn delay_samples(d: DelayDivision, bpm: u16, sr: u32) -> usize {
 }
 
 pub struct Engine {
-    pub project: ProjectV4,
+    pub project: ProjectV5,
     pub transport: Transport,
     pub playheads: [Option<usize>; TRACK_COUNT],
     clock: StepClock,
@@ -125,7 +150,7 @@ pub struct Engine {
     voices: [bool; TRACK_COUNT],
 }
 impl Engine {
-    pub fn new(project: ProjectV4, sr: u32) -> Self {
+    pub fn new(project: ProjectV5, sr: u32) -> Self {
         let bpm = project.globals.tempo_bpm;
         Self {
             project,
@@ -182,7 +207,10 @@ impl Engine {
             let step = self.next_steps[i];
             *played_step = step;
             self.playheads[i] = Some(step);
-            if self.project.tracks[i].kind == TrackKind::Synth {
+            if matches!(
+                self.project.tracks[i].kind,
+                TrackKind::Bass | TrackKind::Synth
+            ) {
                 match synth_action(&self.project.tracks[i].steps, step, self.voices[i]) {
                     GateAction::Trigger { .. } | GateAction::Hold => self.voices[i] = true,
                     GateAction::Release => self.voices[i] = false,
@@ -214,9 +242,9 @@ mod tests {
     }
     #[test]
     fn lock_restores() {
-        let mut p = ProjectV4::new();
+        let mut p = ProjectV5::new();
         p.tracks[0].steps[0] = Some(StepEvent::Trigger {
-            velocity: crate::model::DEFAULT_DRUM_VELOCITY,
+            accent: false,
             locks: crate::model::ParameterLocks {
                 level: crate::model::Percent::new(20),
                 ..Default::default()
@@ -227,12 +255,12 @@ mod tests {
     }
 
     #[test]
-    fn cold_tie_trigger_carries_the_source_note_velocity() {
+    fn cold_tie_trigger_carries_the_source_note_accent() {
         let steps = vec![
             Some(StepEvent::Note {
                 degree: 1,
                 octave: 3,
-                velocity: Percent::new(37).unwrap(),
+                accent: false,
                 locks: Default::default(),
             }),
             Some(StepEvent::Tie {
@@ -244,7 +272,8 @@ mod tests {
             GateAction::Trigger {
                 degree: 1,
                 octave: 3,
-                velocity: Percent::new(37).unwrap(),
+                accent: false,
+                slide: false,
             }
         );
         assert_eq!(synth_action(&steps, 1, true), GateAction::Hold);
@@ -252,7 +281,7 @@ mod tests {
 
     #[test]
     fn tracks_cycle_at_independent_lengths_and_live_resize_keeps_position() {
-        let mut project = ProjectV4::new();
+        let mut project = ProjectV5::new();
         project.globals.tempo_bpm = 60;
         project.tracks[0].steps.resize(3, None);
         project.tracks[1].steps.resize(5, None);

@@ -247,23 +247,26 @@ impl Adsr {
                     self.value = 1.0;
                     self.stage = EnvStage::Decay
                 } else {
-                    self.value += 1.0 / (attack * self.sr);
-                    if self.value >= 1.0 {
+                    let coefficient = 1.0 - (-6.907_755 / (attack * self.sr).max(1.0)).exp();
+                    self.value += (1.0 - self.value) * coefficient;
+                    if self.value >= 0.999 {
                         self.value = 1.0;
                         self.stage = EnvStage::Decay
                     }
                 }
             }
             EnvStage::Decay => {
-                self.value -= (1.0 - sustain) / (decay * self.sr).max(1.0);
-                if self.value <= sustain {
+                let coefficient = 1.0 - (-6.907_755 / (decay * self.sr).max(1.0)).exp();
+                self.value += (sustain - self.value) * coefficient;
+                if (self.value - sustain).abs() <= 0.001 {
                     self.value = sustain;
                     self.stage = EnvStage::Sustain
                 }
             }
             EnvStage::Sustain => self.value = sustain,
             EnvStage::Release => {
-                self.value -= self.value.max(0.0001) / (release * self.sr).max(1.0);
+                let coefficient = (-6.907_755 / (release * self.sr).max(1.0)).exp();
+                self.value *= coefficient;
                 if self.value <= 0.0001 {
                     self.value = 0.0;
                     self.stage = EnvStage::Idle
@@ -300,6 +303,40 @@ impl Svf {
     }
 }
 impl Default for Svf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A compact nonlinear four-stage ladder used by the Bass voice.
+pub struct LadderFilter {
+    stages: [f32; 4],
+}
+
+impl LadderFilter {
+    pub fn new() -> Self {
+        Self { stages: [0.0; 4] }
+    }
+
+    pub fn lowpass(&mut self, input: f32, cutoff: f32, resonance: f32, sr: f32) -> f32 {
+        let coefficient = 1.0 - (-2.0 * PI * cutoff.clamp(20.0, sr * 0.45) / sr).exp();
+        let feedback = resonance.clamp(0.0, 1.0) * 3.85;
+        let mut stage_input = (input - self.stages[3] * feedback).tanh();
+        for stage in &mut self.stages {
+            *stage += coefficient * (stage_input - stage.tanh());
+            stage_input = stage.tanh();
+        }
+        let output = self.stages[3];
+        if output.is_finite() {
+            output
+        } else {
+            self.stages = [0.0; 4];
+            0.0
+        }
+    }
+}
+
+impl Default for LadderFilter {
     fn default() -> Self {
         Self::new()
     }
@@ -388,6 +425,13 @@ pub struct Delay {
     fade_length: usize,
     configured: bool,
     feedback: f32,
+    damp_l: f32,
+    damp_r: f32,
+    damp_coefficient: f32,
+    highpass_x_l: f32,
+    highpass_x_r: f32,
+    highpass_y_l: f32,
+    highpass_y_r: f32,
 }
 
 struct Comb {
@@ -451,10 +495,10 @@ impl Allpass {
 
 /// A compact Freeverb-style stereo reverberator with all storage allocated up front.
 pub struct Reverb {
-    left: [Comb; 4],
-    right: [Comb; 4],
-    allpass_l: [Allpass; 2],
-    allpass_r: [Allpass; 2],
+    left: [Comb; 8],
+    right: [Comb; 8],
+    allpass_l: [Allpass; 4],
+    allpass_r: [Allpass; 4],
     sample_rate: f32,
 }
 impl Reverb {
@@ -467,15 +511,33 @@ impl Reverb {
                 Comb::new(size(1188)),
                 Comb::new(size(1277)),
                 Comb::new(size(1356)),
+                Comb::new(size(1422)),
+                Comb::new(size(1491)),
+                Comb::new(size(1557)),
+                Comb::new(size(1617)),
             ],
             right: [
                 Comb::new(size(1139)),
                 Comb::new(size(1211)),
                 Comb::new(size(1300)),
                 Comb::new(size(1379)),
+                Comb::new(size(1445)),
+                Comb::new(size(1514)),
+                Comb::new(size(1580)),
+                Comb::new(size(1640)),
             ],
-            allpass_l: [Allpass::new(size(556)), Allpass::new(size(441))],
-            allpass_r: [Allpass::new(size(579)), Allpass::new(size(464))],
+            allpass_l: [
+                Allpass::new(size(556)),
+                Allpass::new(size(441)),
+                Allpass::new(size(341)),
+                Allpass::new(size(225)),
+            ],
+            allpass_r: [
+                Allpass::new(size(579)),
+                Allpass::new(size(464)),
+                Allpass::new(size(364)),
+                Allpass::new(size(248)),
+            ],
             sample_rate: sample_rate as f32,
         };
         reverb.set_time(2.5);
@@ -491,14 +553,16 @@ impl Reverb {
         }
     }
     pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
-        let input = (l + r) * 0.5;
+        let center = (l + r) * 0.35;
+        let input_l = center + l * 0.15;
+        let input_r = center + r * 0.15;
         let mut ol = 0.0;
         let mut or = 0.0;
         for comb in &mut self.left {
-            ol += comb.process(input, 0.25);
+            ol += comb.process(input_l, 0.32);
         }
         for comb in &mut self.right {
-            or += comb.process(input, 0.25);
+            or += comb.process(input_r, 0.32);
         }
         for ap in &mut self.allpass_l {
             ol = ap.process(ol);
@@ -506,7 +570,7 @@ impl Reverb {
         for ap in &mut self.allpass_r {
             or = ap.process(or);
         }
-        (safety(ol * 0.25), safety(or * 0.25))
+        (safety(ol * 0.125), safety(or * 0.125))
     }
     pub fn clear(&mut self) {
         for c in &mut self.left {
@@ -536,6 +600,13 @@ impl Delay {
             fade_length: (sample_rate as usize / 100).max(1),
             configured: false,
             feedback: 0.3,
+            damp_l: 0.0,
+            damp_r: 0.0,
+            damp_coefficient: 1.0 - (-2.0 * PI * 7_500.0 / sample_rate as f32).exp(),
+            highpass_x_l: 0.0,
+            highpass_x_r: 0.0,
+            highpass_y_l: 0.0,
+            highpass_y_r: 0.0,
         }
     }
     pub fn configure(&mut self, samples: usize, feedback: f32) {
@@ -561,14 +632,28 @@ impl Delay {
             dr = self.right[old] * (1.0 - mix) + dr * mix;
             self.fade_remaining -= 1;
         }
-        self.left[self.pos] = l + dr * self.feedback;
-        self.right[self.pos] = r + dl * self.feedback;
+        self.damp_l += (dl - self.damp_l) * self.damp_coefficient;
+        self.damp_r += (dr - self.damp_r) * self.damp_coefficient;
+        let high_l = self.damp_l - self.highpass_x_l + 0.995 * self.highpass_y_l;
+        let high_r = self.damp_r - self.highpass_x_r + 0.995 * self.highpass_y_r;
+        self.highpass_x_l = self.damp_l;
+        self.highpass_x_r = self.damp_r;
+        self.highpass_y_l = high_l;
+        self.highpass_y_r = high_r;
+        self.left[self.pos] = l + high_r * self.feedback;
+        self.right[self.pos] = r + high_l * self.feedback;
         self.pos = (self.pos + 1) % self.left.len();
         (dl, dr)
     }
     pub fn clear(&mut self) {
         self.left.fill(0.0);
-        self.right.fill(0.0)
+        self.right.fill(0.0);
+        self.damp_l = 0.0;
+        self.damp_r = 0.0;
+        self.highpass_x_l = 0.0;
+        self.highpass_x_r = 0.0;
+        self.highpass_y_l = 0.0;
+        self.highpass_y_r = 0.0;
     }
 }
 
@@ -603,10 +688,62 @@ impl Default for DcBlock {
     }
 }
 pub fn safety(x: f32) -> f32 {
-    if x.is_finite() {
-        x / (1.0 + x.abs())
-    } else {
-        0.0
+    if x.is_finite() { x } else { 0.0 }
+}
+
+/// A fixed, stereo-linked lookahead limiter. All storage is allocated at construction.
+pub struct MasterLimiter {
+    left: Vec<f32>,
+    right: Vec<f32>,
+    pos: usize,
+    gain: f32,
+    attack_coefficient: f32,
+    release_coefficient: f32,
+}
+
+impl MasterLimiter {
+    pub fn new(sample_rate: u32) -> Self {
+        let lookahead = ((sample_rate as f32 * 0.005).round() as usize).max(1);
+        Self {
+            left: vec![0.0; lookahead],
+            right: vec![0.0; lookahead],
+            pos: 0,
+            gain: 1.0,
+            attack_coefficient: (-1.0 / (sample_rate as f32 * 0.001)).exp(),
+            release_coefficient: (-1.0 / (sample_rate as f32 * 0.080)).exp(),
+        }
+    }
+
+    pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+        const MAKEUP: f32 = 1.995_262_3;
+        const CEILING: f32 = 0.891_250_9;
+        let delayed_l = self.left[self.pos];
+        let delayed_r = self.right[self.pos];
+        self.left[self.pos] = safety(l);
+        self.right[self.pos] = safety(r);
+        self.pos = (self.pos + 1) % self.left.len();
+        let peak = self
+            .left
+            .iter()
+            .chain(&self.right)
+            .fold(0.0_f32, |peak, sample| peak.max((sample * MAKEUP).abs()));
+        let target = if peak > CEILING { CEILING / peak } else { 1.0 };
+        let coefficient = if target < self.gain {
+            self.attack_coefficient
+        } else {
+            self.release_coefficient
+        };
+        self.gain = target + coefficient * (self.gain - target);
+        let l = (delayed_l * MAKEUP * self.gain).clamp(-CEILING, CEILING);
+        let r = (delayed_r * MAKEUP * self.gain).clamp(-CEILING, CEILING);
+        (safety(l), safety(r))
+    }
+
+    pub fn clear(&mut self) {
+        self.left.fill(0.0);
+        self.right.fill(0.0);
+        self.pos = 0;
+        self.gain = 1.0;
     }
 }
 
@@ -658,7 +795,21 @@ mod tests {
     #[test]
     fn nonfinite_safe() {
         assert_eq!(safety(f32::NAN), 0.0);
-        assert!(safety(100.).abs() < 1.)
+        assert_eq!(safety(100.0), 100.0)
+    }
+    #[test]
+    fn master_limiter_is_stereo_linked_and_respects_ceiling() {
+        let mut limiter = MasterLimiter::new(1_000);
+        let mut peak = 0.0_f32;
+        let mut linked = false;
+        for i in 0..500 {
+            let input = if i == 20 { (8.0, 0.25) } else { (0.25, 0.25) };
+            let (l, r) = limiter.process(input.0, input.1);
+            peak = peak.max(l.abs()).max(r.abs());
+            linked |= (l - r).abs() < 0.0001 && l.abs() > 0.01;
+        }
+        assert!(peak <= 0.891_251);
+        assert!(linked);
     }
     #[test]
     fn smoother_reaches_target_without_jump() {

@@ -1,5 +1,5 @@
 {
-  "format_version": 3,
+  "format_version": 5,
   "globals": {
     "tempo_bpm": 120,
     "delay_division": "eighth",
@@ -17,34 +17,39 @@
       "delay_send": 0,
       "reverb_send": 0,
       "instrument": {
-        "tone": 90,
-        "decay": 80
+        "tune": 90,
+        "decay": 80,
+        "attack": 35
       },
       "steps": [
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
@@ -60,8 +65,9 @@
       "delay_send": 0,
       "reverb_send": 0,
       "instrument": {
-        "tone": 55,
-        "decay": 80
+        "tune": 55,
+        "tone": 50,
+        "snappy": 55
       },
       "steps": [
         null,
@@ -70,7 +76,8 @@
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
@@ -78,13 +85,15 @@
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
@@ -100,67 +109,78 @@
       "delay_send": 0,
       "reverb_send": 0,
       "instrument": {
-        "tone": 20,
+        "tune": 20,
         "decay": 20
       },
       "steps": [
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         {
           "type": "trigger",
           "locks": {
             "decay": 80
-          }
+          },
+          "accent": false
         },
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null
       ],
       "lfos": {}
     },
     {
-      "kind": "synth",
-      "name": "Synth 1",
+      "kind": "bass",
+      "name": "Bass",
       "level": 40,
       "muted": false,
       "delay_send": 70,
@@ -170,107 +190,136 @@
         "cutoff": 30,
         "resonance": 50,
         "filter_envelope": 70,
-        "attack": 0,
-        "decay": 50,
-        "sustain": 30,
-        "release": 40
+        "decay": 50
       },
       "steps": [
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 1,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 2,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 5,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 1,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 2,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 6,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 5,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 2,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 3,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 1,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 2,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 5,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 1,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 2,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 4,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 1,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         }
       ],
       "input_degree": 6,
@@ -304,7 +353,8 @@
           "type": "note",
           "degree": 5,
           "octave": 3,
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         {
           "type": "tie",
@@ -364,7 +414,8 @@
           "type": "note",
           "degree": 1,
           "octave": 4,
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         {
           "type": "tie",

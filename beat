@@ -1,5 +1,5 @@
 {
-  "format_version": 3,
+  "format_version": 5,
   "globals": {
     "tempo_bpm": 110,
     "delay_division": "eighth",
@@ -17,34 +17,39 @@
       "delay_send": 0,
       "reverb_send": 0,
       "instrument": {
-        "tone": 50,
-        "decay": 35
+        "tune": 50,
+        "decay": 35,
+        "attack": 35
       },
       "steps": [
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
@@ -60,8 +65,9 @@
       "delay_send": 0,
       "reverb_send": 0,
       "instrument": {
+        "tune": 50,
         "tone": 50,
-        "decay": 35
+        "snappy": 55
       },
       "steps": [
         null,
@@ -70,7 +76,8 @@
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
@@ -81,7 +88,8 @@
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
@@ -97,7 +105,7 @@
       "delay_send": 0,
       "reverb_send": 0,
       "instrument": {
-        "tone": 60,
+        "tune": 60,
         "decay": 20
       },
       "steps": [
@@ -105,46 +113,52 @@
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         {
           "type": "trigger",
           "locks": {
             "decay": 80
-          }
+          },
+          "accent": false
         },
         null,
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null,
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         {
           "type": "trigger",
           "locks": {
             "decay": 60
-          }
+          },
+          "accent": false
         },
         null,
         null,
         null,
         {
           "type": "trigger",
-          "locks": {}
+          "locks": {},
+          "accent": false
         },
         null
       ],
       "lfos": {}
     },
     {
-      "kind": "synth",
-      "name": "Synth 1",
+      "kind": "bass",
+      "name": "Bass",
       "level": 50,
       "muted": false,
       "delay_send": 1,
@@ -154,17 +168,16 @@
         "cutoff": 10,
         "resonance": 40,
         "filter_envelope": 100,
-        "attack": 20,
-        "decay": 60,
-        "sustain": 60,
-        "release": 50
+        "decay": 60
       },
       "steps": [
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 1,
           "octave": 1,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         {
           "type": "tie",
@@ -175,34 +188,42 @@
           "locks": {}
         },
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 1,
           "octave": 1,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         null,
         null,
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 2,
           "octave": 2,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         null,
         null,
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 2,
           "octave": 1,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         null,
         null,
         {
-          "type": "note",
+          "type": "bass_note",
           "degree": 4,
           "octave": 1,
-          "locks": {}
+          "locks": {},
+          "slide": false,
+          "accent": false
         },
         null,
         null,
