@@ -405,7 +405,8 @@ pub enum TrackKind {
     Snare,
     Hat,
     Bass,
-    Synth,
+    Chord,
+    Lead,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -439,8 +440,11 @@ pub struct BassParameters {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SynthParameters {
-    pub waveform: Waveform,
+pub struct ChordParameters {
+    pub oscillator_mix: Percent,
+    pub pulse_width: Percent,
+    pub sub_oscillator: Percent,
+    pub chorus: ChorusMode,
     pub cutoff: Percent,
     pub resonance: Percent,
     pub filter_envelope: Percent,
@@ -451,13 +455,37 @@ pub struct SynthParameters {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeadParameters {
+    pub oscillator_mix: Percent,
+    pub pulse_width: Percent,
+    pub sub_oscillator: Percent,
+    pub cutoff: Percent,
+    pub resonance: Percent,
+    pub filter_envelope: Percent,
+    pub attack: Percent,
+    pub decay: Percent,
+    pub sustain: Percent,
+    pub release: Percent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChorusMode {
+    Off,
+    I,
+    Ii,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Instrument {
     Kick(KickParameters),
     Snare(SnareParameters),
     Hat(HatParameters),
     Bass(BassParameters),
-    Synth(SynthParameters),
+    Chord(ChordParameters),
+    Lead(LeadParameters),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -479,6 +507,14 @@ pub struct ParameterLocks {
     pub decay: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waveform: Option<Waveform>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oscillator_mix: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pulse_width: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_oscillator: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chorus: Option<ChorusMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -507,6 +543,12 @@ pub struct LfoAssignments {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decay: Option<LfoConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub oscillator_mix: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pulse_width: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_oscillator: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff: Option<LfoConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resonance: Option<LfoConfig>,
@@ -528,13 +570,19 @@ impl LfoAssignments {
             ParameterId::Tone => self.tone,
             ParameterId::Snappy => self.snappy,
             ParameterId::Decay => self.decay,
+            ParameterId::OscillatorMix => self.oscillator_mix,
+            ParameterId::PulseWidth => self.pulse_width,
+            ParameterId::SubOscillator => self.sub_oscillator,
             ParameterId::Cutoff => self.cutoff,
             ParameterId::Resonance => self.resonance,
             ParameterId::FilterEnvelope => self.filter_envelope,
             ParameterId::Attack => self.attack,
             ParameterId::Sustain => self.sustain,
             ParameterId::Release => self.release,
-            ParameterId::DelaySend | ParameterId::ReverbSend | ParameterId::Waveform => None,
+            ParameterId::DelaySend
+            | ParameterId::ReverbSend
+            | ParameterId::Waveform
+            | ParameterId::Chorus => None,
         }
     }
 
@@ -545,13 +593,19 @@ impl LfoAssignments {
             ParameterId::Tone => &mut self.tone,
             ParameterId::Snappy => &mut self.snappy,
             ParameterId::Decay => &mut self.decay,
+            ParameterId::OscillatorMix => &mut self.oscillator_mix,
+            ParameterId::PulseWidth => &mut self.pulse_width,
+            ParameterId::SubOscillator => &mut self.sub_oscillator,
             ParameterId::Cutoff => &mut self.cutoff,
             ParameterId::Resonance => &mut self.resonance,
             ParameterId::FilterEnvelope => &mut self.filter_envelope,
             ParameterId::Attack => &mut self.attack,
             ParameterId::Sustain => &mut self.sustain,
             ParameterId::Release => &mut self.release,
-            ParameterId::DelaySend | ParameterId::ReverbSend | ParameterId::Waveform => {
+            ParameterId::DelaySend
+            | ParameterId::ReverbSend
+            | ParameterId::Waveform
+            | ParameterId::Chorus => {
                 return false;
             }
         };
@@ -574,6 +628,10 @@ impl ParameterLocks {
             ParameterId::Snappy => self.snappy.map(ParameterValue::Percent),
             ParameterId::Decay => self.decay.map(ParameterValue::Percent),
             ParameterId::Waveform => self.waveform.map(ParameterValue::Waveform),
+            ParameterId::OscillatorMix => self.oscillator_mix.map(ParameterValue::Percent),
+            ParameterId::PulseWidth => self.pulse_width.map(ParameterValue::Percent),
+            ParameterId::SubOscillator => self.sub_oscillator.map(ParameterValue::Percent),
+            ParameterId::Chorus => self.chorus.map(ParameterValue::Chorus),
             ParameterId::Cutoff => self.cutoff.map(ParameterValue::Percent),
             ParameterId::Resonance => self.resonance.map(ParameterValue::Percent),
             ParameterId::FilterEnvelope => self.filter_envelope.map(ParameterValue::Percent),
@@ -593,6 +651,14 @@ impl ParameterLocks {
             (ParameterId::Snappy, ParameterValue::Percent(v)) => self.snappy = Some(v),
             (ParameterId::Decay, ParameterValue::Percent(v)) => self.decay = Some(v),
             (ParameterId::Waveform, ParameterValue::Waveform(v)) => self.waveform = Some(v),
+            (ParameterId::OscillatorMix, ParameterValue::Percent(v)) => {
+                self.oscillator_mix = Some(v)
+            }
+            (ParameterId::PulseWidth, ParameterValue::Percent(v)) => self.pulse_width = Some(v),
+            (ParameterId::SubOscillator, ParameterValue::Percent(v)) => {
+                self.sub_oscillator = Some(v)
+            }
+            (ParameterId::Chorus, ParameterValue::Chorus(v)) => self.chorus = Some(v),
             (ParameterId::Cutoff, ParameterValue::Percent(v)) => self.cutoff = Some(v),
             (ParameterId::Resonance, ParameterValue::Percent(v)) => self.resonance = Some(v),
             (ParameterId::FilterEnvelope, ParameterValue::Percent(v)) => {
@@ -616,6 +682,10 @@ impl ParameterLocks {
             ParameterId::Snappy => self.snappy = None,
             ParameterId::Decay => self.decay = None,
             ParameterId::Waveform => self.waveform = None,
+            ParameterId::OscillatorMix => self.oscillator_mix = None,
+            ParameterId::PulseWidth => self.pulse_width = None,
+            ParameterId::SubOscillator => self.sub_oscillator = None,
+            ParameterId::Chorus => self.chorus = None,
             ParameterId::Cutoff => self.cutoff = None,
             ParameterId::Resonance => self.resonance = None,
             ParameterId::FilterEnvelope => self.filter_envelope = None,
@@ -724,7 +794,7 @@ pub struct Track {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectV5 {
+pub struct ProjectV6 {
     pub format_version: u32,
     pub globals: Globals,
     pub tracks: Vec<Track>,
@@ -733,7 +803,7 @@ pub struct ProjectV5 {
 fn p(n: u8) -> Percent {
     Percent(n)
 }
-impl ProjectV5 {
+impl ProjectV6 {
     pub fn new() -> Self {
         let track = |kind: TrackKind, name: &str, instrument: Instrument| Track {
             kind,
@@ -762,7 +832,7 @@ impl ProjectV5 {
             input_octave: Some(3),
         };
         Self {
-            format_version: 5,
+            format_version: 6,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -803,38 +873,43 @@ impl ProjectV5 {
                     }),
                 ),
                 synth(
-                    TrackKind::Synth,
-                    "Synth 2",
-                    Instrument::Synth(SynthParameters {
-                        waveform: Waveform::Saw,
-                        cutoff: p(65),
-                        resonance: p(10),
+                    TrackKind::Chord,
+                    "Chord",
+                    Instrument::Chord(ChordParameters {
+                        oscillator_mix: p(70),
+                        pulse_width: p(50),
+                        sub_oscillator: p(35),
+                        chorus: ChorusMode::I,
+                        cutoff: p(55),
+                        resonance: p(15),
                         filter_envelope: p(25),
-                        attack: p(0),
-                        decay: p(25),
-                        sustain: p(70),
-                        release: p(15),
+                        attack: p(55),
+                        decay: p(45),
+                        sustain: p(75),
+                        release: p(65),
                     }),
                 ),
                 synth(
-                    TrackKind::Synth,
-                    "Synth 3",
-                    Instrument::Synth(SynthParameters {
-                        waveform: Waveform::Saw,
-                        cutoff: p(65),
-                        resonance: p(10),
-                        filter_envelope: p(25),
+                    TrackKind::Lead,
+                    "Lead",
+                    Instrument::Lead(LeadParameters {
+                        oscillator_mix: p(75),
+                        pulse_width: p(50),
+                        sub_oscillator: p(25),
+                        cutoff: p(50),
+                        resonance: p(35),
+                        filter_envelope: p(55),
                         attack: p(0),
-                        decay: p(25),
-                        sustain: p(70),
-                        release: p(15),
+                        decay: p(35),
+                        sustain: p(55),
+                        release: p(20),
                     }),
                 ),
             ],
         }
     }
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 5 {
+        if self.format_version != 6 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -845,8 +920,8 @@ impl ProjectV5 {
             (TrackKind::Snare, "Snare"),
             (TrackKind::Hat, "Hi-hat"),
             (TrackKind::Bass, "Bass"),
-            (TrackKind::Synth, "Synth 2"),
-            (TrackKind::Synth, "Synth 3"),
+            (TrackKind::Chord, "Chord"),
+            (TrackKind::Lead, "Lead"),
         ];
         if !(40..=240).contains(&self.globals.tempo_bpm)
             || !self.globals.reverb_time_seconds.is_finite()
@@ -862,14 +937,15 @@ impl ProjectV5 {
             if !(MIN_STEP_COUNT..=MAX_STEP_COUNT).contains(&t.steps.len()) {
                 return Err(ValidationError::StepCount(ti, t.steps.len()));
             }
-            let pitched = matches!(t.kind, TrackKind::Bass | TrackKind::Synth);
+            let pitched = matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead);
             let instrument_ok = matches!(
                 (t.kind, t.instrument),
                 (TrackKind::Kick, Instrument::Kick(_))
                     | (TrackKind::Snare, Instrument::Snare(_))
                     | (TrackKind::Hat, Instrument::Hat(_))
                     | (TrackKind::Bass, Instrument::Bass(_))
-                    | (TrackKind::Synth, Instrument::Synth(_))
+                    | (TrackKind::Chord, Instrument::Chord(_))
+                    | (TrackKind::Lead, Instrument::Lead(_))
             );
             if !instrument_ok
                 || pitched != t.input_degree.is_some()
@@ -897,8 +973,8 @@ impl ProjectV5 {
                             StepEvent::Trigger { .. }
                         ) | (TrackKind::Bass, StepEvent::BassNote { .. })
                             | (TrackKind::Bass, StepEvent::Tie { .. })
-                            | (TrackKind::Synth, StepEvent::Note { .. })
-                            | (TrackKind::Synth, StepEvent::Tie { .. })
+                            | (TrackKind::Chord | TrackKind::Lead, StepEvent::Note { .. })
+                            | (TrackKind::Chord | TrackKind::Lead, StepEvent::Tie { .. })
                     );
                     if !event_ok {
                         return Err(ValidationError::EventKind(ti, si));
@@ -933,8 +1009,22 @@ impl ProjectV5 {
         self.note_midi(degree, octave)
             .map(|m| 440.0 * 2.0_f32.powf((m as f32 - 69.0) / 12.0))
     }
+
+    pub fn chord_midis(&self, degree: u8, octave: u8) -> Option<[i32; 3]> {
+        if !(1..=8).contains(&degree) || octave > 7 {
+            return None;
+        }
+        let scale = self.globals.scale.offsets();
+        let root = degree as usize - 1;
+        Some(std::array::from_fn(|voice| {
+            let scale_degree = root + voice * 2;
+            12 * (octave as i32 + 1 + (scale_degree / 7) as i32)
+                + self.globals.key.semitone()
+                + scale[scale_degree % 7]
+        }))
+    }
 }
-impl Default for ProjectV5 {
+impl Default for ProjectV6 {
     fn default() -> Self {
         Self::new()
     }
@@ -1002,6 +1092,10 @@ pub enum ParameterId {
     Snappy,
     Decay,
     Waveform,
+    OscillatorMix,
+    PulseWidth,
+    SubOscillator,
+    Chorus,
     Cutoff,
     Resonance,
     FilterEnvelope,
@@ -1014,10 +1108,11 @@ pub enum ParameterId {
 pub enum ParameterValue {
     Percent(Percent),
     Waveform(Waveform),
+    Chorus(ChorusMode),
 }
 
 impl ParameterId {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 18] = [
         Self::Level,
         Self::DelaySend,
         Self::ReverbSend,
@@ -1026,6 +1121,10 @@ impl ParameterId {
         Self::Snappy,
         Self::Decay,
         Self::Waveform,
+        Self::OscillatorMix,
+        Self::PulseWidth,
+        Self::SubOscillator,
+        Self::Chorus,
         Self::Cutoff,
         Self::Resonance,
         Self::FilterEnvelope,
@@ -1041,13 +1140,22 @@ impl ParameterId {
             Self::Tone | Self::Snappy => matches!(kind, TrackKind::Snare),
             Self::Decay => matches!(
                 kind,
-                TrackKind::Kick | TrackKind::Hat | TrackKind::Bass | TrackKind::Synth
+                TrackKind::Kick
+                    | TrackKind::Hat
+                    | TrackKind::Bass
+                    | TrackKind::Chord
+                    | TrackKind::Lead
             ),
-            Self::Attack => matches!(kind, TrackKind::Kick | TrackKind::Synth),
-            Self::Waveform | Self::Cutoff | Self::Resonance | Self::FilterEnvelope => {
-                matches!(kind, TrackKind::Bass | TrackKind::Synth)
+            Self::Attack => matches!(kind, TrackKind::Kick | TrackKind::Chord | TrackKind::Lead),
+            Self::Waveform => matches!(kind, TrackKind::Bass),
+            Self::OscillatorMix | Self::PulseWidth | Self::SubOscillator => {
+                matches!(kind, TrackKind::Chord | TrackKind::Lead)
             }
-            Self::Sustain | Self::Release => matches!(kind, TrackKind::Synth),
+            Self::Chorus => matches!(kind, TrackKind::Chord),
+            Self::Cutoff | Self::Resonance | Self::FilterEnvelope => {
+                matches!(kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead)
+            }
+            Self::Sustain | Self::Release => matches!(kind, TrackKind::Chord | TrackKind::Lead),
         }
     }
 
@@ -1055,9 +1163,16 @@ impl ParameterId {
         matches!(self, Self::Waveform)
     }
 
+    pub const fn is_chorus(self) -> bool {
+        matches!(self, Self::Chorus)
+    }
+
     pub const fn supports_lfo(self, kind: TrackKind) -> bool {
         self.is_valid_for(kind)
-            && !matches!(self, Self::DelaySend | Self::ReverbSend | Self::Waveform)
+            && !matches!(
+                self,
+                Self::DelaySend | Self::ReverbSend | Self::Waveform | Self::Chorus
+            )
     }
 
     pub const fn name(self) -> &'static str {
@@ -1070,6 +1185,10 @@ impl ParameterId {
             Self::Snappy => "snappy",
             Self::Decay => "decay",
             Self::Waveform => "waveform",
+            Self::OscillatorMix => "oscillator_mix",
+            Self::PulseWidth => "pulse_width",
+            Self::SubOscillator => "sub_oscillator",
+            Self::Chorus => "chorus",
             Self::Cutoff => "cutoff",
             Self::Resonance => "resonance",
             Self::FilterEnvelope => "filter_envelope",
@@ -1084,6 +1203,9 @@ impl ParameterId {
             Self::DelaySend => "delay send",
             Self::ReverbSend => "reverb send",
             Self::FilterEnvelope => "filter envelope",
+            Self::OscillatorMix => "oscillator mix",
+            Self::PulseWidth => "pulse width",
+            Self::SubOscillator => "sub oscillator",
             _ => self.name(),
         }
     }
@@ -1113,40 +1235,65 @@ impl Track {
                 Instrument::Kick(p) => ParameterValue::Percent(p.decay),
                 Instrument::Hat(p) => ParameterValue::Percent(p.decay),
                 Instrument::Bass(p) => ParameterValue::Percent(p.decay),
-                Instrument::Synth(p) => ParameterValue::Percent(p.decay),
+                Instrument::Chord(p) => ParameterValue::Percent(p.decay),
+                Instrument::Lead(p) => ParameterValue::Percent(p.decay),
                 _ => return None,
             },
             ParameterId::Waveform => match self.instrument {
                 Instrument::Bass(p) => ParameterValue::Waveform(p.waveform),
-                Instrument::Synth(p) => ParameterValue::Waveform(p.waveform),
+                _ => return None,
+            },
+            ParameterId::OscillatorMix => match self.instrument {
+                Instrument::Chord(p) => ParameterValue::Percent(p.oscillator_mix),
+                Instrument::Lead(p) => ParameterValue::Percent(p.oscillator_mix),
+                _ => return None,
+            },
+            ParameterId::PulseWidth => match self.instrument {
+                Instrument::Chord(p) => ParameterValue::Percent(p.pulse_width),
+                Instrument::Lead(p) => ParameterValue::Percent(p.pulse_width),
+                _ => return None,
+            },
+            ParameterId::SubOscillator => match self.instrument {
+                Instrument::Chord(p) => ParameterValue::Percent(p.sub_oscillator),
+                Instrument::Lead(p) => ParameterValue::Percent(p.sub_oscillator),
+                _ => return None,
+            },
+            ParameterId::Chorus => match self.instrument {
+                Instrument::Chord(p) => ParameterValue::Chorus(p.chorus),
                 _ => return None,
             },
             ParameterId::Cutoff => match self.instrument {
                 Instrument::Bass(p) => ParameterValue::Percent(p.cutoff),
-                Instrument::Synth(p) => ParameterValue::Percent(p.cutoff),
+                Instrument::Chord(p) => ParameterValue::Percent(p.cutoff),
+                Instrument::Lead(p) => ParameterValue::Percent(p.cutoff),
                 _ => return None,
             },
             ParameterId::Resonance => match self.instrument {
                 Instrument::Bass(p) => ParameterValue::Percent(p.resonance),
-                Instrument::Synth(p) => ParameterValue::Percent(p.resonance),
+                Instrument::Chord(p) => ParameterValue::Percent(p.resonance),
+                Instrument::Lead(p) => ParameterValue::Percent(p.resonance),
                 _ => return None,
             },
             ParameterId::FilterEnvelope => match self.instrument {
                 Instrument::Bass(p) => ParameterValue::Percent(p.filter_envelope),
-                Instrument::Synth(p) => ParameterValue::Percent(p.filter_envelope),
+                Instrument::Chord(p) => ParameterValue::Percent(p.filter_envelope),
+                Instrument::Lead(p) => ParameterValue::Percent(p.filter_envelope),
                 _ => return None,
             },
             ParameterId::Attack => match self.instrument {
                 Instrument::Kick(p) => ParameterValue::Percent(p.attack),
-                Instrument::Synth(p) => ParameterValue::Percent(p.attack),
+                Instrument::Chord(p) => ParameterValue::Percent(p.attack),
+                Instrument::Lead(p) => ParameterValue::Percent(p.attack),
                 _ => return None,
             },
             ParameterId::Sustain => match self.instrument {
-                Instrument::Synth(p) => ParameterValue::Percent(p.sustain),
+                Instrument::Chord(p) => ParameterValue::Percent(p.sustain),
+                Instrument::Lead(p) => ParameterValue::Percent(p.sustain),
                 _ => return None,
             },
             ParameterId::Release => match self.instrument {
-                Instrument::Synth(p) => ParameterValue::Percent(p.release),
+                Instrument::Chord(p) => ParameterValue::Percent(p.release),
+                Instrument::Lead(p) => ParameterValue::Percent(p.release),
                 _ => return None,
             },
         };
@@ -1176,42 +1323,71 @@ impl Track {
                 Instrument::Kick(p) => p.decay = v,
                 Instrument::Hat(p) => p.decay = v,
                 Instrument::Bass(p) => p.decay = v,
-                Instrument::Synth(p) => p.decay = v,
+                Instrument::Chord(p) => p.decay = v,
+                Instrument::Lead(p) => p.decay = v,
                 _ => return false,
             },
             (ParameterId::Waveform, ParameterValue::Waveform(v)) => match &mut self.instrument {
                 Instrument::Bass(p) => p.waveform = v,
-                Instrument::Synth(p) => p.waveform = v,
+                _ => return false,
+            },
+            (ParameterId::OscillatorMix, ParameterValue::Percent(v)) => {
+                match &mut self.instrument {
+                    Instrument::Chord(p) => p.oscillator_mix = v,
+                    Instrument::Lead(p) => p.oscillator_mix = v,
+                    _ => return false,
+                }
+            }
+            (ParameterId::PulseWidth, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Chord(p) => p.pulse_width = v,
+                Instrument::Lead(p) => p.pulse_width = v,
+                _ => return false,
+            },
+            (ParameterId::SubOscillator, ParameterValue::Percent(v)) => {
+                match &mut self.instrument {
+                    Instrument::Chord(p) => p.sub_oscillator = v,
+                    Instrument::Lead(p) => p.sub_oscillator = v,
+                    _ => return false,
+                }
+            }
+            (ParameterId::Chorus, ParameterValue::Chorus(v)) => match &mut self.instrument {
+                Instrument::Chord(p) => p.chorus = v,
                 _ => return false,
             },
             (ParameterId::Cutoff, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Bass(p) => p.cutoff = v,
-                Instrument::Synth(p) => p.cutoff = v,
+                Instrument::Chord(p) => p.cutoff = v,
+                Instrument::Lead(p) => p.cutoff = v,
                 _ => return false,
             },
             (ParameterId::Resonance, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Bass(p) => p.resonance = v,
-                Instrument::Synth(p) => p.resonance = v,
+                Instrument::Chord(p) => p.resonance = v,
+                Instrument::Lead(p) => p.resonance = v,
                 _ => return false,
             },
             (ParameterId::FilterEnvelope, ParameterValue::Percent(v)) => {
                 match &mut self.instrument {
                     Instrument::Bass(p) => p.filter_envelope = v,
-                    Instrument::Synth(p) => p.filter_envelope = v,
+                    Instrument::Chord(p) => p.filter_envelope = v,
+                    Instrument::Lead(p) => p.filter_envelope = v,
                     _ => return false,
                 }
             }
             (ParameterId::Attack, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Kick(p) => p.attack = v,
-                Instrument::Synth(p) => p.attack = v,
+                Instrument::Chord(p) => p.attack = v,
+                Instrument::Lead(p) => p.attack = v,
                 _ => return false,
             },
             (ParameterId::Sustain, ParameterValue::Percent(v)) => match &mut self.instrument {
-                Instrument::Synth(p) => p.sustain = v,
+                Instrument::Chord(p) => p.sustain = v,
+                Instrument::Lead(p) => p.sustain = v,
                 _ => return false,
             },
             (ParameterId::Release, ParameterValue::Percent(v)) => match &mut self.instrument {
-                Instrument::Synth(p) => p.release = v,
+                Instrument::Chord(p) => p.release = v,
+                Instrument::Lead(p) => p.release = v,
                 _ => return false,
             },
             _ => return false,
@@ -1232,16 +1408,28 @@ mod tests {
     use super::*;
     #[test]
     fn default_valid() {
-        ProjectV5::new().validate().unwrap();
+        ProjectV6::new().validate().unwrap();
     }
     #[test]
     fn scale_and_frequency() {
-        let mut p = ProjectV5::new();
+        let mut p = ProjectV6::new();
         assert_eq!(p.note_midi(8, 3), Some(60));
         p.globals.key = PitchClass::A;
         assert!((p.note_frequency(1, 4).unwrap() - 440.0).abs() < 0.001);
         p.globals.scale = Scale::NaturalMinor;
         assert_eq!(p.note_midi(3, 3), Some(60));
+    }
+    #[test]
+    fn diatonic_triads_are_close_position_and_cross_octaves() {
+        let mut project = ProjectV6::new();
+        assert_eq!(project.chord_midis(1, 3), Some([48, 52, 55]));
+        assert_eq!(project.chord_midis(7, 3), Some([59, 62, 65]));
+        assert_eq!(project.chord_midis(8, 3), Some([60, 64, 67]));
+        project.globals.scale = Scale::NaturalMinor;
+        assert_eq!(project.chord_midis(1, 3), Some([48, 51, 55]));
+        assert_eq!(project.chord_midis(2, 3), Some([50, 53, 56]));
+        assert_eq!(project.chord_midis(0, 3), None);
+        assert_eq!(project.chord_midis(1, 8), None);
     }
     #[test]
     fn percent_clamps() {
@@ -1264,7 +1452,7 @@ mod tests {
     }
     #[test]
     fn variable_step_counts_and_wrapped_ties_validate() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[0].steps = vec![None; 1];
         project.tracks[1].steps = vec![None; MAX_STEP_COUNT];
         project.tracks[3].steps = vec![None; 3];
@@ -1328,7 +1516,7 @@ mod tests {
     }
     #[test]
     fn lock_compatibility_matches_track_kind() {
-        let mut drum = ProjectV5::new();
+        let mut drum = ProjectV6::new();
         drum.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             locks: ParameterLocks {
@@ -1341,7 +1529,7 @@ mod tests {
             Err(ValidationError::Lock(0, 0, "cutoff"))
         ));
 
-        let mut synth = ProjectV5::new();
+        let mut synth = ProjectV6::new();
         synth.tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -1359,7 +1547,7 @@ mod tests {
 
     #[test]
     fn shared_parameter_access_matches_track_compatibility() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         for track in &mut project.tracks {
             for parameter in ParameterId::ALL {
                 let current = track.parameter(parameter);
@@ -1390,6 +1578,8 @@ mod tests {
         for parameter in ParameterId::ALL {
             let value = if parameter.is_waveform() {
                 ParameterValue::Waveform(Waveform::Square)
+            } else if parameter.is_chorus() {
+                ParameterValue::Chorus(ChorusMode::Ii)
             } else {
                 percent
             };
@@ -1418,11 +1608,13 @@ mod tests {
     fn all_keys_map_degrees() {
         for key in PitchClass::ALL {
             for scale in [Scale::Major, Scale::NaturalMinor] {
-                let mut p = ProjectV5::new();
+                let mut p = ProjectV6::new();
                 p.globals.key = key;
                 p.globals.scale = scale;
                 for degree in 1..=8 {
-                    assert!(p.note_frequency(degree, 3).unwrap().is_finite())
+                    assert!(p.note_frequency(degree, 3).unwrap().is_finite());
+                    let chord = p.chord_midis(degree, 3).unwrap();
+                    assert!(chord[0] < chord[1] && chord[1] < chord[2]);
                 }
                 assert_eq!(p.note_midi(8, 3).unwrap() - p.note_midi(1, 3).unwrap(), 12)
             }
@@ -1459,7 +1651,7 @@ mod tests {
                 < 0.001
         );
 
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[0].lfos.cutoff = Some(LfoConfig::default());
         assert_eq!(project.validate(), Err(ValidationError::Lfo(0, "cutoff")));
         project.tracks[0].lfos.cutoff = None;

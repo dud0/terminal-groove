@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
-use terminal_groove::{audio, model::ProjectV5, persistence, tui};
+use terminal_groove::{audio, model::ProjectV6, persistence, tui};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
     let project = match cli.project.as_deref() {
         Some(path) => persistence::load(path)
             .with_context(|| format!("startup project validation failed for {}", path.display()))?,
-        None => ProjectV5::new(),
+        None => ProjectV6::new(),
     };
     let mut audio = audio::open(cli.audio_device.as_deref(), &project)?;
     tui::run(project, cli.project, &mut audio)

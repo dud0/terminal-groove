@@ -164,12 +164,28 @@ impl PolyBlepOsc {
         x
     }
     pub fn next_square(&mut self, hz: f32, sr: f32) -> f32 {
+        self.next_pulse(hz, 0.5, sr)
+    }
+    pub fn next_pulse(&mut self, hz: f32, width: f32, sr: f32) -> f32 {
         let dt = (hz / sr).clamp(0.0, 0.49);
-        let mut x = if self.phase < 0.5 { 1.0 } else { -1.0 };
+        let width = width.clamp(0.05, 0.95);
+        let mut x = if self.phase < width { 1.0 } else { -1.0 };
         x += Self::blep(self.phase, dt);
-        x -= Self::blep((self.phase + 0.5).fract(), dt);
+        x -= Self::blep((self.phase + 1.0 - width).fract(), dt);
         self.phase = (self.phase + dt).fract();
         x
+    }
+
+    pub fn next_saw_pulse(&mut self, hz: f32, width: f32, sr: f32) -> (f32, f32) {
+        let dt = (hz / sr).clamp(0.0, 0.49);
+        let width = width.clamp(0.05, 0.95);
+        let mut saw = 2.0 * self.phase - 1.0;
+        saw -= Self::blep(self.phase, dt);
+        let mut pulse = if self.phase < width { 1.0 } else { -1.0 };
+        pulse += Self::blep(self.phase, dt);
+        pulse -= Self::blep((self.phase + 1.0 - width).fract(), dt);
+        self.phase = (self.phase + dt).fract();
+        (saw, pulse)
     }
 }
 
@@ -181,6 +197,14 @@ pub enum EnvStage {
     Sustain,
     Release,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EnvelopeProfile {
+    Generic,
+    Juno,
+    Sh101,
+}
+
 pub struct Adsr {
     pub stage: EnvStage,
     value: f32,
@@ -189,6 +213,7 @@ pub struct Adsr {
     sustain_percent: Smoother,
     release_percent: Smoother,
     sr: f32,
+    profile: EnvelopeProfile,
 }
 impl Adsr {
     pub fn new(sr: f32) -> Self {
@@ -200,7 +225,11 @@ impl Adsr {
             sustain_percent: Smoother::new(70.0),
             release_percent: Smoother::new(15.0),
             sr,
+            profile: EnvelopeProfile::Generic,
         }
+    }
+    pub fn set_profile(&mut self, profile: EnvelopeProfile) {
+        self.profile = profile;
     }
     pub fn configure_percent(&mut self, a: u8, d: u8, s: u8, r: u8, samples: u32) {
         self.attack_percent.set(a as f32, samples);
@@ -233,13 +262,19 @@ impl Adsr {
             (self.sustain_percent.next_value() + sustain_offset).clamp(0.0, 100.0) / 100.0;
         let release_percent =
             (self.release_percent.next_value() + release_offset).clamp(0.0, 100.0);
+        let (attack_min, attack_max, decay_min, decay_max, release_min, release_max) =
+            match self.profile {
+                EnvelopeProfile::Generic => (0.001, 2.0, 0.005, 3.0, 0.005, 5.0),
+                EnvelopeProfile::Juno => (0.001, 3.0, 0.002, 12.0, 0.002, 12.0),
+                EnvelopeProfile::Sh101 => (0.0015, 4.0, 0.002, 10.0, 0.002, 10.0),
+            };
         let attack = if attack_percent == 0.0 {
             0.0
         } else {
-            exp_map_f32(attack_percent, 0.001, 2.0)
+            exp_map_f32(attack_percent, attack_min, attack_max)
         };
-        let decay = exp_map_f32(decay_percent, 0.005, 3.0);
-        let release = exp_map_f32(release_percent, 0.005, 5.0);
+        let decay = exp_map_f32(decay_percent, decay_min, decay_max);
+        let release = exp_map_f32(release_percent, release_min, release_max);
         match self.stage {
             EnvStage::Idle => {}
             EnvStage::Attack => {
@@ -412,6 +447,99 @@ impl Biquad {
 impl Default for Biquad {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A short, modulated stereo delay inspired by the fixed Juno chorus modes.
+/// Storage is allocated when the renderer is built, never in the audio callback.
+pub struct StereoChorus {
+    buffer: Vec<f32>,
+    pos: usize,
+    phase: f32,
+    old_phase: f32,
+    sample_rate: f32,
+    mode: u8,
+    old_mode: u8,
+    fade_remaining: u32,
+    fade_length: u32,
+}
+
+impl StereoChorus {
+    pub fn new(sample_rate: u32) -> Self {
+        Self {
+            buffer: vec![0.0; (sample_rate as f32 * 0.025).ceil() as usize + 2],
+            pos: 0,
+            phase: 0.0,
+            old_phase: 0.0,
+            sample_rate: sample_rate as f32,
+            mode: 0,
+            old_mode: 0,
+            fade_remaining: 0,
+            fade_length: (sample_rate as f32 * 0.005).round().max(1.0) as u32,
+        }
+    }
+
+    pub fn configure(&mut self, mode: u8) {
+        let mode = mode.min(2);
+        if mode != self.mode {
+            self.old_mode = self.mode;
+            self.old_phase = self.phase;
+            self.mode = mode;
+            self.fade_remaining = self.fade_length;
+        }
+    }
+
+    fn tap(&self, delay_samples: f32) -> f32 {
+        let read = (self.pos as f32 - delay_samples).rem_euclid(self.buffer.len() as f32);
+        let first = read.floor() as usize;
+        let second = (first + 1) % self.buffer.len();
+        let fraction = read - first as f32;
+        self.buffer[first] + (self.buffer[second] - self.buffer[first]) * fraction
+    }
+
+    fn mode_sample(&self, input: f32, mode: u8, phase: f32) -> (f32, f32) {
+        let (base_ms, depth_ms) = match mode {
+            1 => (15.0, 1.5),
+            2 => (12.0, 2.5),
+            _ => return (input, input),
+        };
+        let base = base_ms * self.sample_rate / 1_000.0;
+        let depth = depth_ms * self.sample_rate / 1_000.0;
+        let modulation = depth * (std::f32::consts::TAU * phase).sin();
+        let wet = std::f32::consts::FRAC_1_SQRT_2;
+        let left = self.tap(base + modulation);
+        let right = self.tap(base - modulation);
+        (input * wet + left * wet, input * wet + right * wet)
+    }
+
+    pub fn process(&mut self, input: f32) -> (f32, f32) {
+        self.buffer[self.pos] = input;
+        let next = self.mode_sample(input, self.mode, self.phase);
+        let output = if self.fade_remaining > 0 {
+            let old = self.mode_sample(input, self.old_mode, self.old_phase);
+            let mix = 1.0 - self.fade_remaining as f32 / self.fade_length as f32;
+            self.fade_remaining -= 1;
+            (
+                old.0 + (next.0 - old.0) * mix,
+                old.1 + (next.1 - old.1) * mix,
+            )
+        } else {
+            next
+        };
+        self.pos = (self.pos + 1) % self.buffer.len();
+        let rate = if self.mode == 2 { 0.8 } else { 0.5 };
+        let old_rate = if self.old_mode == 2 { 0.8 } else { 0.5 };
+        self.phase = (self.phase + rate / self.sample_rate).fract();
+        self.old_phase = (self.old_phase + old_rate / self.sample_rate).fract();
+        output
+    }
+
+    pub fn clear(&mut self) {
+        self.buffer.fill(0.0);
+        self.pos = 0;
+        self.phase = 0.0;
+        self.old_phase = 0.0;
+        self.fade_remaining = 0;
     }
 }
 
@@ -935,5 +1063,40 @@ mod tests {
                 assert!(value.is_finite() && (-1.0..=1.0).contains(&value));
             }
         }
+    }
+
+    #[test]
+    fn pulse_width_extremes_are_band_limited_and_finite() {
+        for width in [0.05, 0.5, 0.95] {
+            let mut oscillator = PolyBlepOsc::default();
+            for _ in 0..48_000 {
+                let (_, pulse) = oscillator.next_saw_pulse(440.0, width, 48_000.0);
+                assert!(pulse.is_finite() && pulse.abs() <= 2.0);
+            }
+        }
+    }
+
+    #[test]
+    fn juno_chorus_modes_are_deterministic_finite_and_stereo() {
+        let render = || {
+            let mut chorus = StereoChorus::new(48_000);
+            chorus.configure(2);
+            (0..4_000)
+                .map(|sample| chorus.process(if sample == 0 { 1.0 } else { 0.0 }))
+                .collect::<Vec<_>>()
+        };
+        let first = render();
+        let second = render();
+        assert_eq!(first, second);
+        assert!(
+            first
+                .iter()
+                .all(|(left, right)| left.is_finite() && right.is_finite())
+        );
+        assert!(
+            first
+                .iter()
+                .any(|(left, right)| (left - right).abs() > 0.000_001)
+        );
     }
 }

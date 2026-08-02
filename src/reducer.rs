@@ -1,5 +1,5 @@
 use crate::model::{
-    LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterValue, Percent, ProjectV5,
+    LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterValue, Percent, ProjectV6,
     StepEvent, TrackKind, Waveform, tie_source,
 };
 use std::{
@@ -50,8 +50,8 @@ impl std::fmt::Display for EditError {
 
 #[derive(Clone)]
 struct Revision {
-    before: ProjectV5,
-    after: ProjectV5,
+    before: ProjectV6,
+    after: ProjectV6,
     coalesce: Option<CoalesceKey>,
     at: Instant,
 }
@@ -59,13 +59,13 @@ struct Revision {
 pub struct CoalesceKey(pub usize, pub usize, pub u8);
 
 pub struct Editor {
-    pub project: ProjectV5,
-    saved: ProjectV5,
+    pub project: ProjectV6,
+    saved: ProjectV6,
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
 }
 impl Editor {
-    pub fn new(project: ProjectV5) -> Self {
+    pub fn new(project: ProjectV6) -> Self {
         Self {
             saved: project.clone(),
             project,
@@ -84,7 +84,7 @@ impl Editor {
             revision.coalesce = None;
         }
     }
-    pub fn replace_loaded(&mut self, p: ProjectV5) {
+    pub fn replace_loaded(&mut self, p: ProjectV6) {
         self.project = p.clone();
         self.saved = p;
         self.undo.clear();
@@ -92,7 +92,7 @@ impl Editor {
     }
     pub fn edit<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
     where
-        F: FnOnce(&mut ProjectV5) -> Result<(), EditError>,
+        F: FnOnce(&mut ProjectV6) -> Result<(), EditError>,
     {
         let before = self.project.clone();
         f(&mut self.project)?;
@@ -158,7 +158,7 @@ impl Editor {
                     slide: false,
                     locks: Default::default(),
                 }
-            } else if t.kind == TrackKind::Synth {
+            } else if matches!(t.kind, TrackKind::Chord | TrackKind::Lead) {
                 StepEvent::Note {
                     degree: t.input_degree.unwrap(),
                     octave: t.input_octave.unwrap(),
@@ -177,7 +177,7 @@ impl Editor {
     pub fn set_note(&mut self, track: usize, step: usize, degree: u8) -> Result<bool, EditError> {
         self.edit(None, move |p| {
             let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
-            if !matches!(t.kind, TrackKind::Bass | TrackKind::Synth) {
+            if !matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
                 return Err(EditError::NotSynth);
             }
             if step >= t.steps.len() || !(1..=8).contains(&degree) {
@@ -219,7 +219,7 @@ impl Editor {
     pub fn toggle_tie(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
         self.edit(None, move |p| {
             let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
-            if !matches!(t.kind, TrackKind::Bass | TrackKind::Synth) {
+            if !matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
                 return Err(EditError::NotSynth);
             }
             if step >= t.steps.len() {
@@ -445,7 +445,9 @@ impl Editor {
         let next = match self.parameter_value(track, step, scope, ParameterId::Waveform)? {
             ParameterValue::Waveform(Waveform::Square) => Waveform::Saw,
             ParameterValue::Waveform(Waveform::Saw) => Waveform::Square,
-            ParameterValue::Percent(_) => return Err(EditError::InvalidParameter),
+            ParameterValue::Percent(_) | ParameterValue::Chorus(_) => {
+                return Err(EditError::InvalidParameter);
+            }
         };
         self.set_parameter(
             track,
@@ -523,7 +525,7 @@ mod tests {
     use super::*;
     #[test]
     fn undo_dirty_redo() {
-        let mut e = Editor::new(ProjectV5::new());
+        let mut e = Editor::new(ProjectV6::new());
         e.toggle_event(0, 0).unwrap();
         assert!(e.is_dirty());
         assert!(e.undo());
@@ -533,7 +535,7 @@ mod tests {
     }
     #[test]
     fn edit_invalidates_redo() {
-        let mut e = Editor::new(ProjectV5::new());
+        let mut e = Editor::new(ProjectV6::new());
         e.toggle_event(0, 0).unwrap();
         e.undo();
         e.toggle_event(0, 1).unwrap();
@@ -541,7 +543,7 @@ mod tests {
     }
     #[test]
     fn tie_cleanup_is_atomic() {
-        let mut e = Editor::new(ProjectV5::new());
+        let mut e = Editor::new(ProjectV6::new());
         e.set_note(3, 0, 1).unwrap();
         e.toggle_tie(3, 1).unwrap();
         e.toggle_tie(3, 2).unwrap();
@@ -561,7 +563,7 @@ mod tests {
 
     #[test]
     fn new_events_are_unaccented_and_bass_notes_do_not_slide() {
-        let mut editor = Editor::new(ProjectV5::new());
+        let mut editor = Editor::new(ProjectV6::new());
         editor.toggle_event(0, 0).unwrap();
         editor.toggle_event(3, 0).unwrap();
         assert_eq!(editor.accent_value(0, 0), Ok(false));
@@ -577,7 +579,7 @@ mod tests {
 
     #[test]
     fn accent_and_slide_are_undoable_and_rejected_where_incompatible() {
-        let mut editor = Editor::new(ProjectV5::new());
+        let mut editor = Editor::new(ProjectV6::new());
         editor.set_note(3, 0, 1).unwrap();
         editor.toggle_accent(3, 0).unwrap();
         editor.toggle_slide(3, 0).unwrap();
@@ -595,7 +597,7 @@ mod tests {
 
     #[test]
     fn edits_all_track_parameter_kinds() {
-        let mut e = Editor::new(ProjectV5::new());
+        let mut e = Editor::new(ProjectV6::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
 
         e.set_parameter(0, 0, Scope::Base, ParameterId::Level, p(61), None)
@@ -623,19 +625,12 @@ mod tests {
             e.set_parameter(4, 0, Scope::Base, parameter, p(value), None)
                 .unwrap();
         }
-        e.set_parameter(
-            4,
-            0,
-            Scope::Base,
-            ParameterId::Waveform,
-            ParameterValue::Waveform(Waveform::Square),
-            None,
-        )
-        .unwrap();
-        let crate::model::Instrument::Synth(synth) = &e.project.tracks[4].instrument else {
+        e.set_parameter(4, 0, Scope::Base, ParameterId::OscillatorMix, p(82), None)
+            .unwrap();
+        let crate::model::Instrument::Chord(synth) = &e.project.tracks[4].instrument else {
             panic!("expected synth")
         };
-        assert_eq!(synth.waveform, Waveform::Square);
+        assert_eq!(synth.oscillator_mix.get(), 82);
         assert_eq!(synth.cutoff.get(), 41);
         assert_eq!(synth.resonance.get(), 22);
         assert_eq!(synth.filter_envelope.get(), 63);
@@ -647,7 +642,7 @@ mod tests {
 
     #[test]
     fn lock_edits_inherit_and_clear_one_parameter() {
-        let mut e = Editor::new(ProjectV5::new());
+        let mut e = Editor::new(ProjectV6::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
         e.toggle_event(0, 0).unwrap();
         assert_eq!(
@@ -689,7 +684,7 @@ mod tests {
 
     #[test]
     fn incompatible_and_empty_locks_are_rejected() {
-        let mut e = Editor::new(ProjectV5::new());
+        let mut e = Editor::new(ProjectV6::new());
         let value = ParameterValue::Percent(Percent::new(10).unwrap());
         assert_eq!(
             e.set_parameter(0, 0, Scope::Lock, ParameterId::Cutoff, value, None),
@@ -708,7 +703,7 @@ mod tests {
 
     #[test]
     fn resize_cleans_wrapped_ties_and_undo_restores_them() {
-        let mut e = Editor::new(ProjectV5::new());
+        let mut e = Editor::new(ProjectV6::new());
         e.set_track_length(3, 4, None).unwrap();
         e.set_note(3, 3, 1).unwrap();
         e.toggle_tie(3, 0).unwrap();
@@ -729,7 +724,7 @@ mod tests {
 
     #[test]
     fn duplicate_track_copies_events_locks_and_is_one_undo_step() {
-        let mut e = Editor::new(ProjectV5::new());
+        let mut e = Editor::new(ProjectV6::new());
         e.set_track_length(3, 4, None).unwrap();
         e.set_note(3, 3, 2).unwrap();
         e.set_parameter(
@@ -753,7 +748,7 @@ mod tests {
 
     #[test]
     fn duplicate_rejects_lengths_above_32_without_state_change() {
-        let mut e = Editor::new(ProjectV5::new());
+        let mut e = Editor::new(ProjectV6::new());
         e.set_track_length(0, 33, None).unwrap();
         e.mark_saved();
         assert_eq!(e.duplicate_track(0), Err(EditError::CannotDouble));
@@ -763,7 +758,7 @@ mod tests {
 
     #[test]
     fn lfo_assignment_is_validated_and_undoable() {
-        let mut editor = Editor::new(ProjectV5::new());
+        let mut editor = Editor::new(ProjectV6::new());
         let config = LfoConfig::default();
         editor
             .set_lfo(3, ParameterId::Cutoff, Some(config), None)

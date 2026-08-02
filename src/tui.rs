@@ -1,8 +1,8 @@
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
     model::{
-        DelayDivision, GlobalParameterId, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
-        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, ProjectV5, STEP_BANK_SIZE,
+        ChorusMode, DelayDivision, GlobalParameterId, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
+        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, ProjectV6, STEP_BANK_SIZE,
         STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind, Waveform,
     },
     persistence,
@@ -131,7 +131,7 @@ impl FaderAnimation {
     }
 }
 impl App {
-    pub fn new(project: ProjectV5, path: Option<PathBuf>) -> Self {
+    pub fn new(project: ProjectV6, path: Option<PathBuf>) -> Self {
         Self {
             editor: Editor::new(project),
             row: 0,
@@ -211,7 +211,7 @@ impl App {
     }
 }
 
-pub fn run(project: ProjectV5, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
+pub fn run(project: ProjectV6, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
     let old_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -782,6 +782,24 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
                     );
                     return Ok(true);
                 }
+                Ok(ParameterValue::Chorus(mode)) => {
+                    let next = match (mode, k.code) {
+                        (ChorusMode::Off, KeyCode::Up) => ChorusMode::I,
+                        (ChorusMode::I, KeyCode::Up) => ChorusMode::Ii,
+                        (ChorusMode::Ii, KeyCode::Down) => ChorusMode::I,
+                        (ChorusMode::I, KeyCode::Down) => ChorusMode::Off,
+                        _ => mode,
+                    };
+                    set_parameter(
+                        a,
+                        audio,
+                        parameter,
+                        ParameterValue::Chorus(next),
+                        true,
+                        false,
+                    );
+                    return Ok(true);
+                }
                 Err(e) => {
                     a.status = e.to_string();
                     return Ok(true);
@@ -815,7 +833,7 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
                 return Ok(true);
             }
             if let Some(value) = crate::reducer::percentage_key(c) {
-                if !parameter.is_waveform() {
+                if !parameter.is_waveform() && !parameter.is_chorus() {
                     set_parameter(
                         a,
                         audio,
@@ -1120,6 +1138,7 @@ fn set_parameter(
         .and_then(|value| match value {
             ParameterValue::Percent(value) => Some(value),
             ParameterValue::Waveform(_) => None,
+            ParameterValue::Chorus(_) => None,
         });
     let key = keep_editing.then_some(coalesce_key(track, step, parameter));
     match a
@@ -1574,7 +1593,7 @@ fn mode_name(mode: &Mode) -> String {
 }
 
 fn track_label(t: &crate::model::Track) -> String {
-    if matches!(t.kind, TrackKind::Bass | TrackKind::Synth) {
+    if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
         format!("{} O{}", t.name, t.input_octave.unwrap_or(3))
     } else {
         t.name.clone()
@@ -1820,14 +1839,32 @@ const BASS_PARAMETERS: [ParameterDescriptor; 8] = [
     },
 ];
 
-const SYNTH_PARAMETERS: [ParameterDescriptor; 11] = [
+const CHORD_PARAMETERS: [ParameterDescriptor; 14] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
     ParameterDescriptor {
-        id: ParameterId::Waveform,
-        label: "Wave",
+        id: ParameterId::OscillatorMix,
+        label: "Osc Mix",
         shortcut: "w",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::PulseWidth,
+        label: "Pulse W",
+        shortcut: "P",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::SubOscillator,
+        label: "Sub",
+        shortcut: "u",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Chorus,
+        label: "Chorus",
+        shortcut: "h",
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
@@ -1874,13 +1911,30 @@ const SYNTH_PARAMETERS: [ParameterDescriptor; 11] = [
     },
 ];
 
+const LEAD_PARAMETERS: [ParameterDescriptor; 13] = [
+    COMMON_PARAMETERS[0],
+    COMMON_PARAMETERS[1],
+    COMMON_PARAMETERS[2],
+    CHORD_PARAMETERS[3],
+    CHORD_PARAMETERS[4],
+    CHORD_PARAMETERS[5],
+    CHORD_PARAMETERS[7],
+    CHORD_PARAMETERS[8],
+    CHORD_PARAMETERS[9],
+    CHORD_PARAMETERS[10],
+    CHORD_PARAMETERS[11],
+    CHORD_PARAMETERS[12],
+    CHORD_PARAMETERS[13],
+];
+
 fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescriptor] {
     match kind {
         TrackKind::Kick => &KICK_PARAMETERS,
         TrackKind::Snare => &SNARE_PARAMETERS,
         TrackKind::Hat => &HAT_PARAMETERS,
         TrackKind::Bass => &BASS_PARAMETERS,
-        TrackKind::Synth => &SYNTH_PARAMETERS,
+        TrackKind::Chord => &CHORD_PARAMETERS,
+        TrackKind::Lead => &LEAD_PARAMETERS,
     }
 }
 
@@ -1963,6 +2017,9 @@ fn physical_parameter_readout(
     let physical = match value {
         ParameterValue::Waveform(Waveform::Square) => "Square".into(),
         ParameterValue::Waveform(Waveform::Saw) => "Saw".into(),
+        ParameterValue::Chorus(ChorusMode::Off) => "Off".into(),
+        ParameterValue::Chorus(ChorusMode::I) => "Mode I".into(),
+        ParameterValue::Chorus(ChorusMode::Ii) => "Mode II".into(),
         ParameterValue::Percent(value) => {
             let value = value.get();
             match (a.editor.project.tracks[track].kind, parameter) {
@@ -1997,25 +2054,39 @@ fn physical_parameter_readout(
                 (TrackKind::Bass, ParameterId::Decay) => {
                     format!("{:.0} ms", crate::dsp::exp_map(value, 80.0, 2_000.0))
                 }
-                (TrackKind::Synth, ParameterId::Cutoff) => {
+                (TrackKind::Chord | TrackKind::Lead, ParameterId::Cutoff) => {
                     format!("{:.0} Hz", crate::dsp::exp_map(value, 20.0, 20_000.0))
                 }
-                (TrackKind::Synth, ParameterId::Resonance) => {
-                    format!("Q {:.2}", 0.707 + value as f32 / 100.0 * (10.0 - 0.707))
+                (TrackKind::Chord | TrackKind::Lead, ParameterId::Resonance) => {
+                    format!("{}% feedback", value)
                 }
-                (TrackKind::Synth, ParameterId::Attack) => {
+                (TrackKind::Chord, ParameterId::Attack) => {
                     let seconds = if value == 0 {
                         0.0
                     } else {
-                        crate::dsp::exp_map(value, 0.001, 2.0)
+                        crate::dsp::exp_map(value, 0.001, 3.0)
                     };
                     format!("{seconds:.3} s")
                 }
-                (TrackKind::Synth, ParameterId::Decay) => {
-                    format!("{:.3} s", crate::dsp::exp_map(value, 0.005, 3.0))
+                (TrackKind::Lead, ParameterId::Attack) => {
+                    let seconds = if value == 0 {
+                        0.0
+                    } else {
+                        crate::dsp::exp_map(value, 0.0015, 4.0)
+                    };
+                    format!("{seconds:.3} s")
                 }
-                (TrackKind::Synth, ParameterId::Release) => {
-                    format!("{:.3} s", crate::dsp::exp_map(value, 0.005, 5.0))
+                (TrackKind::Chord, ParameterId::Decay | ParameterId::Release) => {
+                    format!("{:.3} s", crate::dsp::exp_map(value, 0.002, 12.0))
+                }
+                (TrackKind::Lead, ParameterId::Decay | ParameterId::Release) => {
+                    format!("{:.3} s", crate::dsp::exp_map(value, 0.002, 10.0))
+                }
+                (TrackKind::Chord | TrackKind::Lead, ParameterId::OscillatorMix) => {
+                    format!("Pulse {}% · Saw {}%", 100 - value, value)
+                }
+                (TrackKind::Chord | TrackKind::Lead, ParameterId::PulseWidth) => {
+                    format!("{:.0}% duty", 5.0 + value as f32 * 0.9)
                 }
                 _ => format!("{value}%"),
             }
@@ -2135,7 +2206,7 @@ fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
 fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usize) {
     let t = &a.editor.project.tracks[track];
     let lock_editing = a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_));
-    let title = if matches!(t.kind, TrackKind::Bass | TrackKind::Synth) {
+    let title = if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
         format!(
             "{} · Step {} · {} · [p] {} · [m] Mute {} · [o] Audition{}",
             track_label(t),
@@ -2276,6 +2347,9 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
             ParameterValue::Percent(value) => format!("{}%", value.get()),
             ParameterValue::Waveform(Waveform::Square) => "SQR".into(),
             ParameterValue::Waveform(Waveform::Saw) => "SAW".into(),
+            ParameterValue::Chorus(ChorusMode::Off) => "OFF".into(),
+            ParameterValue::Chorus(ChorusMode::I) => "I".into(),
+            ParameterValue::Chorus(ChorusMode::Ii) => "II".into(),
         };
         render_centered(f, &value_label, content, style);
         for segment in 0..10 {
@@ -2311,6 +2385,14 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
                     } else {
                         "│"
                     }
+                }
+                ParameterValue::Chorus(mode) => {
+                    let selected = match mode {
+                        ChorusMode::Off => 9,
+                        ChorusMode::I => 5,
+                        ChorusMode::Ii => 0,
+                    };
+                    if segment == selected { "●" } else { "│" }
                 }
             };
             let segment_style = if active {
@@ -2647,7 +2729,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay. Synth 2/3: w/c/R/f and a/d/s/r ADSR.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3109,14 +3191,14 @@ mod tests {
             Some(ParameterId::Tune)
         );
         assert_eq!(
-            parameter_shortcut(TrackKind::Synth, 'd'),
+            parameter_shortcut(TrackKind::Chord, 'd'),
             Some(ParameterId::Decay)
         );
         assert_eq!(
-            parameter_shortcut(TrackKind::Synth, 'R'),
+            parameter_shortcut(TrackKind::Chord, 'R'),
             Some(ParameterId::Resonance)
         );
-        assert_eq!(parameter_shortcut(TrackKind::Synth, 't'), None);
+        assert_eq!(parameter_shortcut(TrackKind::Chord, 't'), None);
     }
 
     #[test]
@@ -3127,13 +3209,15 @@ mod tests {
         assert_eq!(drum[0].group, ParameterGroup::Mixer);
         assert_eq!(drum[3].shortcut, "u");
         assert_eq!(drum[3].group, ParameterGroup::Instrument);
-        let synth = parameter_descriptors(TrackKind::Synth);
-        assert_eq!(synth.len(), 11);
-        assert_eq!(synth[3].id, ParameterId::Waveform);
+        let synth = parameter_descriptors(TrackKind::Chord);
+        assert_eq!(synth.len(), 14);
+        assert_eq!(synth[3].id, ParameterId::OscillatorMix);
         assert_eq!(synth[3].group, ParameterGroup::Instrument);
-        assert_eq!(synth[4].group, ParameterGroup::Filter);
-        assert_eq!(synth[5].shortcut, "R");
-        assert_eq!(synth[7].group, ParameterGroup::Envelope);
+        assert_eq!(synth[4].id, ParameterId::PulseWidth);
+        assert_eq!(synth[6].id, ParameterId::Chorus);
+        assert_eq!(synth[7].group, ParameterGroup::Filter);
+        assert_eq!(synth[8].shortcut, "R");
+        assert_eq!(synth[10].group, ParameterGroup::Envelope);
         assert_ne!(
             ParameterGroup::Mixer.color(),
             ParameterGroup::Filter.color()
@@ -3142,7 +3226,7 @@ mod tests {
 
     #[test]
     fn parameter_editor_arrows_cycle_visible_controls_and_wrap() {
-        let mut app = App::new(ProjectV5::new(), None);
+        let mut app = App::new(ProjectV6::new(), None);
         app.row = 1;
         app.step = 4;
         app.scope = Scope::Lock;
@@ -3165,7 +3249,7 @@ mod tests {
 
     #[test]
     fn page_step_navigation_moves_right_and_wraps_left() {
-        let mut app = App::new(ProjectV5::new(), None);
+        let mut app = App::new(ProjectV6::new(), None);
         app.row = 1;
         app.step = 0;
         move_step_page(&mut app, false);
@@ -3200,7 +3284,7 @@ mod tests {
 
     #[test]
     fn track_jump_clamps_step_and_replaces_incompatible_parameter() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[0].steps.resize(4, None);
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3229,7 +3313,7 @@ mod tests {
 
     #[test]
     fn accent_readout_resolves_ties_to_their_source_note() {
-        let mut app = App::new(ProjectV5::new(), None);
+        let mut app = App::new(ProjectV6::new(), None);
         app.row = 4;
         app.editor.set_note(3, 0, 1).unwrap();
         app.editor.toggle_accent(3, 0).unwrap();
@@ -3280,7 +3364,7 @@ mod tests {
     #[test]
     fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
         let backend = TestBackend::new(120, 34);
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[3].input_octave = Some(4);
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
@@ -3325,7 +3409,7 @@ mod tests {
 
     #[test]
     fn small_terminal_replaces_main_layout() {
-        let app = App::new(ProjectV5::new(), None);
+        let app = App::new(ProjectV6::new(), None);
         let screen = rendered(&app, 119, 34);
         assert!(screen.contains("terminal-groove needs 120x34"));
         assert!(screen.contains("Current: 119x34"));
@@ -3333,7 +3417,7 @@ mod tests {
 
     #[test]
     fn lfo_modal_and_fader_badge_render_at_minimum_size() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3364,7 +3448,7 @@ mod tests {
 
     #[test]
     fn lfo_control_bank_reports_synced_and_physical_free_rates() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3421,7 +3505,7 @@ mod tests {
 
     #[test]
     fn lfo_controls_are_laid_out_left_to_right() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3443,7 +3527,7 @@ mod tests {
 
     #[test]
     fn lock_scope_labels_explicit_and_inherited_values() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -3464,7 +3548,7 @@ mod tests {
 
     #[test]
     fn lock_values_remain_displayed_after_track_navigation() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             locks: crate::model::ParameterLocks {
@@ -3486,7 +3570,7 @@ mod tests {
 
     #[test]
     fn active_parameter_gets_a_visible_fader_outline_and_physical_readout() {
-        let mut app = App::new(ProjectV5::new(), None);
+        let mut app = App::new(ProjectV6::new(), None);
         app.row = 4;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
@@ -3496,7 +3580,7 @@ mod tests {
 
     #[test]
     fn lock_parameter_editing_has_a_prominent_banner() {
-        let mut app = App::new(ProjectV5::new(), None);
+        let mut app = App::new(ProjectV6::new(), None);
         app.row = 4;
         app.scope = Scope::Lock;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
@@ -3521,7 +3605,7 @@ mod tests {
 
     #[test]
     fn base_parameter_editing_does_not_show_lock_editing_banner() {
-        let mut app = App::new(ProjectV5::new(), None);
+        let mut app = App::new(ProjectV6::new(), None);
         app.row = 4;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
@@ -3530,7 +3614,7 @@ mod tests {
 
     #[test]
     fn locked_badge_uses_a_distinct_color() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -3560,7 +3644,7 @@ mod tests {
 
     #[test]
     fn global_cards_show_all_local_shortcuts() {
-        let app = App::new(ProjectV5::new(), None);
+        let app = App::new(ProjectV6::new(), None);
         let screen = rendered(&app, 120, 34);
         for key in ["[t]", "[y]", "[f]", "[r]", "[k]", "[s]"] {
             assert!(screen.contains(key), "missing {key}");
@@ -3645,7 +3729,7 @@ mod tests {
 
     #[test]
     fn vertical_navigation_follows_physical_rows_without_track_cursors() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[0].steps.resize(64, None);
         project.tracks[1].steps.resize(20, None);
         project.tracks[2].steps.resize(40, None);
@@ -3688,7 +3772,7 @@ mod tests {
 
     #[test]
     fn bank_navigation_handles_partial_banks() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         project.tracks[0].steps.resize(20, None);
         let mut app = App::new(project, None);
         app.row = 1;
@@ -3701,7 +3785,7 @@ mod tests {
 
     #[test]
     fn sixty_four_step_track_renders_as_two_compact_rows_with_scroll_hint() {
-        let mut project = ProjectV5::new();
+        let mut project = ProjectV6::new();
         for track in &mut project.tracks {
             track.steps.resize(64, None);
         }

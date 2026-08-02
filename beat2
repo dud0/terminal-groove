@@ -1,5 +1,5 @@
 {
-  "format_version": 5,
+  "format_version": 6,
   "globals": {
     "tempo_bpm": 120,
     "delay_division": "eighth",
@@ -327,14 +327,17 @@
       "lfos": {}
     },
     {
-      "kind": "synth",
-      "name": "Synth 2",
+      "kind": "chord",
+      "name": "Chord",
       "level": 50,
       "muted": true,
       "delay_send": 90,
       "reverb_send": 0,
       "instrument": {
-        "waveform": "saw",
+        "oscillator_mix": 100,
+        "pulse_width": 50,
+        "sub_oscillator": 35,
+        "chorus": "i",
         "cutoff": 20,
         "resonance": 60,
         "filter_envelope": 60,
@@ -393,14 +396,16 @@
       "lfos": {}
     },
     {
-      "kind": "synth",
-      "name": "Synth 3",
+      "kind": "lead",
+      "name": "Lead",
       "level": 50,
       "muted": false,
       "delay_send": 60,
       "reverb_send": 0,
       "instrument": {
-        "waveform": "saw",
+        "oscillator_mix": 100,
+        "pulse_width": 50,
+        "sub_oscillator": 25,
         "cutoff": 10,
         "resonance": 40,
         "filter_envelope": 80,

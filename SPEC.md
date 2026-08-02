@@ -15,9 +15,9 @@ There are exactly six tracks in this fixed order:
 1. Kick drum
 2. Snare drum
 3. Hi-hat
-4. Mono Bass synth
-5. Mono synth 2
-6. Mono synth 3
+4. Bass
+5. Chord
+6. Lead
 
 All sound is synthesized in real time. The application contains no audio samples.
 
@@ -42,7 +42,7 @@ All sound is synthesized in real time. The application contains no audio samples
 - Multiple patterns, pattern chaining, or song mode
 - Time-signature changes
 - Swing, microtiming, probability, or continuously variable event velocity
-- Polyphonic synth tracks or oscillator detune
+- Polyphonic note entry outside the fixed Chord triad mapping, or oscillator detune
 - Per-track pan, solo, master-volume control, or configurable effect returns
 - User-defined track types or track reordering
 - Mouse control
@@ -83,10 +83,12 @@ Degree 1 is the root in the stored input octave. Degrees 2 through 7 use the sel
 
 Notes are stored as scale degree and octave rather than absolute pitch. Changing the global key or scale therefore reinterprets all existing pattern notes the next time they trigger. A note that is already sounding keeps its current pitch until a new note event starts; a tie does not retune it.
 
-Each synth track is strictly monophonic:
+Bass and Lead are monophonic. Chord interprets the stored degree as the root of a three-note diatonic triad:
 
-- A note event sets pitch, captures its accent, opens the gate, and retriggers the amplitude envelope.
-- A following tie keeps the gate open without retriggering pitch, accent, or the envelope.
+- A Bass or Lead note sets pitch, captures its accent, opens the gate, and retriggers its amplitude envelope.
+- A Chord note stacks the root, scale third, and scale fifth upward in close position. The stored octave is the root octave, and wrapped chord tones rise into the following octave.
+- Chord has six voices. A new note releases the previous triad and retriggers all three new tones, including common tones; one released triad may overlap before the oldest three voices are reused.
+- A following tie keeps the mono voice or complete triad open without retriggering pitch, accent, or envelopes.
 - A following empty step closes the gate and begins release.
 - A following note closes/restarts the existing voice at the new pitch, with click-safe envelope handling.
 - Bass notes additionally store a Boolean slide. A slide remains armed through ties and glides to the next Bass note over a fixed 60 ms without retriggering its main envelope. An empty step clears it.
@@ -117,7 +119,7 @@ Every track has base parameter values. A step may contain a sparse set of parame
 - At the next boundary, an unlocked parameter returns to its base value or takes the next step's lock.
 - Continuous changes are smoothed to prevent clicks.
 - A drum instrument lock initializes the triggered voice and therefore remains audible for that hit's tail. Step-level mixer locks still expire at the next boundary.
-- Synth locks on a tie can update waveform, filter, envelope settings, level, and sends without retriggering the note. Effective values flow from the source note through each connected tie; each tie's locks override prior values and remain effective on following ties until overridden. Changing attack during a tie does not restart the attack phase.
+- Pitched-track locks on a tie can update compatible oscillator, filter, envelope, level, send, and Chord chorus settings without retriggering. Effective values flow from the source note through each connected tie; each tie's locks override prior values and remain effective on following ties until overridden. Changing attack during a tie does not restart the attack phase.
 - Clearing an event also clears every lock on that step.
 - Accent and slide are event properties, not base parameters, locks, or LFO destinations. They apply on the event's next trigger.
 
@@ -185,7 +187,7 @@ The hi-hat remains sample-free: six band-limited square oscillators at fixed inh
 
 Defaults: tune 50%, decay 20%. Accent adds about 3 dB and a short brightness boost.
 
-### 3.6 Bass and mono synths
+### 3.6 Bass, Chord, and Lead
 
 The Bass track is a 303-inspired engine with:
 
@@ -196,25 +198,20 @@ The Bass track is a 303-inspired engine with:
 
 Defaults: saw, cutoff 45%, resonance 55%, filter envelope 65%, decay 40%.
 
-Synth 2 and Synth 3 retain:
+Chord is a Juno-60-inspired polyphonic engine; Lead is an SH-101-inspired monophonic engine. Both provide phase-aligned band-limited Pulse and Saw sources, an octave-down square sub oscillator, a nonlinear four-stage resonant low-pass filter, one ADSR for amplitude and positive filter modulation, and these controls:
 
-- One independently selectable band-limited square or saw oscillator
-- A stable two-pole topology-preserving-transform state-variable low-pass filter
-- One ADSR amplitude envelope
-- Positive filter modulation driven by that same ADSR
+- `oscillator mix`: 0% is Pulse, 100% is Saw, with an equal-power blend between them.
+- `pulse width`: maps from 5% through 95% duty cycle.
+- `sub oscillator`: linear octave-down source level.
+- `cutoff`: maps exponentially from 20 Hz to the lower of 20 kHz or 45% of sample rate.
+- `resonance`, and positive `filter envelope` up to six octaves.
+- `attack`, `decay`, `sustain`, and `release`; Chord uses approximately 1 ms–3 s attack and 2 ms–12 s decay/release, while Lead uses 1.5 ms–4 s and 2 ms–10 s respectively.
 
-Parameters:
+Chord additionally has a stereo `chorus` selector with Off, I, and II modes. Mode I uses approximately 15 ms base delay, 1.5 ms modulation depth, and 0.5 Hz; mode II uses 12 ms, 2.5 ms, and 0.8 Hz. Mode changes crossfade over approximately 5 ms. Chorus precedes post-fader stereo sends.
 
-- `waveform`: square or saw; default saw.
-- `cutoff`: exponential mapping from 20 Hz to the lower of 20 kHz or 45% of sample rate; default 65%.
-- `resonance`: approximately Q 0.707 through Q 10 while remaining stable at all cutoff values; default 10%.
-- `filter envelope`: 0% adds no modulation and 100% adds up to six octaves to the base cutoff, clamped to the safe cutoff limit; default 25%.
-- `attack`: 0% is effectively instantaneous; 1–100% map exponentially from about 1 ms to 2 seconds; default 0%.
-- `decay`: exponential mapping from 5 ms to 3 seconds; default 25%.
-- `sustain`: linear amplitude from 0% to 100%; default 70%.
-- `release`: exponential mapping from 5 ms to 5 seconds; default 15%.
+Chord defaults: 70% Saw mix, pulse width 50%, sub 35%, chorus I, cutoff 55%, resonance 15%, filter envelope 25%, and ADSR 55/45/75/65%. Lead defaults: 75% Saw mix, pulse width 50%, sub 25%, cutoff 50%, resonance 35%, filter envelope 55%, and ADSR 0/35/55/20%.
 
-All pitched tracks default to input degree 1 and octave 3. Their oscillators and filters run at 2x oversampling; Synth 2/3 use exponential envelope segments, resonance compensation, and restrained internal saturation.
+All pitched tracks default to input degree 1 and octave 3. Their oscillators and filters run at 2x oversampling. Chord uses stable DCO pitch and a smoother resonance-compensated response; Lead uses stronger drive and feedback.
 
 ### 3.7 Mixer and effects
 
@@ -313,12 +310,12 @@ The application uses ordinary portable terminal press events. It must not requir
 | Pitched track | `1`–`8` | Insert/replace note at current input octave |
 | Pitched track | `[` / `]` | Decrease/increase input octave, clamped to 0–7 |
 | Pitched track | `t` | Insert, replace with, or clear a tie subject to validation |
-| Bass/Synth | `w` / `c` / `R` / `f` | Edit waveform, cutoff, resonance, or filter-envelope amount |
+| Bass | `w` / `c` / `R` / `f` | Edit waveform, cutoff, resonance, or filter-envelope amount |
 | Bass | `d` | Edit decay |
-| Synth | `a` | Edit attack |
-| Synth | `d` | Edit decay |
-| Synth | `s` | Edit sustain |
-| Synth | `r` | Edit release |
+| Chord/Lead | `w` / `Shift+P` / `u` | Edit oscillator mix, pulse width, or sub-oscillator level |
+| Chord/Lead | `c` / `R` / `f` | Edit cutoff, resonance, or filter-envelope amount |
+| Chord/Lead | `a` / `d` / `s` / `r` | Edit ADSR |
+| Chord | `h` | Edit chorus Off/I/II mode |
 | Global | `t` | Edit tempo |
 | Global | `y` | Edit delay division |
 | Global | `f` | Edit delay feedback |
@@ -335,10 +332,10 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - Left/right cycles through the selected track's visible parameter controls and wraps at either end. Shift+left/right continues to move between step banks.
 - PageUp/PageDown moves to the previous/next step of the current track, wrapping at its length, while keeping the active parameter and BASE/LOCK scope. Shift+1 through Shift+6 jumps to the corresponding track; an incompatible parameter switches to that track's first compatible parameter.
 - A number-row percentage assignment applies immediately, keeps the parameter editor open, and ramps the affected continuous control to its new value over approximately 30 ms like a quick fader movement.
-- Up/down assignments apply immediately and keep the editor open for repeated changes. On waveform, either direction switches between Saw and Square.
+- Up/down assignments apply immediately and keep the editor open for repeated changes. On Bass waveform, either direction switches between Saw and Square; on Chord chorus, Up/Down moves through Off, I, and II without wrapping.
 - Enter or Esc returns to navigation without reverting changes already made.
 - A series of repeated arrow changes to one value is coalesced into one undo transaction until the parameter changes, editing ends, or 300 ms elapses without another adjustment.
-- Mute remains a discrete immediate action; waveform has its own persistent two-value editor.
+- Mute remains a discrete immediate action; Bass waveform and Chord chorus use discrete persistent editors.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
 - `Shift+A` toggles accent immediately on a trigger or note. `Shift+G` toggles slide on a Bass note. Both are undoable and reject incompatible or empty steps visibly.
@@ -350,11 +347,11 @@ Adding or replacing a trigger or note automatically auditions it while transport
 `o` explicitly auditions at any transport state without changing transport or pattern data:
 
 - A drum row auditions the selected trigger's accent and locks, or an unaccented hit with base values on an empty step.
-- A pitched note auditions its pitch, accent, and locks.
+- A Bass/Lead note auditions its pitch, accent, and locks; a Chord note auditions its complete triad.
 - A tie resolves and auditions its source note and accent while applying effective tie-chain locks.
 - An empty pitched step auditions the last-entered note unaccented with base values.
 - A synth audition holds the gate for one quarter note at the current tempo and then enters release.
-- Explicit audition may overlap normal sequence playback as a temporary preview voice, but must not alter the sequenced mono voice's persistent state.
+- Explicit audition may overlap normal sequence playback through independent preview voices and chorus state without altering sequenced voice state.
 
 ## 6. Terminal interface
 
@@ -368,7 +365,7 @@ At `120x34` or larger, the normal screen contains:
 4. A selected-control panel: vertical parameter faders for the selected track, or six global detail cards when the global row is selected.
 5. Status line: current mode, last successful operation or actionable error, and active-editor guidance. While a track parameter is being edited in `LOCK` scope, the selected-control panel and status line prominently show `LOCK PARAMETER EDITING` using contrasting styling.
 
-Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows accent state, inherited accent/source on ties, and Bass slide state. The waveform parameter uses the same column geometry as a two-position switch. Mixer, instrument, filter, and envelope groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout. A `~` badge marks parameters with an LFO assignment, including disabled assignments.
+Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows accent state, inherited accent/source on ties, and Bass slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, and envelope groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout. A `~` badge marks parameters with an LFO assignment, including disabled assignments.
 
 The compact, centered track-level LFO modal arranges enabled, waveform, rate mode, rate, and depth as five control columns from left to right, matching left/right field selection and up/down value adjustment. Its size is capped rather than expanding with larger terminals, and control names occupy their card borders to avoid duplicated labels and empty space. Enabled and rate mode use two-position switches, waveform and synchronized rate use multi-value selectors that fill all available rows, and free rate and depth use ten-segment faders. Up selects the displayed option above and Down selects the option below; both two-position switches and multi-value selectors stop at their first and last values instead of cycling. For faders, Up increases and Down decreases. The selected column uses the same heavy outline, reverse styling, and bold labeling as an active parameter. Rate shows its synchronized division or free percentage together with the resulting physical Hz value; depth is labeled in bipolar percentage points.
 
@@ -436,7 +433,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 5,
+  "format_version": 6,
   "globals": {},
   "tracks": []
 }
@@ -459,7 +456,7 @@ The top-level object is:
 
 `tracks` contains exactly six entries in the fixed instrument order. Every track stores:
 
-- `kind`: `kick`, `snare`, `hat`, `bass`, or `synth`
+- `kind`: `kick`, `snare`, `hat`, `bass`, `chord`, or `lead`
 - `name`: the fixed display identifier
 - `level`: integer 0–100
 - `muted`: Boolean
@@ -468,7 +465,9 @@ The top-level object is:
 - An `instrument` object with the applicable base values
 - A required sparse `lfos` object containing compatible per-destination assignments
 - A `steps` array containing 1 through 64 elements; its array length is the track length
-- Bass and synth tracks additionally store `input_degree` and `input_octave`
+- Bass, Chord, and Lead additionally store `input_degree` and `input_octave`
+
+Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. Lead stores the same percentage controls except `chorus`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
 
 An empty step is JSON `null`. Populated step shapes are:
 
@@ -507,9 +506,9 @@ An empty step is JSON `null`. Populated step shapes are:
 }
 ```
 
-The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. `mute`, `accent`, and `slide` are invalid in a lock object.
+The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. Chord chorus values are `off`, `i`, and `ii`. `mute`, `accent`, and `slide` are invalid in a lock object.
 
-An empty LFO collection is `{}`. Assignment keys are the compatible continuous instrument parameters plus `level`; waveform and mixer sends are excluded. A synchronized assignment is:
+An empty LFO collection is `{}`. Assignment keys are the compatible continuous instrument parameters plus `level`; Bass waveform, Chord chorus, and mixer sends are excluded. A synchronized assignment is:
 
 ```json
 "lfos": {
@@ -528,10 +527,10 @@ A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `s
 
 The Rust model should express and validate the schema through these domain concepts rather than untyped maps:
 
-- `ProjectV5`
+- `ProjectV6`
 - `Globals`
 - `Track` with fixed `TrackKind`
-- `KickParameters`, `SnareParameters`, `HatParameters`, `BassParameters`, and `SynthParameters`
+- `KickParameters`, `SnareParameters`, `HatParameters`, `BassParameters`, `ChordParameters`, and `LeadParameters`
 - `Step`
 - `StepEvent::{Trigger, BassNote, Note, Tie}`
 - `ParameterLocks`
@@ -541,6 +540,7 @@ The Rust model should express and validate the schema through these domain conce
 - `PitchClass`
 - `Scale::{Major, NaturalMinor}`
 - `Waveform::{Square, Saw}`
+- `ChorusMode::{Off, I, Ii}`
 - `DelayDivision`
 
 There is no stable public Rust library API in the MVP. The public compatibility interfaces are the CLI, keyboard behavior, and JSON schema.
@@ -644,7 +644,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Degree 8 octave behavior and input-octave limits
 - Frequency conversion with A4 = 440 Hz
 - Tie creation, wrapped resolution, all-tie rejection, and dependent-tie cleanup
-- Synth gate/retrigger/release transitions
+- Bass/Lead gate transitions and Chord triad generation, six-voice overlap, retrigger, tie, and release behavior
 - Trigger/note accent defaults, tie inheritance, engine-specific timbre response, and latched tail behavior
 - Bass slide arming through ties, fixed 60 ms glide time, and legato envelope behavior
 - One-step lock overlay and restoration
@@ -662,7 +662,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Golden JSON for every track/event/lock and LFO rate/waveform variant
 - Default-project and populated-project round trips
 - Rejection of unknown versions/fields, bad ranges, wrong track order/count, step counts outside 1–64, invalid locks/LFO assignments, and invalid ties
-- Strict version 5 round trips and rejection of versions 1 through 4 without migration
+- Strict version 6 round trips and rejection of versions 1 through 5 without migration
 - Failed loads preserve the active project
 - Atomic saves leave the previous file intact on failure
 - Successful save/load resets dirty state and load resets history
@@ -673,7 +673,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Fixed-width 32-cell rows, 16-step bank divider, continuation rows, and track-block scrolling
 - Physical-row vertical navigation, bank navigation, length input, and doubling shortcut
 - Small-terminal resize screen
-- Ten-segment fader fill, waveform switch, active-parameter styling, and local shortcut labels
+- Ten-segment fader fill, waveform/chorus switches, active-parameter styling, and local shortcut labels
 - Effective `LOCK` values with explicit/inherited origin labels
 - Global detail cards and physical active-parameter readouts
 - Independent playhead and cursor styling
@@ -707,10 +707,10 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 3. Enter Bass degrees and octave changes, toggle accent and slide, create ordinary and loop-wrapped ties, and hear the fixed-time 303-style glide, mono envelope, and inherited-accent behavior.
 4. Add base values and locks while stopped and playing; verify locks apply only on their step and live edits take effect on the next pass.
 5. Edit each track parameter and confirm its fader fills, shortcut, active highlight, exact percentage, and physical readout. Add synced and free LFOs, verify their badges and modal values, and hear locks remain the modulation center.
-6. Audition empty and occupied drum/synth steps with `o`, including while transport is running, without pattern changes.
+6. Audition empty and occupied drum/pitched steps with `o`, including Chord triads while transport is running, without pattern changes.
 7. Change key and scale and verify existing degree data follows the new harmony on future triggers.
 8. Undo and redo compound tie cleanup and repeated parameter edits, including returning to the saved clean revision.
-9. Save, inspect, reopen, and compare a version 5 project with accents, Bass slides, ties, locks, effects, mute states, and input octaves; verify versions 1 through 4 are rejected without altering the active project.
+9. Save, inspect, reopen, and compare a version 6 project with accents, Bass slides, Chord/Lead settings, ties, locks, effects, mute states, and input octaves; verify versions 1 through 5 are rejected without altering the active project.
 10. List audio devices, use the default device, and select a unique explicit device.
 11. Play for at least ten minutes at a supported 48 kHz low-latency configuration without stream errors, non-finite output, timing drift, or audible clicks from normal parameter edits.
 12. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored.
