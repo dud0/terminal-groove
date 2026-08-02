@@ -236,6 +236,7 @@ struct SynthVoice {
 }
 
 const DRUM_SILENCE: f32 = 0.0001;
+const REVERB_RETURN_GAIN: f32 = 0.5;
 
 struct DrumEnvelope {
     value: f32,
@@ -421,10 +422,10 @@ impl Renderer {
             dc: Default::default(),
             mute: std::array::from_fn(|i| Smoother::new((!project.tracks[i].muted) as u8 as f32)),
         };
-        r.configure_effects();
+        r.configure_effects(0);
         r
     }
-    fn configure_effects(&mut self) {
+    fn configure_effects(&mut self, smoothing_samples: u32) {
         self.clock.set_bpm(self.project.globals.tempo_bpm);
         self.delay.configure(
             self.project
@@ -434,7 +435,7 @@ impl Renderer {
             self.project.globals.delay_feedback.normalized(),
         );
         self.reverb
-            .set_time(self.project.globals.reverb_time_seconds);
+            .set_time_smoothed(self.project.globals.reverb_time_seconds, smoothing_samples);
     }
     fn update_mutes(&mut self, immediate: bool) {
         let smoothing = if immediate {
@@ -485,6 +486,7 @@ impl Renderer {
             }
             AudioCommand::ReplaceProject { project, smoothing } => {
                 self.project = project;
+                let smoothing_samples = smoothing.samples(self.sr);
                 for (track, next) in self.next_steps.iter_mut().enumerate() {
                     if *next >= self.project.tracks[track].step_count as usize {
                         *next = 0;
@@ -494,9 +496,9 @@ impl Renderer {
                         playhead.store(u8::MAX, Ordering::Release);
                     }
                 }
-                self.configure_effects();
+                self.configure_effects(smoothing_samples);
                 self.update_mutes(false);
-                self.refresh_active_parameters(smoothing.samples(self.sr));
+                self.refresh_active_parameters(smoothing_samples);
             }
             AudioCommand::Audition { track, step } => self.audition(track as usize, step as usize),
         }
@@ -892,9 +894,10 @@ impl Renderer {
         let (rl, rr) = self
             .reverb
             .process(reverb_in + dl * 0.25, reverb_in + dr * 0.25);
-        let (l, r) = self
-            .dc
-            .process(dry + dl * 0.45 + rl * 0.35, dry + dr * 0.45 + rr * 0.35);
+        let (l, r) = self.dc.process(
+            dry + dl * 0.45 + rl * REVERB_RETURN_GAIN,
+            dry + dr * 0.45 + rr * REVERB_RETURN_GAIN,
+        );
         if !(l.is_finite() && r.is_finite()) {
             self.status.non_finite.store(true, Ordering::Release);
             return (0.0, 0.0);
@@ -1008,6 +1011,36 @@ mod tests {
         assert_eq!(a, b);
         assert!(a.iter().all(|(l, r)| l.is_finite() && r.is_finite()));
         assert!(a.iter().any(|(l, _)| l.abs() > 0.001));
+    }
+
+    #[test]
+    fn full_reverb_send_preserves_the_attack_and_produces_an_audible_tail() {
+        fn rms(samples: &[(f32, f32)]) -> f32 {
+            (samples
+                .iter()
+                .map(|(l, r)| (l * l + r * r) * 0.5)
+                .sum::<f32>()
+                / samples.len() as f32)
+                .sqrt()
+        }
+
+        let mut dry_project = ProjectV2::new();
+        dry_project.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            locks: Default::default(),
+        });
+        let mut wet_project = dry_project.clone();
+        wet_project.tracks[0].reverb_send = Percent::new(100).unwrap();
+
+        let dry = render_offline(&dry_project, 8_000, 10_000);
+        let wet = render_offline(&wet_project, 8_000, 10_000);
+        assert_eq!(&dry[..160], &wet[..160]);
+
+        let dry_tail = rms(&dry[6_000..10_000]);
+        let wet_tail = rms(&wet[6_000..10_000]);
+        assert!(
+            wet_tail >= dry_tail * 4.0,
+            "dry tail RMS {dry_tail}, wet tail RMS {wet_tail}"
+        );
     }
 
     #[test]

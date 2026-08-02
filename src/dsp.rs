@@ -281,6 +281,7 @@ struct Comb {
     buffer: Vec<f32>,
     pos: usize,
     damped: f32,
+    feedback: Smoother,
 }
 impl Comb {
     fn new(size: usize) -> Self {
@@ -288,11 +289,20 @@ impl Comb {
             buffer: vec![0.0; size.max(2)],
             pos: 0,
             damped: 0.0,
+            feedback: Smoother::new(0.0),
         }
     }
-    fn process(&mut self, input: f32, feedback: f32, damping: f32) -> f32 {
+    fn set_time(&mut self, seconds: f32, sample_rate: f32, smoothing_samples: u32) {
+        let delay_seconds = self.buffer.len() as f32 / sample_rate;
+        let feedback = 10.0_f32
+            .powf(-3.0 * delay_seconds / seconds)
+            .clamp(0.0, 0.9999);
+        self.feedback.set(feedback, smoothing_samples);
+    }
+    fn process(&mut self, input: f32, damping: f32) -> f32 {
         let output = self.buffer[self.pos];
         self.damped += (output - self.damped) * (1.0 - damping);
+        let feedback = self.feedback.next_value();
         self.buffer[self.pos] = input + self.damped * feedback;
         self.pos = (self.pos + 1) % self.buffer.len();
         output
@@ -332,13 +342,13 @@ pub struct Reverb {
     right: [Comb; 4],
     allpass_l: [Allpass; 2],
     allpass_r: [Allpass; 2],
-    feedback: f32,
+    sample_rate: f32,
 }
 impl Reverb {
     pub fn new(sample_rate: u32) -> Self {
         let scale = sample_rate as f32 / 44_100.0;
         let size = |n: usize| (n as f32 * scale).round() as usize;
-        Self {
+        let mut reverb = Self {
             left: [
                 Comb::new(size(1116)),
                 Comb::new(size(1188)),
@@ -353,21 +363,29 @@ impl Reverb {
             ],
             allpass_l: [Allpass::new(size(556)), Allpass::new(size(441))],
             allpass_r: [Allpass::new(size(579)), Allpass::new(size(464))],
-            feedback: 0.82,
-        }
+            sample_rate: sample_rate as f32,
+        };
+        reverb.set_time(2.5);
+        reverb
     }
     pub fn set_time(&mut self, seconds: f32) {
-        self.feedback = (0.55 + 0.41 * ((seconds.clamp(0.2, 10.0) - 0.2) / 9.8)).clamp(0.0, 0.96);
+        self.set_time_smoothed(seconds, 0);
+    }
+    pub(crate) fn set_time_smoothed(&mut self, seconds: f32, smoothing_samples: u32) {
+        let seconds = seconds.clamp(0.2, 10.0);
+        for comb in self.left.iter_mut().chain(self.right.iter_mut()) {
+            comb.set_time(seconds, self.sample_rate, smoothing_samples);
+        }
     }
     pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
-        let input = (l + r) * 0.12;
+        let input = (l + r) * 0.5;
         let mut ol = 0.0;
         let mut or = 0.0;
         for comb in &mut self.left {
-            ol += comb.process(input, self.feedback, 0.25);
+            ol += comb.process(input, 0.25);
         }
         for comb in &mut self.right {
-            or += comb.process(input, self.feedback, 0.25);
+            or += comb.process(input, 0.25);
         }
         for ap in &mut self.allpass_l {
             ol = ap.process(ol);
@@ -539,11 +557,65 @@ mod tests {
         assert!(values.windows(2).all(|w| w[1] >= w[0]));
     }
     #[test]
+    fn comb_feedback_reaches_minus_sixty_db_at_requested_time() {
+        for sample_rate in [8_000.0_f32, 44_100.0, 48_000.0] {
+            for time in [0.2_f32, 2.5, 10.0] {
+                let delay_samples = (sample_rate * 0.025).round() as usize;
+                let mut comb = Comb::new(delay_samples);
+                comb.set_time(time, sample_rate, 0);
+                let delay_seconds = comb.buffer.len() as f32 / sample_rate;
+                let loops = time / delay_seconds;
+                let decay = comb.feedback.current.powf(loops);
+                assert!(
+                    (decay - 0.001).abs() < 0.00001,
+                    "{sample_rate} Hz, {time} s"
+                );
+            }
+        }
+    }
+    #[test]
+    fn comb_feedback_changes_smoothly() {
+        let mut comb = Comb::new(100);
+        comb.set_time(0.2, 1_000.0, 0);
+        let initial = comb.feedback.current;
+        comb.set_time(10.0, 1_000.0, 10);
+        let target = comb.feedback.target;
+
+        comb.process(0.0, 0.25);
+        assert!(comb.feedback.current > initial && comb.feedback.current < target);
+        for _ in 1..10 {
+            comb.process(0.0, 0.25);
+        }
+        assert_eq!(comb.feedback.current, target);
+    }
+    #[test]
+    fn longer_reverb_times_have_more_late_tail_energy() {
+        fn late_energy(time: f32) -> f32 {
+            let mut reverb = Reverb::new(8_000);
+            reverb.set_time(time);
+            (0..8_000)
+                .map(|i| {
+                    let input = if i == 0 { 0.1 } else { 0.0 };
+                    let (l, r) = reverb.process(input, input);
+                    if i >= 4_000 { l * l + r * r } else { 0.0 }
+                })
+                .sum()
+        }
+
+        let short = late_energy(0.2);
+        let default = late_energy(2.5);
+        let long = late_energy(10.0);
+        assert!(
+            short < default && default < long,
+            "{short}, {default}, {long}"
+        );
+    }
+    #[test]
     fn reverb_is_finite_and_bounded_at_time_extremes() {
         for time in [0.2, 10.0] {
             let mut reverb = Reverb::new(8_000);
             reverb.set_time(time);
-            for i in 0..40_000 {
+            for i in 0..96_000 {
                 let input = if i == 0 { 1.0 } else { 0.0 };
                 let (l, r) = reverb.process(input, input);
                 assert!(l.is_finite() && r.is_finite());

@@ -220,7 +220,7 @@ Feedback ranges from 0% through 95% to prevent unity or unstable feedback. Defau
 
 #### Reverb
 
-The reverb is a stereo algorithmic Schroeder/Freeverb-style network using parallel feedback comb filters followed by series all-pass filters. It has no samples, convolution impulse, pre-delay control, damping control, or independent return-level control in the MVP.
+The reverb is a stereo algorithmic Schroeder/Freeverb-style network using parallel feedback comb filters followed by series all-pass filters. Reverb time specifies the low-frequency RT60; fixed damping makes higher frequencies decay faster. It has no samples, convolution impulse, pre-delay control, damping control, or independent return-level control in the MVP.
 
 Reverb time ranges from 0.2 through 10.0 seconds and defaults to 2.5 seconds.
 
