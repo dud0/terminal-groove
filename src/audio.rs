@@ -950,20 +950,12 @@ impl Renderer {
         voice.slide_armed = voice.bass && trigger.slide;
         voice.active = true;
     }
-    fn active_step_locks(&self, track: usize) -> Option<ParameterLocks> {
-        if !self.playing {
-            return None;
-        }
-        let count = self.project.tracks[track].step_count as usize;
-        let step = (self.next_steps[track] + count - 1) % count;
-        Some(self.locks_at(track, step))
-    }
     fn refresh_active_parameters(&mut self, smoothing: u32) {
         for track in 0..3 {
             let params = self.project.tracks[track];
-            let locks = self
-                .active_step_locks(track)
-                .unwrap_or(self.drums[track].locks);
+            // Locks are captured at the step boundary. A live project snapshot may
+            // change the current step, but that edit must not affect its active hit.
+            let locks = self.drums[track].locks;
             Self::apply_drum_mix(&mut self.drums[track], params, locks, smoothing);
             let locks = self.preview_drums[track].locks;
             Self::apply_drum_mix(&mut self.preview_drums[track], params, locks, smoothing);
@@ -971,9 +963,8 @@ impl Renderer {
         for track in 3..TRACK_COUNT {
             let index = track - 3;
             if self.synth[index].active {
-                let locks = self
-                    .active_step_locks(track)
-                    .unwrap_or(self.synth[index].locks);
+                // Keep the effective lock chain latched until the next boundary.
+                let locks = self.synth[index].locks;
                 Self::apply_synth_params(
                     &self.project,
                     self.sr,
@@ -1678,6 +1669,38 @@ mod tests {
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
         assert_eq!(locked, 0.0);
         assert!(restored > 0.0001);
+    }
+
+    #[test]
+    fn current_step_locks_are_latched_until_the_next_boundary() {
+        let mut project = ProjectV5::new();
+        project.tracks[3].steps.resize(1, None);
+        project.tracks[3].steps[0] = Some(StepEvent::BassNote {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            slide: false,
+            locks: ParameterLocks {
+                cutoff: Percent::new(20),
+                ..Default::default()
+            },
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary();
+        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
+
+        let mut edited = project.clone();
+        let Some(StepEvent::BassNote { locks, .. }) = edited.tracks[3].steps[0].as_mut() else {
+            panic!("expected Bass note")
+        };
+        locks.cutoff = Percent::new(80);
+        renderer.command(Audio::snapshot(&edited));
+        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
+
+        renderer.boundary();
+        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(80));
     }
 
     #[test]

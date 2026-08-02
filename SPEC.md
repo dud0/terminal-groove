@@ -345,7 +345,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 
 ### 5.4 Audition behavior
 
-Adding or replacing a trigger or note automatically auditions it only while transport is stopped. Clearing an event never auditions.
+Adding or replacing a trigger or note automatically auditions it while transport is stopped or paused. Clearing an event never auditions.
 
 `o` explicitly auditions at any transport state without changing transport or pattern data:
 
