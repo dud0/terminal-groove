@@ -740,7 +740,7 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
             open_lfo_editor(a, audio, parameter);
             Ok(true)
         }
-        KeyCode::Char(' ') | KeyCode::Char('.') => Ok(false),
+        key if parameter_edit_passthrough(key) => Ok(false),
         KeyCode::Char(c) => {
             if let Some(next) = parameter_shortcut(a.editor.project.tracks[track].kind, c) {
                 switch_parameter_editor(a, next);
@@ -786,6 +786,13 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
         }
         _ => Ok(true),
     }
+}
+
+fn parameter_edit_passthrough(key: KeyCode) -> bool {
+    matches!(
+        key,
+        KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o')
+    )
 }
 
 fn open_lfo_editor(a: &mut App, audio: &mut Audio, parameter: ParameterId) {
@@ -2997,6 +3004,11 @@ mod tests {
     fn waveform_editor_switches_between_its_two_values() {
         assert_eq!(flipped_waveform(Waveform::Saw), Waveform::Square);
         assert_eq!(flipped_waveform(Waveform::Square), Waveform::Saw);
+    }
+
+    #[test]
+    fn parameter_editing_passes_audition_key_to_global_handler() {
+        assert!(parameter_edit_passthrough(KeyCode::Char('o')));
     }
 
     #[test]

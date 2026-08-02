@@ -116,7 +116,7 @@ Every track has base parameter values. A step may contain a sparse set of parame
 - At the next boundary, an unlocked parameter returns to its base value or takes the next step's lock.
 - Continuous changes are smoothed to prevent clicks.
 - A drum tone or decay lock initializes the triggered drum voice and therefore remains audible for that hit's tail. Step-level mixer locks still expire at the next boundary.
-- Synth locks on a tie can update waveform, filter, envelope settings, level, and sends without retriggering the note. Changing attack during a tie does not restart the attack phase.
+- Synth locks on a tie can update waveform, filter, envelope settings, level, and sends without retriggering the note. Effective values flow from the source note through each connected tie; each tie's locks override prior values and remain effective on following ties until overridden. Changing attack during a tie does not restart the attack phase.
 - Clearing an event also clears every lock on that step.
 
 The UI has a persistent parameter scope with two visibly labelled states: `BASE` and `LOCK`. `p` toggles the scope on a track. The scope persists while moving between steps and tracks, and resets to `BASE` when the user selects the global row or presses `Esc` from navigation mode.

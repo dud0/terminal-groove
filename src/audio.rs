@@ -213,6 +213,46 @@ pub fn open(requested: Option<&str>, project: &ProjectV3) -> Result<Audio> {
         producer,
     })
 }
+
+fn overlay_locks(target: &mut ParameterLocks, overlay: ParameterLocks) {
+    if overlay.level.is_some() {
+        target.level = overlay.level;
+    }
+    if overlay.delay_send.is_some() {
+        target.delay_send = overlay.delay_send;
+    }
+    if overlay.reverb_send.is_some() {
+        target.reverb_send = overlay.reverb_send;
+    }
+    if overlay.tone.is_some() {
+        target.tone = overlay.tone;
+    }
+    if overlay.decay.is_some() {
+        target.decay = overlay.decay;
+    }
+    if overlay.waveform.is_some() {
+        target.waveform = overlay.waveform;
+    }
+    if overlay.cutoff.is_some() {
+        target.cutoff = overlay.cutoff;
+    }
+    if overlay.resonance.is_some() {
+        target.resonance = overlay.resonance;
+    }
+    if overlay.filter_envelope.is_some() {
+        target.filter_envelope = overlay.filter_envelope;
+    }
+    if overlay.attack.is_some() {
+        target.attack = overlay.attack;
+    }
+    if overlay.sustain.is_some() {
+        target.sustain = overlay.sustain;
+    }
+    if overlay.release.is_some() {
+        target.release = overlay.release;
+    }
+}
+
 fn mark_failed(status: &AudioStatus) {
     status.failed.store(true, Ordering::Release);
     status.running.store(false, Ordering::Release);
@@ -615,9 +655,32 @@ impl Renderer {
         );
     }
     fn locks_at(&self, track: usize, step: usize) -> ParameterLocks {
-        self.project.tracks[track].steps[step]
-            .map(|e| *e.locks())
-            .unwrap_or_default()
+        let t = self.project.tracks[track];
+        let Some(event) = t.steps[step] else {
+            return ParameterLocks::default();
+        };
+        let mut locks = *event.locks();
+        if let StepEvent::Tie { .. } = event {
+            if let Some(source) = crate::model::tie_source(&t.steps[..t.step_count as usize], step)
+            {
+                if let Some(StepEvent::Note {
+                    locks: source_locks,
+                    ..
+                }) = t.steps[source]
+                {
+                    locks = source_locks;
+                    let mut i = (source + 1) % t.step_count as usize;
+                    while i != step {
+                        if let Some(StepEvent::Tie { locks: tie_locks }) = t.steps[i] {
+                            overlay_locks(&mut locks, tie_locks);
+                        }
+                        i = (i + 1) % t.step_count as usize;
+                    }
+                    overlay_locks(&mut locks, *event.locks());
+                }
+            }
+        }
+        locks
     }
     fn trigger_drum(&mut self, track: usize, locks: ParameterLocks) {
         let t = self.project.tracks[track];
@@ -842,7 +905,7 @@ impl Renderer {
                 octave,
                 locks,
             }) => (degree, octave, locks),
-            Some(StepEvent::Tie { locks }) => {
+            Some(StepEvent::Tie { .. }) => {
                 let Some(source) =
                     crate::model::tie_source(&t.steps[..t.step_count as usize], step)
                 else {
@@ -851,7 +914,7 @@ impl Renderer {
                 let Some(StepEvent::Note { degree, octave, .. }) = t.steps[source] else {
                     return;
                 };
-                (degree, octave, locks)
+                (degree, octave, self.locks_at(track, step))
             }
             _ => (t.input_degree, t.input_octave, ParameterLocks::default()),
         };
@@ -890,7 +953,8 @@ impl Renderer {
                         );
                     }
                     GateAction::Hold => {
-                        if let Some(StepEvent::Tie { locks }) = t.steps[step] {
+                        if matches!(t.steps[step], Some(StepEvent::Tie { .. })) {
+                            let locks = self.locks_at(track, step);
                             Self::apply_synth_params(
                                 &self.project,
                                 self.sr,
@@ -1250,6 +1314,67 @@ mod tests {
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
         assert_eq!(locked, 0.0);
         assert!(restored > 0.0001);
+    }
+
+    #[test]
+    fn synth_tie_locks_inherit_source_note_and_allow_tie_overrides() {
+        let mut project = ProjectV3::new();
+        project.tracks[3].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            locks: ParameterLocks {
+                level: Percent::new(30),
+                cutoff: Percent::new(20),
+                ..Default::default()
+            },
+        });
+        project.tracks[3].steps[1] = Some(StepEvent::Tie {
+            locks: ParameterLocks {
+                resonance: Percent::new(70),
+                ..Default::default()
+            },
+        });
+        project.tracks[3].steps[2] = Some(StepEvent::Tie {
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+
+        renderer.boundary();
+        assert_eq!(renderer.synth[0].locks.level, Percent::new(30));
+        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
+        assert_eq!(renderer.synth[0].locks.resonance, None);
+
+        renderer.boundary();
+        assert_eq!(renderer.synth[0].locks.level, Percent::new(30));
+        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
+        assert_eq!(renderer.synth[0].locks.resonance, Percent::new(70));
+
+        renderer.boundary();
+        assert_eq!(renderer.synth[0].locks.level, Percent::new(30));
+        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
+        assert_eq!(renderer.synth[0].locks.resonance, Percent::new(70));
+    }
+
+    #[test]
+    fn wrapped_synth_tie_locks_inherit_from_wrapped_source_note() {
+        let mut project = ProjectV3::new();
+        project.tracks[3].steps.resize(3, None);
+        project.tracks[3].steps[0] = Some(StepEvent::Tie {
+            locks: Default::default(),
+        });
+        project.tracks[3].steps[2] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            locks: ParameterLocks {
+                cutoff: Percent::new(25),
+                ..Default::default()
+            },
+        });
+        let status = Arc::new(AudioStatus::default());
+        let renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+
+        assert_eq!(renderer.locks_at(3, 0).cutoff, Percent::new(25));
     }
 
     #[test]
