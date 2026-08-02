@@ -1,5 +1,5 @@
 {
-  "format_version": 1,
+  "format_version": 3,
   "globals": {
     "tempo_bpm": 120,
     "delay_division": "eighth",
@@ -49,7 +49,8 @@
         null,
         null,
         null
-      ]
+      ],
+      "lfos": {}
     },
     {
       "kind": "snare",
@@ -85,7 +86,8 @@
         null,
         null,
         null
-      ]
+      ],
+      "lfos": {}
     },
     {
       "kind": "hat",
@@ -142,7 +144,8 @@
         },
         null,
         null
-      ]
+      ],
+      "lfos": {}
     },
     {
       "kind": "synth",
@@ -225,7 +228,8 @@
         }
       ],
       "input_degree": 5,
-      "input_octave": 3
+      "input_octave": 3,
+      "lfos": {}
     },
     {
       "kind": "synth",
@@ -273,7 +277,8 @@
         null
       ],
       "input_degree": 4,
-      "input_octave": 3
+      "input_octave": 3,
+      "lfos": {}
     },
     {
       "kind": "synth",
@@ -316,7 +321,8 @@
         null
       ],
       "input_degree": 3,
-      "input_octave": 3
+      "input_octave": 3,
+      "lfos": {}
     }
   ]
 }
