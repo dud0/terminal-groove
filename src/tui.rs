@@ -959,6 +959,10 @@ fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool>
             a.status = "Chord shape editing finished".into();
         }
         KeyCode::Char('?') => a.mode = Mode::Help,
+        KeyCode::PageUp | KeyCode::PageDown => {
+            move_chord_editor_step(a, k.code == KeyCode::PageDown);
+            a.status = format!("Editing Chord shape at step {}", a.step + 1);
+        }
         KeyCode::Up | KeyCode::Down => {
             let index = ChordShape::ALL
                 .iter()
@@ -981,6 +985,12 @@ fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool>
         _ => {}
     }
     Ok(true)
+}
+
+fn move_chord_editor_step(a: &mut App, forward: bool) {
+    move_step_page(a, forward);
+    let shape = selected_chord_shape(a, a.row - 1).unwrap_or_default();
+    a.mode = Mode::ChordEdit { shape };
 }
 
 fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
@@ -2860,7 +2870,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         ));
     } else if matches!(a.mode, Mode::ChordEdit { .. }) {
         status_lines.push(Line::from(
-            "Chord shape · [↑/↓] select recipe  [Enter/Esc] finish",
+            "Chord shape · [↑/↓] select recipe  [PageUp/Down] step  [Enter/Esc] finish",
         ));
     } else if matches!(a.mode, Mode::GlobalEdit(_) | Mode::TempoInput(_)) {
         status_lines.push(Line::from(
@@ -2902,7 +2912,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
                 );
             }
         }
-        Mode::ChordEdit { shape } => render_chord_popup(f, area, *shape),
+        Mode::ChordEdit { shape } => render_chord_popup(f, chunks[3], *shape, a.step),
         Mode::TempoInput(input) => popup(
             f,
             area,
@@ -2955,10 +2965,10 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     }
 }
 
-fn render_chord_popup(f: &mut ratatui::Frame, area: Rect, selected: ChordShape) {
+fn render_chord_popup(f: &mut ratatui::Frame, area: Rect, selected: ChordShape, step: usize) {
     let popup_area = lfo_popup_rect(area);
     f.render_widget(Clear, popup_area);
-    let panel = Block::bordered().title("Chord shape · selected note");
+    let panel = Block::bordered().title(format!("Chord shape · Step {}", step + 1));
     let inner = panel.inner(popup_area);
     f.render_widget(panel, popup_area);
     let choices = ChordShape::ALL.map(|shape| shape.to_string());
@@ -3636,9 +3646,52 @@ mod tests {
             shape: ChordShape::SeventhFirstInversion,
         };
         let screen = rendered(&app, 120, 34);
-        assert!(screen.contains("Chord shape · selected note"));
+        assert!(screen.contains("Chord shape · Step 1"));
         assert!(screen.contains("● 3-5-7-1"));
-        assert!(screen.contains("Chord shape · [↑/↓] select recipe"));
+        assert!(screen.contains("Chord shape · [↑/↓] select recipe  [PageUp/Down] step"));
+    }
+
+    #[test]
+    fn chord_shape_editor_page_navigation_follows_each_step() {
+        let mut project = ProjectV6::new();
+        project.tracks[4].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            chord_shape: None,
+            locks: Default::default(),
+        });
+        project.tracks[4].steps[1] = Some(StepEvent::Note {
+            degree: 2,
+            octave: 3,
+            accent: false,
+            chord_shape: Some(ChordShape::Sus4SecondInversion),
+            locks: Default::default(),
+        });
+        let mut app = App::new(project, None);
+        app.row = 5;
+        app.mode = Mode::ChordEdit {
+            shape: ChordShape::TriadRoot,
+        };
+
+        move_chord_editor_step(&mut app, true);
+
+        assert_eq!(app.step, 1);
+        assert_eq!(
+            app.mode,
+            Mode::ChordEdit {
+                shape: ChordShape::Sus4SecondInversion
+            }
+        );
+
+        move_chord_editor_step(&mut app, false);
+        assert_eq!(app.step, 0);
+        assert_eq!(
+            app.mode,
+            Mode::ChordEdit {
+                shape: ChordShape::TriadRoot
+            }
+        );
     }
 
     #[test]
