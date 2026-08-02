@@ -371,8 +371,20 @@ pub struct Globals {
     pub delay_division: DelayDivision,
     pub delay_feedback: Percent,
     pub reverb_time_seconds: f32,
+    #[serde(default = "default_reverb_tone")]
+    pub reverb_tone: Percent,
+    #[serde(default = "default_reverb_pre_delay_ms")]
+    pub reverb_pre_delay_ms: u16,
     pub key: PitchClass,
     pub scale: Scale,
+}
+
+fn default_reverb_tone() -> Percent {
+    Percent(50)
+}
+
+fn default_reverb_pre_delay_ms() -> u16 {
+    20
 }
 
 #[repr(u8)]
@@ -382,6 +394,8 @@ pub enum GlobalParameterId {
     DelayDivision,
     DelayFeedback,
     ReverbTime,
+    ReverbTone,
+    ReverbPreDelay,
     Key,
     Scale,
 }
@@ -392,6 +406,8 @@ impl Default for Globals {
             delay_division: DelayDivision::Eighth,
             delay_feedback: Percent(30),
             reverb_time_seconds: 2.5,
+            reverb_tone: default_reverb_tone(),
+            reverb_pre_delay_ms: default_reverb_pre_delay_ms(),
             key: PitchClass::C,
             scale: Scale::Major,
         }
@@ -927,6 +943,8 @@ impl ProjectV6 {
             || !self.globals.reverb_time_seconds.is_finite()
             || !(0.2..=10.0).contains(&self.globals.reverb_time_seconds)
             || self.globals.delay_feedback.get() > 95
+            || self.globals.reverb_tone.get() > 100
+            || self.globals.reverb_pre_delay_ms > 200
         {
             return Err(ValidationError::TrackOrder(0, "valid globals"));
         }
@@ -1409,6 +1427,19 @@ mod tests {
     #[test]
     fn default_valid() {
         ProjectV6::new().validate().unwrap();
+    }
+    #[test]
+    fn reverb_globals_validate_boundaries() {
+        let mut project = ProjectV6::new();
+        project.globals.reverb_tone = p(101);
+        assert!(project.validate().is_err());
+
+        project.globals.reverb_tone = p(100);
+        project.globals.reverb_pre_delay_ms = 200;
+        assert!(project.validate().is_ok());
+
+        project.globals.reverb_pre_delay_ms = 201;
+        assert!(project.validate().is_err());
     }
     #[test]
     fn scale_and_frequency() {

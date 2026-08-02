@@ -238,9 +238,9 @@ Feedback ranges from 0% through 95% to prevent unity or unstable feedback. Defau
 
 #### Reverb
 
-The reverb is a stereo algorithmic Schroeder/Freeverb-style network using parallel feedback comb filters followed by series all-pass filters. Reverb time specifies the low-frequency RT60; fixed damping makes higher frequencies decay faster. It has no samples, convolution impulse, pre-delay control, damping control, or independent return-level control in the MVP.
+The reverb is a stereo algorithmic Schroeder/Freeverb-style network using a stereo pre-delay, parallel feedback comb filters, and series all-pass filters. Reverb time specifies the low-frequency RT60. Tone controls the comb damping: 0% is darkest and 100% is brightest. Tone and pre-delay changes are smoothed or crossfaded to avoid clicks. It has no samples, convolution impulse, or independent return-level control.
 
-Reverb time ranges from 0.2 through 10.0 seconds and defaults to 2.5 seconds.
+Reverb time ranges from 0.2 through 10.0 seconds and defaults to 2.5 seconds. Reverb tone ranges from 0% through 100% and defaults to 50%. Reverb pre-delay ranges from 0 through 200 ms and defaults to 20 ms.
 
 #### Master safety
 
@@ -254,6 +254,8 @@ The final output stage applies DC blocking, fixed +6 dB makeup gain, and a stere
 | Delay time | Supported division list | `1/8` | Up/down moves through the list |
 | Delay feedback | 0–95% | 30% | Percentage direct entry and arrows |
 | Reverb time | 0.2–10.0 s | 2.5 s | Up/down by 0.1 s and Shift+up/down by 1 s |
+| Reverb tone | 0–100% | 50% | Percentage direct entry, or up/down by 1% and Shift+up/down by 10% |
+| Reverb pre-delay | 0–200 ms | 20 ms | Up/down by 1 ms and Shift+up/down by 10 ms |
 | Key | C, C#, D, D#, E, F, F#, G, G#, A, A#, B | C | Up/down moves chromatically |
 | Scale | Major, natural minor | Major | Up/down or the shortcut toggles the value |
 
@@ -320,6 +322,8 @@ The application uses ordinary portable terminal press events. It must not requir
 | Global | `y` | Edit delay division |
 | Global | `f` | Edit delay feedback |
 | Global | `r` | Edit reverb time |
+| Global | `b` | Edit reverb tone |
+| Global | `p` | Edit reverb pre-delay |
 | Global | `k` | Edit musical key |
 | Global | `s` | Toggle/edit scale |
 
@@ -447,6 +451,8 @@ The top-level object is:
   "delay_division": "eighth",
   "delay_feedback": 30,
   "reverb_time_seconds": 2.5,
+  "reverb_tone": 50,
+  "reverb_pre_delay_ms": 20,
   "key": "C",
   "scale": "major"
 }

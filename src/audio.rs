@@ -534,6 +534,12 @@ impl Renderer {
         );
         self.reverb
             .set_time_smoothed(self.project.globals.reverb_time_seconds, smoothing_samples);
+        self.reverb.set_tone_smoothed(
+            self.project.globals.reverb_tone.normalized(),
+            smoothing_samples,
+        );
+        self.reverb
+            .set_pre_delay_smoothed(self.project.globals.reverb_pre_delay_ms, smoothing_samples);
     }
     fn update_mutes(&mut self, immediate: bool) {
         let smoothing = if immediate {

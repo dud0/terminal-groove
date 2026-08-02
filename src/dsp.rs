@@ -631,11 +631,20 @@ pub struct Reverb {
     allpass_l: [Allpass; 4],
     allpass_r: [Allpass; 4],
     sample_rate: f32,
+    pre_delay_l: Vec<f32>,
+    pre_delay_r: Vec<f32>,
+    pre_delay_pos: usize,
+    pre_delay: usize,
+    old_pre_delay: usize,
+    pre_delay_fade_remaining: usize,
+    pre_delay_fade_length: usize,
+    damping: Smoother,
 }
 impl Reverb {
     pub fn new(sample_rate: u32) -> Self {
         let scale = sample_rate as f32 / 44_100.0;
         let size = |n: usize| (n as f32 * scale).round() as usize;
+        let pre_delay_size = (sample_rate as f32 * 0.2).ceil() as usize + 2;
         let mut reverb = Self {
             left: [
                 Comb::new(size(1116)),
@@ -670,8 +679,19 @@ impl Reverb {
                 Allpass::new(size(248)),
             ],
             sample_rate: sample_rate as f32,
+            pre_delay_l: vec![0.0; pre_delay_size],
+            pre_delay_r: vec![0.0; pre_delay_size],
+            pre_delay_pos: 0,
+            pre_delay: 0,
+            old_pre_delay: 0,
+            pre_delay_fade_remaining: 0,
+            pre_delay_fade_length: (sample_rate as usize / 200).max(1),
+            damping: Smoother::new(0.32),
         };
         reverb.set_time(2.5);
+        reverb.set_tone(0.5);
+        reverb.set_pre_delay_ms(20);
+        reverb.pre_delay_fade_remaining = 0;
         reverb
     }
     pub fn set_time(&mut self, seconds: f32) {
@@ -683,17 +703,64 @@ impl Reverb {
             comb.set_time(seconds, self.sample_rate, smoothing_samples);
         }
     }
+    pub fn set_tone(&mut self, tone: f32) {
+        self.set_tone_smoothed(tone, 0);
+    }
+    pub(crate) fn set_tone_smoothed(&mut self, tone: f32, smoothing_samples: u32) {
+        let tone = tone.clamp(0.0, 1.0);
+        let damping = 0.60 - tone * 0.56;
+        self.damping.set(damping, smoothing_samples);
+    }
+    pub fn set_pre_delay_ms(&mut self, milliseconds: u16) {
+        self.set_pre_delay_smoothed(milliseconds, 0);
+    }
+    pub(crate) fn set_pre_delay_smoothed(&mut self, milliseconds: u16, _smoothing_samples: u32) {
+        let next = ((milliseconds as f32 * self.sample_rate / 1_000.0).round() as usize)
+            .min(self.pre_delay_l.len() - 1);
+        if next != self.pre_delay {
+            self.old_pre_delay = self.pre_delay;
+            self.pre_delay = next;
+            self.pre_delay_fade_remaining = self.pre_delay_fade_length;
+        }
+    }
+    fn pre_delay_tap(buffer: &[f32], pos: usize, delay: usize, input: f32) -> f32 {
+        if delay == 0 {
+            input
+        } else {
+            buffer[(pos + buffer.len() - delay) % buffer.len()]
+        }
+    }
     pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
-        let center = (l + r) * 0.35;
-        let input_l = center + l * 0.15;
-        let input_r = center + r * 0.15;
+        let mut input_l =
+            Self::pre_delay_tap(&self.pre_delay_l, self.pre_delay_pos, self.pre_delay, l);
+        let mut input_r =
+            Self::pre_delay_tap(&self.pre_delay_r, self.pre_delay_pos, self.pre_delay, r);
+        if self.pre_delay_fade_remaining > 0 {
+            let old_l =
+                Self::pre_delay_tap(&self.pre_delay_l, self.pre_delay_pos, self.old_pre_delay, l);
+            let old_r =
+                Self::pre_delay_tap(&self.pre_delay_r, self.pre_delay_pos, self.old_pre_delay, r);
+            let mix =
+                1.0 - self.pre_delay_fade_remaining as f32 / self.pre_delay_fade_length as f32;
+            input_l = old_l * (1.0 - mix) + input_l * mix;
+            input_r = old_r * (1.0 - mix) + input_r * mix;
+            self.pre_delay_fade_remaining -= 1;
+        }
+        self.pre_delay_l[self.pre_delay_pos] = l;
+        self.pre_delay_r[self.pre_delay_pos] = r;
+        self.pre_delay_pos = (self.pre_delay_pos + 1) % self.pre_delay_l.len();
+
+        let center = (input_l + input_r) * 0.35;
+        let input_l = center + input_l * 0.15;
+        let input_r = center + input_r * 0.15;
+        let damping = self.damping.next_value();
         let mut ol = 0.0;
         let mut or = 0.0;
         for comb in &mut self.left {
-            ol += comb.process(input_l, 0.32);
+            ol += comb.process(input_l, damping);
         }
         for comb in &mut self.right {
-            or += comb.process(input_r, 0.32);
+            or += comb.process(input_r, damping);
         }
         for ap in &mut self.allpass_l {
             ol = ap.process(ol);
@@ -716,6 +783,10 @@ impl Reverb {
         for a in &mut self.allpass_r {
             a.clear();
         }
+        self.pre_delay_l.fill(0.0);
+        self.pre_delay_r.fill(0.0);
+        self.pre_delay_pos = 0;
+        self.pre_delay_fade_remaining = 0;
     }
 }
 impl Delay {
@@ -1017,6 +1088,47 @@ mod tests {
                 assert!(l.abs() <= 1.0 && r.abs() <= 1.0);
             }
         }
+    }
+
+    #[test]
+    fn reverb_pre_delay_shifts_the_wet_onset() {
+        fn first_output(pre_delay_ms: u16) -> usize {
+            let mut reverb = Reverb::new(8_000);
+            reverb.set_pre_delay_ms(pre_delay_ms);
+            for _ in 0..64 {
+                reverb.process(0.0, 0.0);
+            }
+            reverb.clear();
+            for i in 0..2_000 {
+                let input = if i == 0 { 1.0 } else { 0.0 };
+                let (l, r) = reverb.process(input, input);
+                if l.abs().max(r.abs()) > 0.000_001 {
+                    return i;
+                }
+            }
+            panic!("reverb did not produce an output");
+        }
+
+        let immediate = first_output(0);
+        let delayed = first_output(20);
+        assert!((delayed as isize - immediate as isize - 160).abs() <= 1);
+    }
+
+    #[test]
+    fn brighter_reverb_has_more_late_tail_energy() {
+        fn late_energy(tone: f32) -> f32 {
+            let mut reverb = Reverb::new(8_000);
+            reverb.set_tone(tone);
+            (0..8_000)
+                .map(|i| {
+                    let input = if i == 0 { 0.1 } else { 0.0 };
+                    let (l, r) = reverb.process(input, input);
+                    if i >= 4_000 { l * l + r * r } else { 0.0 }
+                })
+                .sum()
+        }
+
+        assert!(late_energy(1.0) > late_energy(0.0));
     }
 
     #[test]

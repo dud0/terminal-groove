@@ -132,6 +132,8 @@ mod tests {
         assert_eq!(value["format_version"], 6);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
+        assert_eq!(value["globals"]["reverb_tone"], 50);
+        assert_eq!(value["globals"]["reverb_pre_delay_ms"], 20);
         assert_eq!(value["tracks"].as_array().unwrap().len(), 6);
         assert_eq!(value["tracks"][0]["name"], "Kick");
         assert_eq!(value["tracks"][4]["kind"], "chord");
@@ -141,6 +143,26 @@ mod tests {
         assert_eq!(value["tracks"][5]["name"], "Lead");
         assert_eq!(value["tracks"][0]["lfos"], serde_json::json!({}));
         assert!(value["tracks"][0].get("input_degree").is_none());
+    }
+
+    #[test]
+    fn v6_projects_without_reverb_controls_use_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("old-v6.groove.json");
+        let mut value = serde_json::to_value(ProjectV6::new()).unwrap();
+        value["globals"]
+            .as_object_mut()
+            .unwrap()
+            .remove("reverb_tone");
+        value["globals"]
+            .as_object_mut()
+            .unwrap()
+            .remove("reverb_pre_delay_ms");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.globals.reverb_tone.get(), 50);
+        assert_eq!(loaded.globals.reverb_pre_delay_ms, 20);
     }
 
     #[test]

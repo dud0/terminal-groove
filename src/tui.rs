@@ -384,7 +384,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         }
         KeyCode::Left => {
             if a.row == 0 {
-                a.global = (a.global + 5) % 6
+                a.global = (a.global + GLOBAL_IDS.len() - 1) % GLOBAL_IDS.len()
             } else if k.modifiers.contains(KeyModifiers::SHIFT) {
                 move_step_bank(a, false)
             } else {
@@ -393,7 +393,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         }
         KeyCode::Right => {
             if a.row == 0 {
-                a.global = (a.global + 1) % 6
+                a.global = (a.global + 1) % GLOBAL_IDS.len()
             } else if k.modifiers.contains(KeyModifiers::SHIFT) {
                 move_step_bank(a, true)
             } else {
@@ -1377,9 +1377,11 @@ fn global_id(index: usize) -> GlobalParameterId {
         GlobalParameterId::DelayDivision,
         GlobalParameterId::DelayFeedback,
         GlobalParameterId::ReverbTime,
+        GlobalParameterId::ReverbTone,
+        GlobalParameterId::ReverbPreDelay,
         GlobalParameterId::Key,
         GlobalParameterId::Scale,
-    ][index]
+    ][index % GLOBAL_IDS.len()]
 }
 fn global_shortcut(c: char) -> Option<GlobalParameterId> {
     match c {
@@ -1387,6 +1389,8 @@ fn global_shortcut(c: char) -> Option<GlobalParameterId> {
         'y' => Some(GlobalParameterId::DelayDivision),
         'f' => Some(GlobalParameterId::DelayFeedback),
         'r' => Some(GlobalParameterId::ReverbTime),
+        'b' => Some(GlobalParameterId::ReverbTone),
+        'p' => Some(GlobalParameterId::ReverbPreDelay),
         'k' => Some(GlobalParameterId::Key),
         's' => Some(GlobalParameterId::Scale),
         _ => None,
@@ -1406,6 +1410,8 @@ fn global_name(id: GlobalParameterId) -> &'static str {
         GlobalParameterId::DelayDivision => "delay division",
         GlobalParameterId::DelayFeedback => "delay feedback",
         GlobalParameterId::ReverbTime => "reverb time",
+        GlobalParameterId::ReverbTone => "reverb tone",
+        GlobalParameterId::ReverbPreDelay => "reverb pre-delay",
         GlobalParameterId::Key => "key",
         GlobalParameterId::Scale => "scale",
     }
@@ -1447,10 +1453,22 @@ fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool
             if let Some(next) = global_shortcut(c) {
                 a.global = next as usize;
                 enter_global_edit(a, next)
-            } else if id == GlobalParameterId::DelayFeedback {
+            } else if matches!(
+                id,
+                GlobalParameterId::DelayFeedback | GlobalParameterId::ReverbTone
+            ) {
                 if let Some(v) = crate::reducer::percentage_key(c) {
-                    let v = Percent::new(v.get().min(95)).unwrap();
-                    edit_global(a, audio, id, move |g| g.delay_feedback = v);
+                    let max = if id == GlobalParameterId::DelayFeedback {
+                        95
+                    } else {
+                        100
+                    };
+                    let v = Percent::new(v.get().min(max)).unwrap();
+                    if id == GlobalParameterId::DelayFeedback {
+                        edit_global(a, audio, id, move |g| g.delay_feedback = v);
+                    } else {
+                        edit_global(a, audio, id, move |g| g.reverb_tone = v);
+                    }
                     a.mode = Mode::Navigation
                 }
             }
@@ -1491,6 +1509,28 @@ fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool
                             .round()
                             .clamp(2.0, 100.0)
                             / 10.0
+                    })
+                }
+                GlobalParameterId::ReverbTone => {
+                    let d: i16 = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                        10
+                    } else {
+                        1
+                    };
+                    edit_global(a, audio, id, move |g| {
+                        g.reverb_tone = g.reverb_tone.saturating_add(direction as i16 * d)
+                    })
+                }
+                GlobalParameterId::ReverbPreDelay => {
+                    let d: i16 = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                        10
+                    } else {
+                        1
+                    };
+                    edit_global(a, audio, id, move |g| {
+                        g.reverb_pre_delay_ms = (g.reverb_pre_delay_ms as i16
+                            + direction as i16 * d)
+                            .clamp(0, 200) as u16
                     })
                 }
                 GlobalParameterId::Key => {
@@ -2101,16 +2141,20 @@ fn global_shortcut_text(id: GlobalParameterId) -> &'static str {
         GlobalParameterId::DelayDivision => "y",
         GlobalParameterId::DelayFeedback => "f",
         GlobalParameterId::ReverbTime => "r",
+        GlobalParameterId::ReverbTone => "b",
+        GlobalParameterId::ReverbPreDelay => "p",
         GlobalParameterId::Key => "k",
         GlobalParameterId::Scale => "s",
     }
 }
 
-const GLOBAL_IDS: [GlobalParameterId; 6] = [
+const GLOBAL_IDS: [GlobalParameterId; 8] = [
     GlobalParameterId::Tempo,
     GlobalParameterId::DelayDivision,
     GlobalParameterId::DelayFeedback,
     GlobalParameterId::ReverbTime,
+    GlobalParameterId::ReverbTone,
+    GlobalParameterId::ReverbPreDelay,
     GlobalParameterId::Key,
     GlobalParameterId::Scale,
 ];
@@ -2121,6 +2165,8 @@ fn global_display_name(id: GlobalParameterId) -> &'static str {
         GlobalParameterId::DelayDivision => "Delay",
         GlobalParameterId::DelayFeedback => "Feedback",
         GlobalParameterId::ReverbTime => "Reverb",
+        GlobalParameterId::ReverbTone => "Tone",
+        GlobalParameterId::ReverbPreDelay => "Pre-delay",
         GlobalParameterId::Key => "Key",
         GlobalParameterId::Scale => "Scale",
     }
@@ -2132,6 +2178,8 @@ fn global_value_text(g: &crate::model::Globals, id: GlobalParameterId) -> String
         GlobalParameterId::DelayDivision => g.delay_division.to_string(),
         GlobalParameterId::DelayFeedback => format!("{}%", g.delay_feedback.get()),
         GlobalParameterId::ReverbTime => format!("{:.1} s", g.reverb_time_seconds),
+        GlobalParameterId::ReverbTone => format!("{}%", g.reverb_tone.get()),
+        GlobalParameterId::ReverbPreDelay => format!("{} ms", g.reverb_pre_delay_ms),
         GlobalParameterId::Key => g.key.to_string(),
         GlobalParameterId::Scale => g.scale.to_string(),
     }
@@ -2155,8 +2203,8 @@ fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
     let panel = Block::bordered().title("Global controls  [←→] select  [Enter] edit");
     let inner = panel.inner(area);
     f.render_widget(panel, area);
-    let card_width = (inner.width / 6).min(18);
-    let cards_width = card_width.saturating_mul(6);
+    let card_width = (inner.width / GLOBAL_IDS.len() as u16).min(18);
+    let cards_width = card_width.saturating_mul(GLOBAL_IDS.len() as u16);
     let cards = Rect {
         x: inner.x + inner.width.saturating_sub(cards_width) / 2,
         y: inner.y + inner.height.saturating_sub(7) / 2,
@@ -2729,7 +2777,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus.\nGlobal: t tempo, y delay, f feedback, r reverb time, b tone, p pre-delay, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3717,11 +3765,16 @@ mod tests {
     }
 
     #[test]
-    fn global_shortcuts_select_all_six_controls() {
+    fn global_shortcuts_select_all_eight_controls() {
         assert_eq!(global_shortcut('t'), Some(GlobalParameterId::Tempo));
         assert_eq!(global_shortcut('y'), Some(GlobalParameterId::DelayDivision));
         assert_eq!(global_shortcut('f'), Some(GlobalParameterId::DelayFeedback));
         assert_eq!(global_shortcut('r'), Some(GlobalParameterId::ReverbTime));
+        assert_eq!(global_shortcut('b'), Some(GlobalParameterId::ReverbTone));
+        assert_eq!(
+            global_shortcut('p'),
+            Some(GlobalParameterId::ReverbPreDelay)
+        );
         assert_eq!(global_shortcut('k'), Some(GlobalParameterId::Key));
         assert_eq!(global_shortcut('s'), Some(GlobalParameterId::Scale));
         assert_eq!(global_shortcut('v'), None);
