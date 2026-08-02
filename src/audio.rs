@@ -1,9 +1,11 @@
 use crate::{
-    dsp::{Adsr, Biquad, DcBlock, Delay, PolyBlepOsc, Reverb, Smoother, Svf, exp_map, safety},
+    dsp::{
+        Adsr, Biquad, DcBlock, Delay, Lfo, PolyBlepOsc, Reverb, Smoother, Svf, exp_map_f32, safety,
+    },
     engine::{GateAction, StepClock, synth_action},
     model::{
-        Globals, Instrument, MAX_STEP_COUNT, ParameterLocks, Percent, ProjectV2, StepEvent,
-        TRACK_COUNT, Waveform,
+        Globals, Instrument, LfoAssignments, MAX_STEP_COUNT, ParameterId, ParameterLocks, Percent,
+        ProjectV3, StepEvent, TRACK_COUNT, Waveform,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -25,6 +27,7 @@ struct AudioTrack {
     delay_send: Percent,
     reverb_send: Percent,
     instrument: Instrument,
+    lfos: LfoAssignments,
     steps: [Option<StepEvent>; MAX_STEP_COUNT],
     step_count: u8,
     input_degree: u8,
@@ -51,7 +54,7 @@ impl ParameterSmoothing {
     }
 }
 impl AudioProject {
-    pub fn from_project(project: &ProjectV2) -> Self {
+    pub fn from_project(project: &ProjectV3) -> Self {
         Self {
             globals: project.globals,
             tracks: std::array::from_fn(|i| {
@@ -62,6 +65,7 @@ impl AudioProject {
                     delay_send: t.delay_send,
                     reverb_send: t.reverb_send,
                     instrument: t.instrument,
+                    lfos: t.lfos,
                     steps: std::array::from_fn(|s| t.steps.get(s).copied().flatten()),
                     step_count: t.steps.len() as u8,
                     input_degree: t.input_degree.unwrap_or(1),
@@ -122,11 +126,11 @@ impl Audio {
     pub fn available_commands(&self) -> usize {
         self.producer.slots()
     }
-    pub fn snapshot(project: &ProjectV2) -> AudioCommand {
+    pub fn snapshot(project: &ProjectV3) -> AudioCommand {
         Self::snapshot_with_smoothing(project, ParameterSmoothing::Default)
     }
     pub fn snapshot_with_smoothing(
-        project: &ProjectV2,
+        project: &ProjectV3,
         smoothing: ParameterSmoothing,
     ) -> AudioCommand {
         AudioCommand::ReplaceProject {
@@ -180,7 +184,7 @@ fn choose_device(requested: Option<&str>) -> Result<Device> {
 }
 
 #[allow(deprecated)]
-pub fn open(requested: Option<&str>, project: &ProjectV2) -> Result<Audio> {
+pub fn open(requested: Option<&str>, project: &ProjectV3) -> Result<Audio> {
     let device = choose_device(requested)?;
     let name = device.name().unwrap_or_else(|_| "unknown".into());
     let supported = device
@@ -224,9 +228,9 @@ struct SynthVoice {
     filter: Svf,
     freq: f32,
     wave: Waveform,
-    cutoff: Smoother,
-    resonance: Smoother,
-    filter_env: Smoother,
+    cutoff_percent: Smoother,
+    resonance_percent: Smoother,
+    filter_env_percent: Smoother,
     locks: ParameterLocks,
     active: bool,
     remaining: u32,
@@ -371,9 +375,9 @@ impl SynthVoice {
             filter: Default::default(),
             freq: 110.0,
             wave: Waveform::Saw,
-            cutoff: Smoother::new(4000.0),
-            resonance: Smoother::new(0.7),
-            filter_env: Smoother::new(0.0),
+            cutoff_percent: Smoother::new(65.0),
+            resonance_percent: Smoother::new(10.0),
+            filter_env_percent: Smoother::new(25.0),
             locks: ParameterLocks::default(),
             active: false,
             remaining: 0,
@@ -399,6 +403,10 @@ struct Renderer {
     reverb: Reverb,
     dc: DcBlock,
     mute: [Smoother; TRACK_COUNT],
+    lfos: [[Lfo; ParameterId::ALL.len()]; TRACK_COUNT],
+    preview_lfos: [[Lfo; ParameterId::ALL.len()]; TRACK_COUNT],
+    lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
+    preview_lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
 }
 impl Renderer {
     fn new(project: AudioProject, sr: u32, status: Arc<AudioStatus>) -> Self {
@@ -421,6 +429,18 @@ impl Renderer {
             reverb: Reverb::new(sr),
             dc: Default::default(),
             mute: std::array::from_fn(|i| Smoother::new((!project.tracks[i].muted) as u8 as f32)),
+            lfos: std::array::from_fn(|track| {
+                std::array::from_fn(|parameter| {
+                    Lfo::new(0x51f0_0001 ^ ((track as u32) << 12) ^ parameter as u32)
+                })
+            }),
+            preview_lfos: std::array::from_fn(|track| {
+                std::array::from_fn(|parameter| {
+                    Lfo::new(0xa7d1_0001 ^ ((track as u32) << 12) ^ parameter as u32)
+                })
+            }),
+            lfo_offsets: [[0.0; ParameterId::ALL.len()]; TRACK_COUNT],
+            preview_lfo_offsets: [[0.0; ParameterId::ALL.len()]; TRACK_COUNT],
         };
         r.configure_effects(0);
         r
@@ -478,6 +498,7 @@ impl Renderer {
                 }
                 self.delay.clear();
                 self.reverb.clear();
+                self.reset_lfos();
                 self.status.running.store(false, Ordering::Release);
                 self.status.paused.store(false, Ordering::Release);
                 for playhead in &self.status.playheads {
@@ -485,6 +506,7 @@ impl Renderer {
                 }
             }
             AudioCommand::ReplaceProject { project, smoothing } => {
+                self.reconcile_lfos(&project);
                 self.project = project;
                 let smoothing_samples = smoothing.samples(self.sr);
                 for (track, next) in self.next_steps.iter_mut().enumerate() {
@@ -503,6 +525,95 @@ impl Renderer {
             AudioCommand::Audition { track, step } => self.audition(track as usize, step as usize),
         }
     }
+
+    fn reset_lfos(&mut self) {
+        for lfo in self.lfos.iter_mut().flatten() {
+            lfo.reset();
+        }
+        for lfo in self.preview_lfos.iter_mut().flatten() {
+            lfo.reset();
+        }
+        self.lfo_offsets = [[0.0; ParameterId::ALL.len()]; TRACK_COUNT];
+        self.preview_lfo_offsets = [[0.0; ParameterId::ALL.len()]; TRACK_COUNT];
+    }
+
+    fn reconcile_lfos(&mut self, next: &AudioProject) {
+        for track in 0..TRACK_COUNT {
+            for parameter in ParameterId::ALL {
+                let old_enabled = self.project.tracks[track]
+                    .lfos
+                    .get(parameter)
+                    .is_some_and(|config| config.enabled);
+                let new_enabled = next.tracks[track]
+                    .lfos
+                    .get(parameter)
+                    .is_some_and(|config| config.enabled);
+                if !old_enabled && new_enabled {
+                    self.lfos[track][parameter as usize].reset();
+                    self.preview_lfos[track][parameter as usize].reset();
+                } else if !new_enabled {
+                    self.lfos[track][parameter as usize].disable();
+                    self.preview_lfos[track][parameter as usize].disable();
+                    self.lfo_offsets[track][parameter as usize] = 0.0;
+                    self.preview_lfo_offsets[track][parameter as usize] = 0.0;
+                }
+            }
+        }
+    }
+
+    fn advance_lfo_bank(
+        states: &mut [Lfo; ParameterId::ALL.len()],
+        offsets: &mut [f32; ParameterId::ALL.len()],
+        track: AudioTrack,
+        tempo_bpm: u16,
+        sample_rate: f32,
+    ) {
+        for parameter in ParameterId::ALL {
+            let config = track.lfos.get(parameter);
+            let value = states[parameter as usize].next(config, tempo_bpm, sample_rate);
+            offsets[parameter as usize] =
+                value * config.map_or(0.0, |config| config.depth.get() as f32);
+        }
+    }
+
+    fn advance_lfos(&mut self) {
+        let tempo = self.project.globals.tempo_bpm;
+        for track in 0..TRACK_COUNT {
+            Self::advance_lfo_bank(
+                &mut self.lfos[track],
+                &mut self.lfo_offsets[track],
+                self.project.tracks[track],
+                tempo,
+                self.sr,
+            );
+        }
+    }
+
+    fn advance_preview_lfos(&mut self) {
+        let tempo = self.project.globals.tempo_bpm;
+        for track in 0..TRACK_COUNT {
+            Self::advance_lfo_bank(
+                &mut self.preview_lfos[track],
+                &mut self.preview_lfo_offsets[track],
+                self.project.tracks[track],
+                tempo,
+                self.sr,
+            );
+        }
+    }
+
+    fn reset_preview_lfos(&mut self, track: usize) {
+        for lfo in &mut self.preview_lfos[track] {
+            lfo.reset();
+        }
+        Self::advance_lfo_bank(
+            &mut self.preview_lfos[track],
+            &mut self.preview_lfo_offsets[track],
+            self.project.tracks[track],
+            self.project.globals.tempo_bpm,
+            self.sr,
+        );
+    }
     fn locks_at(&self, track: usize, step: usize) -> ParameterLocks {
         self.project.tracks[track].steps[step]
             .map(|e| *e.locks())
@@ -513,8 +624,14 @@ impl Renderer {
         let Instrument::Drum(p) = t.instrument else {
             return;
         };
-        let tone = locks.tone.unwrap_or(p.tone).normalized();
-        let decay = locks.decay.unwrap_or(p.decay).normalized();
+        let tone = modulated_percent(
+            locks.tone.unwrap_or(p.tone).get() as f32,
+            self.lfo_offsets[track][ParameterId::Tone as usize],
+        ) / 100.0;
+        let decay = modulated_percent(
+            locks.decay.unwrap_or(p.decay).get() as f32,
+            self.lfo_offsets[track][ParameterId::Decay as usize],
+        ) / 100.0;
         Self::start_drum_voice(&mut self.drums[track], track, tone, decay, self.sr);
     }
     fn trigger_preview_drum(&mut self, track: usize, locks: ParameterLocks) {
@@ -522,13 +639,19 @@ impl Renderer {
         let Instrument::Drum(p) = t.instrument else {
             return;
         };
-        let tone = locks.tone.unwrap_or(p.tone).normalized();
-        let decay = locks.decay.unwrap_or(p.decay).normalized();
+        let tone = modulated_percent(
+            locks.tone.unwrap_or(p.tone).get() as f32,
+            self.preview_lfo_offsets[track][ParameterId::Tone as usize],
+        ) / 100.0;
+        let decay = modulated_percent(
+            locks.decay.unwrap_or(p.decay).get() as f32,
+            self.preview_lfo_offsets[track][ParameterId::Decay as usize],
+        ) / 100.0;
         Self::start_drum_voice(&mut self.preview_drums[track], track, tone, decay, self.sr);
         let voice = &mut self.preview_drums[track];
         voice
             .level
-            .set(locks.level.unwrap_or(t.level).normalized().powi(2), 0);
+            .set(locks.level.unwrap_or(t.level).get() as f32, 0);
         voice
             .delay_send
             .set(locks.delay_send.unwrap_or(t.delay_send).normalized(), 0);
@@ -576,10 +699,9 @@ impl Renderer {
         locks: ParameterLocks,
         smoothing: u32,
     ) {
-        voice.level.set(
-            locks.level.unwrap_or(track.level).normalized().powi(2),
-            smoothing,
-        );
+        voice
+            .level
+            .set(locks.level.unwrap_or(track.level).get() as f32, smoothing);
         voice.delay_send.set(
             locks.delay_send.unwrap_or(track.delay_send).normalized(),
             smoothing,
@@ -592,7 +714,7 @@ impl Renderer {
     }
     fn apply_synth_params(
         project: &AudioProject,
-        sr: f32,
+        _sr: f32,
         track: usize,
         locks: ParameterLocks,
         voice: &mut SynthVoice,
@@ -603,37 +725,27 @@ impl Renderer {
             return;
         };
         voice.wave = locks.waveform.unwrap_or(p.waveform);
-        let cutoff = locks.cutoff.unwrap_or(p.cutoff).get();
-        voice.cutoff.set(
-            exp_map(cutoff, 20.0, 20_000.0_f32.min(sr * 0.45)),
+        voice
+            .cutoff_percent
+            .set(locks.cutoff.unwrap_or(p.cutoff).get() as f32, smoothing);
+        voice.resonance_percent.set(
+            locks.resonance.unwrap_or(p.resonance).get() as f32,
             smoothing,
         );
-        voice.resonance.set(
-            0.707 + locks.resonance.unwrap_or(p.resonance).normalized() * (10.0 - 0.707),
+        voice.filter_env_percent.set(
+            locks.filter_envelope.unwrap_or(p.filter_envelope).get() as f32,
             smoothing,
         );
-        voice.filter_env.set(
-            locks
-                .filter_envelope
-                .unwrap_or(p.filter_envelope)
-                .normalized(),
+        voice.env.configure_percent(
+            locks.attack.unwrap_or(p.attack).get(),
+            locks.decay.unwrap_or(p.decay).get(),
+            locks.sustain.unwrap_or(p.sustain).get(),
+            locks.release.unwrap_or(p.release).get(),
             smoothing,
         );
-        voice.env.configure(
-            if locks.attack.unwrap_or(p.attack).get() == 0 {
-                0.0
-            } else {
-                exp_map(locks.attack.unwrap_or(p.attack).get(), 0.001, 2.0)
-            },
-            exp_map(locks.decay.unwrap_or(p.decay).get(), 0.005, 3.0),
-            locks.sustain.unwrap_or(p.sustain).normalized(),
-            exp_map(locks.release.unwrap_or(p.release).get(), 0.005, 5.0),
-            smoothing,
-        );
-        voice.level.set(
-            locks.level.unwrap_or(t.level).normalized().powi(2),
-            smoothing,
-        );
+        voice
+            .level
+            .set(locks.level.unwrap_or(t.level).get() as f32, smoothing);
         voice.delay_send.set(
             locks.delay_send.unwrap_or(t.delay_send).normalized(),
             smoothing,
@@ -718,6 +830,7 @@ impl Renderer {
         if track >= TRACK_COUNT || step >= self.project.tracks[track].step_count as usize {
             return;
         }
+        self.reset_preview_lfos(track);
         if track < 3 {
             self.trigger_preview_drum(track, self.locks_at(track, step));
             return;
@@ -806,7 +919,11 @@ impl Renderer {
             self.next_steps[track] = (step + 1) % t.step_count as usize;
         }
     }
-    fn render_synth(v: &mut SynthVoice, sr: f32) -> (f32, f32, f32) {
+    fn render_synth(
+        v: &mut SynthVoice,
+        sr: f32,
+        offsets: &[f32; ParameterId::ALL.len()],
+    ) -> (f32, f32, f32) {
         if v.remaining > 0 {
             v.remaining -= 1;
             if v.remaining == 0 {
@@ -818,11 +935,31 @@ impl Renderer {
             Waveform::Saw => v.osc.next_saw(v.freq, sr),
             Waveform::Square => v.osc.next_square(v.freq, sr),
         };
-        let env = v.env.next_sample();
-        let cutoff = (v.cutoff.next_value() * 2.0_f32.powf(env * v.filter_env.next_value() * 6.0))
-            .min(20_000.0_f32.min(sr * 0.45));
-        let resonance = v.resonance.next_value();
-        let level = v.level.next_value();
+        let env = v.env.next_sample_modulated(
+            offsets[ParameterId::Attack as usize],
+            offsets[ParameterId::Decay as usize],
+            offsets[ParameterId::Sustain as usize],
+            offsets[ParameterId::Release as usize],
+        );
+        let cutoff_percent = modulated_percent(
+            v.cutoff_percent.next_value(),
+            offsets[ParameterId::Cutoff as usize],
+        );
+        let filter_env = modulated_percent(
+            v.filter_env_percent.next_value(),
+            offsets[ParameterId::FilterEnvelope as usize],
+        ) / 100.0;
+        let cutoff = (exp_map_f32(cutoff_percent, 20.0, 20_000.0_f32.min(sr * 0.45))
+            * 2.0_f32.powf(env * filter_env * 6.0))
+        .min(20_000.0_f32.min(sr * 0.45));
+        let resonance_percent = modulated_percent(
+            v.resonance_percent.next_value(),
+            offsets[ParameterId::Resonance as usize],
+        );
+        let resonance = 0.707 + resonance_percent / 100.0 * (10.0 - 0.707);
+        let level_percent =
+            modulated_percent(v.level.next_value(), offsets[ParameterId::Level as usize]);
+        let level = (level_percent / 100.0).powi(2);
         let delay_send = v.delay_send.next_value();
         let reverb_send = v.reverb_send.next_value();
         (
@@ -831,7 +968,12 @@ impl Renderer {
             reverb_send,
         )
     }
-    fn render_drum(voice: &mut DrumVoice, track: usize, sr: f32) -> (f32, f32, f32) {
+    fn render_drum(
+        voice: &mut DrumVoice,
+        track: usize,
+        sr: f32,
+        level_offset: f32,
+    ) -> (f32, f32, f32) {
         let raw = match track {
             0 => {
                 let hz = voice.kick_pitch.next_value();
@@ -851,7 +993,8 @@ impl Renderer {
                 voice.filter.process(noise)
             }
         };
-        let sample = raw * voice.envelope.next_value() * voice.level.next_value() * 0.42;
+        let level = modulated_percent(voice.level.next_value(), level_offset) / 100.0;
+        let sample = raw * voice.envelope.next_value() * level.powi(2) * 0.42;
         (
             sample,
             voice.delay_send.next_value(),
@@ -859,6 +1002,10 @@ impl Renderer {
         )
     }
     fn next(&mut self) -> (f32, f32) {
+        if self.playing {
+            self.advance_lfos();
+        }
+        self.advance_preview_lfos();
         if self.playing && self.clock.tick().is_some() {
             self.boundary()
         }
@@ -866,26 +1013,40 @@ impl Renderer {
         let mut delay_in = 0.0;
         let mut reverb_in = 0.0;
         for i in 0..3 {
-            let (x, delay_send, reverb_send) = Self::render_drum(&mut self.drums[i], i, self.sr);
+            let (x, delay_send, reverb_send) = Self::render_drum(
+                &mut self.drums[i],
+                i,
+                self.sr,
+                self.lfo_offsets[i][ParameterId::Level as usize],
+            );
             let gain = self.mute[i].next_value();
             dry += x * gain;
             delay_in += x * delay_send * gain;
             reverb_in += x * reverb_send * gain;
         }
         for i in 0..3 {
-            let (x, delay_send, reverb_send) =
-                Self::render_drum(&mut self.preview_drums[i], i, self.sr);
+            let (x, delay_send, reverb_send) = Self::render_drum(
+                &mut self.preview_drums[i],
+                i,
+                self.sr,
+                self.preview_lfo_offsets[i][ParameterId::Level as usize],
+            );
             dry += x;
             delay_in += x * delay_send;
             reverb_in += x * reverb_send;
         }
         for i in 0..3 {
-            let (x, ds, rs) = Self::render_synth(&mut self.synth[i], self.sr);
+            let (x, ds, rs) =
+                Self::render_synth(&mut self.synth[i], self.sr, &self.lfo_offsets[i + 3]);
             let gain = self.mute[i + 3].next_value();
             dry += x * gain;
             delay_in += x * ds * gain;
             reverb_in += x * rs * gain;
-            let (x, ds, rs) = Self::render_synth(&mut self.preview[i], self.sr);
+            let (x, ds, rs) = Self::render_synth(
+                &mut self.preview[i],
+                self.sr,
+                &self.preview_lfo_offsets[i + 3],
+            );
             dry += x;
             delay_in += x * ds;
             reverb_in += x * rs;
@@ -934,8 +1095,12 @@ fn render<T: Copy, F: Fn(f32) -> T>(
     }
 }
 
+fn modulated_percent(center: f32, offset: f32) -> f32 {
+    (center + offset).clamp(0.0, 100.0)
+}
+
 /// Deterministic, device-independent rendering used by tests and diagnostics.
-pub fn render_offline(project: &ProjectV2, sample_rate: u32, frames: usize) -> Vec<(f32, f32)> {
+pub fn render_offline(project: &ProjectV3, sample_rate: u32, frames: usize) -> Vec<(f32, f32)> {
     let status = Arc::new(AudioStatus::default());
     let mut renderer = Renderer::new(AudioProject::from_project(project), sample_rate, status);
     renderer.command(AudioCommand::PlayPause);
@@ -965,7 +1130,7 @@ mod tests {
     }
     #[test]
     fn snapshot_contains_all_steps_without_heap_backed_commands() {
-        let mut p = ProjectV2::new();
+        let mut p = ProjectV3::new();
         p.tracks[0].steps.resize(MAX_STEP_COUNT, None);
         let AudioCommand::ReplaceProject {
             project: s,
@@ -983,7 +1148,7 @@ mod tests {
 
     #[test]
     fn renderer_reports_independent_track_playheads() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.tracks[0].steps.resize(3, None);
         project.tracks[1].steps.resize(5, None);
         let status = Arc::new(AudioStatus::default());
@@ -1002,7 +1167,7 @@ mod tests {
     }
     #[test]
     fn offline_render_is_deterministic_and_finite() {
-        let mut p = ProjectV2::new();
+        let mut p = ProjectV3::new();
         p.tracks[0].steps[0] = Some(StepEvent::Trigger {
             locks: Default::default(),
         });
@@ -1024,7 +1189,7 @@ mod tests {
                 .sqrt()
         }
 
-        let mut dry_project = ProjectV2::new();
+        let mut dry_project = ProjectV3::new();
         dry_project.tracks[0].steps[0] = Some(StepEvent::Trigger {
             locks: Default::default(),
         });
@@ -1047,7 +1212,7 @@ mod tests {
     fn resume_triggers_the_next_step_immediately() {
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(
-            AudioProject::from_project(&ProjectV2::new()),
+            AudioProject::from_project(&ProjectV3::new()),
             48_000,
             status,
         );
@@ -1066,7 +1231,7 @@ mod tests {
 
     #[test]
     fn drum_mixer_lock_reverts_on_the_following_boundary() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.tracks[0].steps[0] = Some(StepEvent::Trigger {
             locks: ParameterLocks {
                 level: Some(Percent::ZERO),
@@ -1077,11 +1242,11 @@ mod tests {
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
         renderer.boundary();
         let locked = (0..40)
-            .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr).0)
+            .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0).0)
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
         renderer.boundary();
         let restored = (0..40)
-            .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr).0)
+            .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0).0)
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
         assert_eq!(locked, 0.0);
         assert!(restored > 0.0001);
@@ -1089,7 +1254,7 @@ mod tests {
 
     #[test]
     fn fader_snapshot_ramps_an_active_drum_mixer_value_over_thirty_ms() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.tracks[0].level = Percent::new(100).unwrap();
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
@@ -1104,7 +1269,7 @@ mod tests {
             ParameterSmoothing::Fader,
         ));
         let first = renderer.drums[0].level.next_value();
-        assert!(first > 0.0 && first < 1.0);
+        assert!(first > 0.0 && first < 100.0);
         for _ in 1..240 {
             renderer.drums[0].level.next_value();
         }
@@ -1113,7 +1278,7 @@ mod tests {
 
     #[test]
     fn synth_filter_mappings_match_the_specified_limits() {
-        let project = AudioProject::from_project(&ProjectV2::new());
+        let project = AudioProject::from_project(&ProjectV3::new());
         let mut voice = SynthVoice::new(48_000.0);
         let mut locks = ParameterLocks {
             cutoff: Percent::new(0),
@@ -1122,19 +1287,64 @@ mod tests {
         };
         Renderer::apply_synth_params(&project, 48_000.0, 3, locks, &mut voice, 240);
         for _ in 0..240 {
-            voice.cutoff.next_value();
-            voice.resonance.next_value();
+            voice.cutoff_percent.next_value();
+            voice.resonance_percent.next_value();
         }
-        assert!((voice.cutoff.next_value() - 20.0).abs() < 0.001);
-        assert!((voice.resonance.next_value() - 0.707).abs() < 0.001);
+        assert!(
+            (exp_map_f32(voice.cutoff_percent.next_value(), 20.0, 20_000.0) - 20.0).abs() < 0.001
+        );
+        assert!(
+            (0.707 + voice.resonance_percent.next_value() / 100.0 * (10.0 - 0.707) - 0.707).abs()
+                < 0.001
+        );
         locks.cutoff = Percent::new(100);
         locks.resonance = Percent::new(100);
         Renderer::apply_synth_params(&project, 48_000.0, 3, locks, &mut voice, 240);
         for _ in 0..240 {
-            voice.cutoff.next_value();
-            voice.resonance.next_value();
+            voice.cutoff_percent.next_value();
+            voice.resonance_percent.next_value();
         }
-        assert!((voice.cutoff.next_value() - 20_000.0).abs() < 0.01);
-        assert!((voice.resonance.next_value() - 10.0).abs() < 0.001);
+        assert!(
+            (exp_map_f32(voice.cutoff_percent.next_value(), 20.0, 20_000.0) - 20_000.0).abs()
+                < 0.01
+        );
+        assert!(
+            (0.707 + voice.resonance_percent.next_value() / 100.0 * (10.0 - 0.707) - 10.0).abs()
+                < 0.001
+        );
+    }
+
+    #[test]
+    fn sequence_lfo_freezes_on_pause_and_resets_on_stop() {
+        let mut project = ProjectV3::new();
+        project.tracks[0].lfos.level = Some(crate::model::LfoConfig {
+            rate: crate::model::LfoRate::Free {
+                rate_percent: Percent::new(100).unwrap(),
+            },
+            depth: Percent::new(50).unwrap(),
+            ..Default::default()
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 1_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        for _ in 0..20 {
+            renderer.next();
+        }
+        let moving = renderer.lfo_offsets[0][ParameterId::Level as usize];
+        assert!(moving.abs() > 0.01);
+        renderer.command(AudioCommand::PlayPause);
+        for _ in 0..20 {
+            renderer.next();
+        }
+        assert_eq!(renderer.lfo_offsets[0][ParameterId::Level as usize], moving);
+        renderer.command(AudioCommand::Stop);
+        assert_eq!(renderer.lfo_offsets[0][ParameterId::Level as usize], 0.0);
+    }
+
+    #[test]
+    fn lfo_offsets_clamp_around_effective_values() {
+        assert_eq!(modulated_percent(90.0, 25.0), 100.0);
+        assert_eq!(modulated_percent(10.0, -25.0), 0.0);
+        assert_eq!(modulated_percent(40.0, 15.0), 55.0);
     }
 }

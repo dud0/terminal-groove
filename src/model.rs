@@ -25,6 +25,8 @@ pub enum ValidationError {
     Tie(usize, usize),
     #[error("tracks[{0}]: a sequence containing only ties is invalid")]
     AllTies(usize),
+    #[error("tracks[{0}].lfos: incompatible destination `{1}`")]
+    Lfo(usize, &'static str),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -160,6 +162,139 @@ impl fmt::Display for Scale {
 pub enum Waveform {
     Square,
     Saw,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LfoWaveform {
+    Sine,
+    Triangle,
+    Square,
+    Saw,
+    SampleAndHold,
+}
+
+impl LfoWaveform {
+    pub const ALL: [Self; 5] = [
+        Self::Sine,
+        Self::Triangle,
+        Self::Square,
+        Self::Saw,
+        Self::SampleAndHold,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LfoDivision {
+    FourBars,
+    TwoBars,
+    Bar,
+    Half,
+    QuarterDotted,
+    Quarter,
+    QuarterTriplet,
+    EighthDotted,
+    Eighth,
+    EighthTriplet,
+    Sixteenth,
+    SixteenthTriplet,
+    ThirtySecond,
+}
+
+impl LfoDivision {
+    pub const ALL: [Self; 13] = [
+        Self::FourBars,
+        Self::TwoBars,
+        Self::Bar,
+        Self::Half,
+        Self::QuarterDotted,
+        Self::Quarter,
+        Self::QuarterTriplet,
+        Self::EighthDotted,
+        Self::Eighth,
+        Self::EighthTriplet,
+        Self::Sixteenth,
+        Self::SixteenthTriplet,
+        Self::ThirtySecond,
+    ];
+
+    pub const fn beats(self) -> f32 {
+        match self {
+            Self::FourBars => 16.0,
+            Self::TwoBars => 8.0,
+            Self::Bar => 4.0,
+            Self::Half => 2.0,
+            Self::QuarterDotted => 1.5,
+            Self::Quarter => 1.0,
+            Self::QuarterTriplet => 2.0 / 3.0,
+            Self::EighthDotted => 0.75,
+            Self::Eighth => 0.5,
+            Self::EighthTriplet => 1.0 / 3.0,
+            Self::Sixteenth => 0.25,
+            Self::SixteenthTriplet => 1.0 / 6.0,
+            Self::ThirtySecond => 0.125,
+        }
+    }
+}
+
+impl fmt::Display for LfoDivision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            Self::FourBars => "4 bars",
+            Self::TwoBars => "2 bars",
+            Self::Bar => "1 bar",
+            Self::Half => "1/2",
+            Self::QuarterDotted => "1/4D",
+            Self::Quarter => "1/4",
+            Self::QuarterTriplet => "1/4T",
+            Self::EighthDotted => "1/8D",
+            Self::Eighth => "1/8",
+            Self::EighthTriplet => "1/8T",
+            Self::Sixteenth => "1/16",
+            Self::SixteenthTriplet => "1/16T",
+            Self::ThirtySecond => "1/32",
+        };
+        write!(f, "{text}")
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LfoRate {
+    Synced { division: LfoDivision },
+    Free { rate_percent: Percent },
+}
+
+impl LfoRate {
+    pub fn hz(self, tempo_bpm: u16) -> f32 {
+        match self {
+            Self::Synced { division } => tempo_bpm as f32 / (60.0 * division.beats()),
+            Self::Free { rate_percent } => 0.01 * 2000.0_f32.powf(rate_percent.normalized()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LfoConfig {
+    pub enabled: bool,
+    pub waveform: LfoWaveform,
+    pub rate: LfoRate,
+    pub depth: Percent,
+}
+
+impl Default for LfoConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            waveform: LfoWaveform::Sine,
+            rate: LfoRate::Synced {
+                division: LfoDivision::Quarter,
+            },
+            depth: Percent(10),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -326,6 +461,65 @@ pub struct ParameterLocks {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release: Option<Percent>,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LfoAssignments {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tone: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decay: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutoff: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resonance: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_envelope: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attack: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sustain: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release: Option<LfoConfig>,
+}
+
+impl LfoAssignments {
+    pub fn get(&self, parameter: ParameterId) -> Option<LfoConfig> {
+        match parameter {
+            ParameterId::Level => self.level,
+            ParameterId::Tone => self.tone,
+            ParameterId::Decay => self.decay,
+            ParameterId::Cutoff => self.cutoff,
+            ParameterId::Resonance => self.resonance,
+            ParameterId::FilterEnvelope => self.filter_envelope,
+            ParameterId::Attack => self.attack,
+            ParameterId::Sustain => self.sustain,
+            ParameterId::Release => self.release,
+            ParameterId::DelaySend | ParameterId::ReverbSend | ParameterId::Waveform => None,
+        }
+    }
+
+    pub fn set(&mut self, parameter: ParameterId, config: Option<LfoConfig>) -> bool {
+        let slot = match parameter {
+            ParameterId::Level => &mut self.level,
+            ParameterId::Tone => &mut self.tone,
+            ParameterId::Decay => &mut self.decay,
+            ParameterId::Cutoff => &mut self.cutoff,
+            ParameterId::Resonance => &mut self.resonance,
+            ParameterId::FilterEnvelope => &mut self.filter_envelope,
+            ParameterId::Attack => &mut self.attack,
+            ParameterId::Sustain => &mut self.sustain,
+            ParameterId::Release => &mut self.release,
+            ParameterId::DelaySend | ParameterId::ReverbSend | ParameterId::Waveform => {
+                return false;
+            }
+        };
+        *slot = config;
+        true
+    }
+}
 impl ParameterLocks {
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
@@ -371,6 +565,7 @@ pub struct Track {
     pub delay_send: Percent,
     pub reverb_send: Percent,
     pub instrument: Instrument,
+    pub lfos: LfoAssignments,
     pub steps: Vec<Step>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_degree: Option<u8>,
@@ -380,7 +575,7 @@ pub struct Track {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectV2 {
+pub struct ProjectV3 {
     pub format_version: u32,
     pub globals: Globals,
     pub tracks: Vec<Track>,
@@ -389,7 +584,7 @@ pub struct ProjectV2 {
 fn p(n: u8) -> Percent {
     Percent(n)
 }
-impl ProjectV2 {
+impl ProjectV3 {
     pub fn new() -> Self {
         let drum = |kind: TrackKind, name: &str, tone: u8, decay: u8| Track {
             kind,
@@ -402,6 +597,7 @@ impl ProjectV2 {
                 tone: p(tone),
                 decay: p(decay),
             }),
+            lfos: LfoAssignments::default(),
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: None,
             input_octave: None,
@@ -423,12 +619,13 @@ impl ProjectV2 {
                 sustain: p(70),
                 release: p(15),
             }),
+            lfos: LfoAssignments::default(),
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: Some(1),
             input_octave: Some(3),
         };
         Self {
-            format_version: 2,
+            format_version: 3,
             globals: Globals::default(),
             tracks: vec![
                 drum(TrackKind::Kick, "Kick", 50, 35),
@@ -441,7 +638,7 @@ impl ProjectV2 {
         }
     }
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 2 {
+        if self.format_version != 3 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -476,6 +673,7 @@ impl ProjectV2 {
             {
                 return Err(ValidationError::TrackOrder(ti, expected[ti].1));
             }
+            validate_lfos(ti, t)?;
             if let Some(d) = t.input_degree {
                 if !(1..=8).contains(&d) {
                     return Err(ValidationError::TrackOrder(ti, "valid input degree"));
@@ -526,7 +724,7 @@ impl ProjectV2 {
             .map(|m| 440.0 * 2.0_f32.powf((m as f32 - 69.0) / 12.0))
     }
 }
-impl Default for ProjectV2 {
+impl Default for ProjectV3 {
     fn default() -> Self {
         Self::new()
     }
@@ -558,6 +756,15 @@ fn validate_locks(
         None
     };
     bad.map_or(Ok(()), |name| Err(ValidationError::Lock(ti, si, name)))
+}
+
+fn validate_lfos(ti: usize, track: &Track) -> Result<(), ValidationError> {
+    for parameter in ParameterId::ALL {
+        if track.lfos.get(parameter).is_some() && !parameter.supports_lfo(track.kind) {
+            return Err(ValidationError::Lfo(ti, parameter.name()));
+        }
+    }
+    Ok(())
 }
 pub fn tie_source(steps: &[Step], at: usize) -> Option<usize> {
     if steps.is_empty() || at >= steps.len() {
@@ -646,6 +853,38 @@ impl ParameterId {
     pub const fn is_waveform(self) -> bool {
         matches!(self, Self::Waveform)
     }
+
+    pub const fn supports_lfo(self, kind: TrackKind) -> bool {
+        match self {
+            Self::Level => true,
+            Self::Tone => !matches!(kind, TrackKind::Synth),
+            Self::Decay => true,
+            Self::Cutoff
+            | Self::Resonance
+            | Self::FilterEnvelope
+            | Self::Attack
+            | Self::Sustain
+            | Self::Release => matches!(kind, TrackKind::Synth),
+            Self::DelaySend | Self::ReverbSend | Self::Waveform => false,
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Level => "level",
+            Self::DelaySend => "delay_send",
+            Self::ReverbSend => "reverb_send",
+            Self::Tone => "tone",
+            Self::Decay => "decay",
+            Self::Waveform => "waveform",
+            Self::Cutoff => "cutoff",
+            Self::Resonance => "resonance",
+            Self::FilterEnvelope => "filter_envelope",
+            Self::Attack => "attack",
+            Self::Sustain => "sustain",
+            Self::Release => "release",
+        }
+    }
 }
 
 impl FromStr for PitchClass {
@@ -660,11 +899,11 @@ mod tests {
     use super::*;
     #[test]
     fn default_valid() {
-        ProjectV2::new().validate().unwrap();
+        ProjectV3::new().validate().unwrap();
     }
     #[test]
     fn scale_and_frequency() {
-        let mut p = ProjectV2::new();
+        let mut p = ProjectV3::new();
         assert_eq!(p.note_midi(8, 3), Some(60));
         p.globals.key = PitchClass::A;
         assert!((p.note_frequency(1, 4).unwrap() - 440.0).abs() < 0.001);
@@ -691,7 +930,7 @@ mod tests {
     }
     #[test]
     fn variable_step_counts_and_wrapped_ties_validate() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.tracks[0].steps = vec![None; 1];
         project.tracks[1].steps = vec![None; MAX_STEP_COUNT];
         project.tracks[3].steps = vec![None; 3];
@@ -727,7 +966,7 @@ mod tests {
     }
     #[test]
     fn lock_compatibility_matches_track_kind() {
-        let mut drum = ProjectV2::new();
+        let mut drum = ProjectV3::new();
         drum.tracks[0].steps[0] = Some(StepEvent::Trigger {
             locks: ParameterLocks {
                 cutoff: Percent::new(50),
@@ -739,7 +978,7 @@ mod tests {
             Err(ValidationError::Lock(0, 0, "cutoff"))
         ));
 
-        let mut synth = ProjectV2::new();
+        let mut synth = ProjectV3::new();
         synth.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -757,7 +996,7 @@ mod tests {
     fn all_keys_map_degrees() {
         for key in PitchClass::ALL {
             for scale in [Scale::Major, Scale::NaturalMinor] {
-                let mut p = ProjectV2::new();
+                let mut p = ProjectV3::new();
                 p.globals.key = key;
                 p.globals.scale = scale;
                 for degree in 1..=8 {
@@ -766,5 +1005,46 @@ mod tests {
                 assert_eq!(p.note_midi(8, 3).unwrap() - p.note_midi(1, 3).unwrap(), 12)
             }
         }
+    }
+
+    #[test]
+    fn lfo_targets_and_rates_are_bounded_and_contextual() {
+        assert!(
+            (LfoRate::Free {
+                rate_percent: Percent::ZERO
+            }
+            .hz(120)
+                - 0.01)
+                .abs()
+                < 0.0001
+        );
+        assert!(
+            (LfoRate::Free {
+                rate_percent: Percent::new(100).unwrap(),
+            }
+            .hz(120)
+                - 20.0)
+                .abs()
+                < 0.001
+        );
+        assert!(
+            (LfoRate::Synced {
+                division: LfoDivision::Quarter
+            }
+            .hz(120)
+                - 2.0)
+                .abs()
+                < 0.001
+        );
+
+        let mut project = ProjectV3::new();
+        project.tracks[0].lfos.cutoff = Some(LfoConfig::default());
+        assert_eq!(project.validate(), Err(ValidationError::Lfo(0, "cutoff")));
+        project.tracks[0].lfos.cutoff = None;
+        project.tracks[3].lfos.tone = Some(LfoConfig::default());
+        assert_eq!(project.validate(), Err(ValidationError::Lfo(3, "tone")));
+        project.tracks[3].lfos.tone = None;
+        project.tracks[3].lfos.release = Some(LfoConfig::default());
+        project.validate().unwrap();
     }
 }

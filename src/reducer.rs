@@ -1,6 +1,6 @@
 use crate::model::{
-    MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterLocks, ParameterValue, Percent,
-    ProjectV2, StepEvent, TrackKind, Waveform, tie_source,
+    LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterLocks, ParameterValue,
+    Percent, ProjectV3, StepEvent, TrackKind, Waveform, tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -46,8 +46,8 @@ impl std::fmt::Display for EditError {
 
 #[derive(Clone)]
 struct Revision {
-    before: ProjectV2,
-    after: ProjectV2,
+    before: ProjectV3,
+    after: ProjectV3,
     coalesce: Option<CoalesceKey>,
     at: Instant,
 }
@@ -55,13 +55,13 @@ struct Revision {
 pub struct CoalesceKey(pub usize, pub usize, pub u8);
 
 pub struct Editor {
-    pub project: ProjectV2,
-    saved: ProjectV2,
+    pub project: ProjectV3,
+    saved: ProjectV3,
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
 }
 impl Editor {
-    pub fn new(project: ProjectV2) -> Self {
+    pub fn new(project: ProjectV3) -> Self {
         Self {
             saved: project.clone(),
             project,
@@ -80,7 +80,7 @@ impl Editor {
             revision.coalesce = None;
         }
     }
-    pub fn replace_loaded(&mut self, p: ProjectV2) {
+    pub fn replace_loaded(&mut self, p: ProjectV3) {
         self.project = p.clone();
         self.saved = p;
         self.undo.clear();
@@ -88,7 +88,7 @@ impl Editor {
     }
     pub fn edit<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
     where
-        F: FnOnce(&mut ProjectV2) -> Result<(), EditError>,
+        F: FnOnce(&mut ProjectV3) -> Result<(), EditError>,
     {
         let before = self.project.clone();
         f(&mut self.project)?;
@@ -366,6 +366,41 @@ impl Editor {
             None,
         )
     }
+
+    pub fn lfo(
+        &self,
+        track: usize,
+        parameter: ParameterId,
+    ) -> Result<Option<LfoConfig>, EditError> {
+        let track = self
+            .project
+            .tracks
+            .get(track)
+            .ok_or(EditError::InvalidTrack)?;
+        if !parameter.supports_lfo(track.kind) {
+            return Err(EditError::InvalidParameter);
+        }
+        Ok(track.lfos.get(parameter))
+    }
+
+    pub fn set_lfo(
+        &mut self,
+        track: usize,
+        parameter: ParameterId,
+        config: Option<LfoConfig>,
+        key: Option<CoalesceKey>,
+    ) -> Result<bool, EditError> {
+        self.edit(key, move |project| {
+            let track = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if !parameter.supports_lfo(track.kind) || !track.lfos.set(parameter, config) {
+                return Err(EditError::InvalidParameter);
+            }
+            Ok(())
+        })
+    }
 }
 
 fn track_parameter(
@@ -553,7 +588,7 @@ mod tests {
     use super::*;
     #[test]
     fn undo_dirty_redo() {
-        let mut e = Editor::new(ProjectV2::new());
+        let mut e = Editor::new(ProjectV3::new());
         e.toggle_event(0, 0).unwrap();
         assert!(e.is_dirty());
         assert!(e.undo());
@@ -563,7 +598,7 @@ mod tests {
     }
     #[test]
     fn edit_invalidates_redo() {
-        let mut e = Editor::new(ProjectV2::new());
+        let mut e = Editor::new(ProjectV3::new());
         e.toggle_event(0, 0).unwrap();
         e.undo();
         e.toggle_event(0, 1).unwrap();
@@ -571,7 +606,7 @@ mod tests {
     }
     #[test]
     fn tie_cleanup_is_atomic() {
-        let mut e = Editor::new(ProjectV2::new());
+        let mut e = Editor::new(ProjectV3::new());
         e.set_note(3, 0, 1).unwrap();
         e.toggle_tie(3, 1).unwrap();
         e.toggle_tie(3, 2).unwrap();
@@ -591,7 +626,7 @@ mod tests {
 
     #[test]
     fn edits_all_track_parameter_kinds() {
-        let mut e = Editor::new(ProjectV2::new());
+        let mut e = Editor::new(ProjectV3::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
 
         e.set_parameter(0, 0, Scope::Base, ParameterId::Level, p(61), None)
@@ -643,7 +678,7 @@ mod tests {
 
     #[test]
     fn lock_edits_inherit_and_clear_one_parameter() {
-        let mut e = Editor::new(ProjectV2::new());
+        let mut e = Editor::new(ProjectV3::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
         e.toggle_event(0, 0).unwrap();
         assert_eq!(
@@ -685,7 +720,7 @@ mod tests {
 
     #[test]
     fn incompatible_and_empty_locks_are_rejected() {
-        let mut e = Editor::new(ProjectV2::new());
+        let mut e = Editor::new(ProjectV3::new());
         let value = ParameterValue::Percent(Percent::new(10).unwrap());
         assert_eq!(
             e.set_parameter(0, 0, Scope::Lock, ParameterId::Cutoff, value, None),
@@ -704,7 +739,7 @@ mod tests {
 
     #[test]
     fn resize_cleans_wrapped_ties_and_undo_restores_them() {
-        let mut e = Editor::new(ProjectV2::new());
+        let mut e = Editor::new(ProjectV3::new());
         e.set_track_length(3, 4, None).unwrap();
         e.set_note(3, 3, 1).unwrap();
         e.toggle_tie(3, 0).unwrap();
@@ -725,7 +760,7 @@ mod tests {
 
     #[test]
     fn duplicate_track_copies_events_locks_and_is_one_undo_step() {
-        let mut e = Editor::new(ProjectV2::new());
+        let mut e = Editor::new(ProjectV3::new());
         e.set_track_length(3, 4, None).unwrap();
         e.set_note(3, 3, 2).unwrap();
         e.set_parameter(
@@ -749,11 +784,32 @@ mod tests {
 
     #[test]
     fn duplicate_rejects_lengths_above_32_without_state_change() {
-        let mut e = Editor::new(ProjectV2::new());
+        let mut e = Editor::new(ProjectV3::new());
         e.set_track_length(0, 33, None).unwrap();
         e.mark_saved();
         assert_eq!(e.duplicate_track(0), Err(EditError::CannotDouble));
         assert_eq!(e.project.tracks[0].steps.len(), 33);
         assert!(!e.is_dirty());
+    }
+
+    #[test]
+    fn lfo_assignment_is_validated_and_undoable() {
+        let mut editor = Editor::new(ProjectV3::new());
+        let config = LfoConfig::default();
+        editor
+            .set_lfo(3, ParameterId::Cutoff, Some(config), None)
+            .unwrap();
+        assert_eq!(editor.lfo(3, ParameterId::Cutoff), Ok(Some(config)));
+        assert!(editor.is_dirty());
+        assert!(editor.undo());
+        assert_eq!(editor.lfo(3, ParameterId::Cutoff), Ok(None));
+        assert_eq!(
+            editor.set_lfo(3, ParameterId::Waveform, Some(config), None),
+            Err(EditError::InvalidParameter)
+        );
+        assert_eq!(
+            editor.set_lfo(0, ParameterId::Cutoff, Some(config), None),
+            Err(EditError::InvalidParameter)
+        );
     }
 }

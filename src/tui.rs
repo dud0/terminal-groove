@@ -1,9 +1,9 @@
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
     model::{
-        DelayDivision, GlobalParameterId, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent,
-        ProjectV2, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
-        Waveform,
+        DelayDivision, GlobalParameterId, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
+        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, ProjectV3, STEP_BANK_SIZE,
+        STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind, Waveform,
     },
     persistence,
     reducer::{Editor, Scope},
@@ -50,6 +50,10 @@ impl Drop for TerminalGuard {
 enum Mode {
     Navigation,
     ParameterEdit(ParameterId),
+    LfoEdit {
+        parameter: ParameterId,
+        field: LfoField,
+    },
     GlobalEdit(GlobalParameterId),
     TempoInput(String),
     TrackLengthInput(String),
@@ -58,6 +62,26 @@ enum Mode {
     Error(String),
     Help,
     QuitConfirm,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LfoField {
+    Enabled,
+    Waveform,
+    RateMode,
+    Rate,
+    Depth,
+}
+
+impl LfoField {
+    const ALL: [Self; 5] = [
+        Self::Enabled,
+        Self::Waveform,
+        Self::RateMode,
+        Self::Rate,
+        Self::Depth,
+    ];
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FileAction {
@@ -107,7 +131,7 @@ impl FaderAnimation {
     }
 }
 impl App {
-    pub fn new(project: ProjectV2, path: Option<PathBuf>) -> Self {
+    pub fn new(project: ProjectV3, path: Option<PathBuf>) -> Self {
         Self {
             editor: Editor::new(project),
             row: 0,
@@ -187,7 +211,7 @@ impl App {
     }
 }
 
-pub fn run(project: ProjectV2, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
+pub fn run(project: ProjectV3, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
     let old_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -301,6 +325,9 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
             }
             _ => {}
         }
+        return Ok(());
+    }
+    if matches!(a.mode, Mode::LfoEdit { .. }) && handle_lfo_key(a, audio, k)? {
         return Ok(());
     }
     if matches!(a.mode, Mode::ParameterEdit(_)) && handle_parameter_key(a, audio, k)? {
@@ -709,6 +736,10 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
             a.status = format!("Scope {}", scope_name(a.scope));
             Ok(true)
         }
+        KeyCode::Char('L') => {
+            open_lfo_editor(a, audio, parameter);
+            Ok(true)
+        }
         KeyCode::Char(' ') | KeyCode::Char('.') => Ok(false),
         KeyCode::Char(c) => {
             if let Some(next) = parameter_shortcut(a.editor.project.tracks[track].kind, c) {
@@ -754,6 +785,182 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
             Ok(true)
         }
         _ => Ok(true),
+    }
+}
+
+fn open_lfo_editor(a: &mut App, audio: &mut Audio, parameter: ParameterId) {
+    let track = a.row.saturating_sub(1);
+    let kind = a.editor.project.tracks[track].kind;
+    if !parameter.supports_lfo(kind) {
+        a.status = format!("{} cannot be LFO-modulated", parameter_name(parameter));
+        return;
+    }
+    let existing = a.editor.lfo(track, parameter).ok().flatten();
+    if existing.is_none() {
+        if audio.available_commands() == 0 {
+            a.status = "Audio command queue full; LFO edit rejected".into();
+            return;
+        }
+        match a
+            .editor
+            .set_lfo(track, parameter, Some(LfoConfig::default()), None)
+        {
+            Ok(true) if sync_project(a, audio) => {}
+            Ok(true) | Ok(false) => return,
+            Err(error) => {
+                a.status = error.to_string();
+                return;
+            }
+        }
+    }
+    a.editor.end_coalescing();
+    a.mode = Mode::LfoEdit {
+        parameter,
+        field: LfoField::Enabled,
+    };
+    a.status = format!("Editing track LFO for {}", parameter_name(parameter));
+}
+
+fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+    let Mode::LfoEdit { parameter, field } = a.mode.clone() else {
+        return Ok(false);
+    };
+    let track = a.row.saturating_sub(1);
+    match k.code {
+        KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o') => return Ok(false),
+        KeyCode::Char('?') => {
+            a.mode = Mode::Help;
+            return Ok(true);
+        }
+        KeyCode::Enter | KeyCode::Esc | KeyCode::Char('L') => {
+            a.editor.end_coalescing();
+            a.mode = Mode::ParameterEdit(parameter);
+            a.status = "LFO editing finished".into();
+            return Ok(true);
+        }
+        KeyCode::Backspace | KeyCode::Delete => {
+            if set_lfo_config(a, audio, parameter, None, None) {
+                a.mode = Mode::ParameterEdit(parameter);
+                a.status = format!("Removed {} LFO", parameter_name(parameter));
+            }
+            return Ok(true);
+        }
+        KeyCode::Left | KeyCode::Right => {
+            a.editor.end_coalescing();
+            let index = LfoField::ALL
+                .iter()
+                .position(|value| *value == field)
+                .unwrap();
+            let next = if k.code == KeyCode::Right {
+                (index + 1) % LfoField::ALL.len()
+            } else {
+                (index + LfoField::ALL.len() - 1) % LfoField::ALL.len()
+            };
+            a.mode = Mode::LfoEdit {
+                parameter,
+                field: LfoField::ALL[next],
+            };
+            return Ok(true);
+        }
+        _ => {}
+    }
+
+    let Some(mut config) = a.editor.lfo(track, parameter).ok().flatten() else {
+        a.mode = Mode::ParameterEdit(parameter);
+        return Ok(true);
+    };
+    let direction = if k.code == KeyCode::Down { -1 } else { 1 };
+    let percent_delta: i16 = if k.modifiers.contains(KeyModifiers::SHIFT) {
+        (direction * 10) as i16
+    } else {
+        direction as i16
+    };
+    let changed = match k.code {
+        KeyCode::Up | KeyCode::Down => {
+            match field {
+                LfoField::Enabled => config.enabled = !config.enabled,
+                LfoField::Waveform => {
+                    let index = LfoWaveform::ALL
+                        .iter()
+                        .position(|waveform| *waveform == config.waveform)
+                        .unwrap();
+                    let len = LfoWaveform::ALL.len() as i32;
+                    config.waveform =
+                        LfoWaveform::ALL[(index as i32 + direction).rem_euclid(len) as usize];
+                }
+                LfoField::RateMode => {
+                    config.rate = match config.rate {
+                        LfoRate::Synced { .. } => LfoRate::Free {
+                            rate_percent: Percent::new(50).unwrap(),
+                        },
+                        LfoRate::Free { .. } => LfoRate::Synced {
+                            division: LfoDivision::Quarter,
+                        },
+                    };
+                }
+                LfoField::Rate => match &mut config.rate {
+                    LfoRate::Synced { division } => {
+                        let index = LfoDivision::ALL
+                            .iter()
+                            .position(|value| value == division)
+                            .unwrap();
+                        let len = LfoDivision::ALL.len() as i32;
+                        *division =
+                            LfoDivision::ALL[(index as i32 + direction).rem_euclid(len) as usize];
+                    }
+                    LfoRate::Free { rate_percent } => {
+                        *rate_percent = rate_percent.saturating_add(percent_delta);
+                    }
+                },
+                LfoField::Depth => config.depth = config.depth.saturating_add(percent_delta),
+            }
+            true
+        }
+        KeyCode::Char(c) => crate::reducer::percentage_key(c).is_some_and(|value| match field {
+            LfoField::Depth => {
+                config.depth = value;
+                true
+            }
+            LfoField::Rate => match &mut config.rate {
+                LfoRate::Free { rate_percent } => {
+                    *rate_percent = value;
+                    true
+                }
+                LfoRate::Synced { .. } => false,
+            },
+            _ => false,
+        }),
+        _ => false,
+    };
+    if changed {
+        let key =
+            crate::reducer::CoalesceKey(track, usize::MAX, parameter as u8 ^ ((field as u8) << 4));
+        if set_lfo_config(a, audio, parameter, Some(config), Some(key)) {
+            a.status = format!("{} LFO updated", parameter_name(parameter));
+        }
+    }
+    Ok(true)
+}
+
+fn set_lfo_config(
+    a: &mut App,
+    audio: &mut Audio,
+    parameter: ParameterId,
+    config: Option<LfoConfig>,
+    key: Option<crate::reducer::CoalesceKey>,
+) -> bool {
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; LFO edit rejected".into();
+        return false;
+    }
+    let track = a.row - 1;
+    match a.editor.set_lfo(track, parameter, config, key) {
+        Ok(true) => sync_project(a, audio),
+        Ok(false) => true,
+        Err(error) => {
+            a.status = error.to_string();
+            false
+        }
     }
 }
 
@@ -1324,6 +1531,9 @@ fn mode_name(mode: &Mode) -> String {
         Mode::ParameterEdit(parameter) => {
             format!("Parameter edit ({})", parameter_name(*parameter))
         }
+        Mode::LfoEdit { parameter, .. } => {
+            format!("Track LFO edit ({})", parameter_name(*parameter))
+        }
         Mode::GlobalEdit(id) => format!("Global edit ({})", global_name(*id)),
         Mode::TempoInput(_) => "Tempo numeric input".into(),
         Mode::TrackLengthInput(_) => "Track length input".into(),
@@ -1843,7 +2053,13 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
             width: slot_width,
             height: bank.height,
         };
-        let active = matches!(a.mode, Mode::ParameterEdit(parameter) if parameter == descriptor.id);
+        let active = matches!(
+            a.mode,
+            Mode::ParameterEdit(parameter) if parameter == descriptor.id
+        ) || matches!(
+            a.mode,
+            Mode::LfoEdit { parameter, .. } if parameter == descriptor.id
+        );
         let group_color = descriptor.group.color();
         let block = if active {
             Block::default()
@@ -1980,6 +2196,16 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
             Paragraph::new(Line::from(vec![
                 Span::styled(format!("[{}]", descriptor.shortcut), shortcut_style),
                 Span::styled(origin_label, origin_style),
+                Span::styled(
+                    if t.lfos.get(descriptor.id).is_some() {
+                        "~"
+                    } else {
+                        ""
+                    },
+                    Style::default()
+                        .fg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]))
             .alignment(Alignment::Center),
             shortcut_area,
@@ -2191,10 +2417,13 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         let track = a.row - 1;
         render_parameter_bank(f, chunks[3], a, track);
     }
-    let lock_editing = a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_));
+    let lock_editing =
+        a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_) | Mode::LfoEdit { .. });
     let mode_line = if lock_editing {
         let parameter = match a.mode {
-            Mode::ParameterEdit(parameter) => parameter_name(parameter),
+            Mode::ParameterEdit(parameter) | Mode::LfoEdit { parameter, .. } => {
+                parameter_name(parameter)
+            }
             _ => unreachable!(),
         };
         Line::from(vec![
@@ -2214,9 +2443,13 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     if let Mode::ParameterEdit(parameter) = a.mode {
         let track = a.row.saturating_sub(1);
         status_lines.push(Line::from(format!(
-            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [0-9] set percentage  [Enter/Esc] finish  [Del] clear lock",
+            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [0-9] set percentage  [Shift+L] LFO  [Enter/Esc] finish  [Del] clear lock",
             physical_parameter_readout(a, track, a.step, parameter)
         )));
+    } else if matches!(a.mode, Mode::LfoEdit { .. }) {
+        status_lines.push(Line::from(
+            "Track-level LFO · [←/→] field  [↑/↓] adjust  [0-9] set rate/depth  [Del] remove  [Enter/Esc] finish",
+        ));
     } else if matches!(a.mode, Mode::GlobalEdit(_) | Mode::TempoInput(_)) {
         status_lines.push(Line::from(
             "[↑/↓] adjust  [←/→] select another control  [Enter/Esc] finish",
@@ -2232,7 +2465,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Enter, Delete.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nDrums: t tone, d decay. Synth: 1-8 note, [ ] input octave, t tie, w waveform, c cutoff, R resonance, f envelope, a/d/s/r ADSR.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Enter, Delete.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nDrums: t tone, d decay. Synth: 1-8 note, [ ] input octave, t tie, w waveform, c cutoff, R resonance, f envelope, a/d/s/r ADSR.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -2244,6 +2477,17 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         )
     }
     match &a.mode {
+        Mode::LfoEdit { parameter, field } => {
+            let track = a.row - 1;
+            if let Ok(Some(config)) = a.editor.lfo(track, *parameter) {
+                popup(
+                    f,
+                    area,
+                    &format!("Track LFO · {}", parameter_name(*parameter)),
+                    &lfo_popup_text(config, *field, a.editor.project.globals.tempo_bpm),
+                );
+            }
+        }
         Mode::TempoInput(input) => popup(
             f,
             area,
@@ -2295,6 +2539,45 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         _ => {}
     }
 }
+
+fn lfo_popup_text(config: LfoConfig, selected: LfoField, tempo_bpm: u16) -> String {
+    let marker = |field| if selected == field { ">" } else { " " };
+    let (mode, rate) = match config.rate {
+        LfoRate::Synced { division } => ("Synced", division.to_string()),
+        LfoRate::Free { rate_percent } => (
+            "Free",
+            format!(
+                "{}% ({:.3} Hz)",
+                rate_percent.get(),
+                config.rate.hz(tempo_bpm)
+            ),
+        ),
+    };
+    format!(
+        "{} Enabled   {}\n{} Waveform  {}\n{} Rate mode {}\n{} Rate      {}\n{} Depth     ±{} percentage points\n\n[←/→] select  [↑/↓] adjust  [Shift+↑/↓] ±10\n[0-9] set free rate/depth  [Del] remove  [Enter/Esc] close",
+        marker(LfoField::Enabled),
+        if config.enabled { "ON" } else { "OFF" },
+        marker(LfoField::Waveform),
+        lfo_waveform_name(config.waveform),
+        marker(LfoField::RateMode),
+        mode,
+        marker(LfoField::Rate),
+        rate,
+        marker(LfoField::Depth),
+        config.depth.get(),
+    )
+}
+
+fn lfo_waveform_name(waveform: LfoWaveform) -> &'static str {
+    match waveform {
+        LfoWaveform::Sine => "Sine",
+        LfoWaveform::Triangle => "Triangle",
+        LfoWaveform::Square => "Square",
+        LfoWaveform::Saw => "Saw",
+        LfoWaveform::SampleAndHold => "Sample & hold",
+    }
+}
+
 fn popup(f: &mut ratatui::Frame, area: Rect, title: &str, text: &str) {
     let r = Rect {
         x: area.x + 10,
@@ -2375,7 +2658,7 @@ mod tests {
 
     #[test]
     fn parameter_editor_arrows_cycle_visible_controls_and_wrap() {
-        let mut app = App::new(ProjectV2::new(), None);
+        let mut app = App::new(ProjectV3::new(), None);
         app.row = 1;
         app.step = 4;
         app.scope = Scope::Lock;
@@ -2442,7 +2725,7 @@ mod tests {
     #[test]
     fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
         let backend = TestBackend::new(120, 34);
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.tracks[3].input_octave = Some(4);
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
@@ -2485,15 +2768,50 @@ mod tests {
 
     #[test]
     fn small_terminal_replaces_main_layout() {
-        let app = App::new(ProjectV2::new(), None);
+        let app = App::new(ProjectV3::new(), None);
         let screen = rendered(&app, 119, 34);
         assert!(screen.contains("terminal-groove needs 120x34"));
         assert!(screen.contains("Current: 119x34"));
     }
 
     #[test]
+    fn lfo_modal_and_fader_badge_render_at_minimum_size() {
+        let mut project = ProjectV3::new();
+        project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
+        let mut app = App::new(project, None);
+        app.row = 4;
+        app.mode = Mode::LfoEdit {
+            parameter: ParameterId::Cutoff,
+            field: LfoField::Depth,
+        };
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("Track LFO · cutoff"));
+        assert!(screen.contains("Waveform  Sine"));
+        assert!(screen.contains("> Depth"));
+        assert!(screen.contains("~"));
+    }
+
+    #[test]
+    fn lfo_popup_reports_synced_and_physical_free_rates() {
+        let synced = lfo_popup_text(LfoConfig::default(), LfoField::Rate, 120);
+        assert!(synced.contains("Synced"));
+        assert!(synced.contains("1/4"));
+        let free = lfo_popup_text(
+            LfoConfig {
+                rate: LfoRate::Free {
+                    rate_percent: Percent::new(100).unwrap(),
+                },
+                ..Default::default()
+            },
+            LfoField::Rate,
+            120,
+        );
+        assert!(free.contains("20.000 Hz"));
+    }
+
+    #[test]
     fn lock_scope_labels_explicit_and_inherited_values() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -2513,7 +2831,7 @@ mod tests {
 
     #[test]
     fn lock_values_remain_displayed_after_track_navigation() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.tracks[0].steps[0] = Some(StepEvent::Trigger {
             locks: crate::model::ParameterLocks {
                 level: Some(Percent::new(25).unwrap()),
@@ -2534,7 +2852,7 @@ mod tests {
 
     #[test]
     fn active_parameter_gets_a_visible_fader_outline_and_physical_readout() {
-        let mut app = App::new(ProjectV2::new(), None);
+        let mut app = App::new(ProjectV3::new(), None);
         app.row = 4;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
@@ -2544,7 +2862,7 @@ mod tests {
 
     #[test]
     fn lock_parameter_editing_has_a_prominent_banner() {
-        let mut app = App::new(ProjectV2::new(), None);
+        let mut app = App::new(ProjectV3::new(), None);
         app.row = 4;
         app.scope = Scope::Lock;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
@@ -2569,7 +2887,7 @@ mod tests {
 
     #[test]
     fn base_parameter_editing_does_not_show_lock_editing_banner() {
-        let mut app = App::new(ProjectV2::new(), None);
+        let mut app = App::new(ProjectV3::new(), None);
         app.row = 4;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
@@ -2578,7 +2896,7 @@ mod tests {
 
     #[test]
     fn locked_badge_uses_a_distinct_color() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -2607,7 +2925,7 @@ mod tests {
 
     #[test]
     fn global_cards_show_all_local_shortcuts() {
-        let app = App::new(ProjectV2::new(), None);
+        let app = App::new(ProjectV3::new(), None);
         let screen = rendered(&app, 120, 34);
         for key in ["[t]", "[y]", "[f]", "[r]", "[k]", "[s]"] {
             assert!(screen.contains(key), "missing {key}");
@@ -2665,6 +2983,13 @@ mod tests {
         assert_eq!(mode_name(&Mode::Error("bad".into())), "Error dialog");
         assert_eq!(mode_name(&Mode::Help), "Help");
         assert_eq!(
+            mode_name(&Mode::LfoEdit {
+                parameter: ParameterId::Cutoff,
+                field: LfoField::Depth,
+            }),
+            "Track LFO edit (cutoff)"
+        );
+        assert_eq!(
             mode_name(&Mode::TrackLengthInput(String::new())),
             "Track length input"
         );
@@ -2683,7 +3008,7 @@ mod tests {
 
     #[test]
     fn vertical_navigation_follows_physical_rows_without_track_cursors() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.tracks[0].steps.resize(64, None);
         project.tracks[1].steps.resize(20, None);
         project.tracks[2].steps.resize(40, None);
@@ -2726,7 +3051,7 @@ mod tests {
 
     #[test]
     fn bank_navigation_handles_partial_banks() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.tracks[0].steps.resize(20, None);
         let mut app = App::new(project, None);
         app.row = 1;
@@ -2739,7 +3064,7 @@ mod tests {
 
     #[test]
     fn sixty_four_step_track_renders_as_two_compact_rows_with_scroll_hint() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         for track in &mut project.tracks {
             track.steps.resize(64, None);
         }

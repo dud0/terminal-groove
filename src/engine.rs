@@ -1,9 +1,9 @@
-use crate::model::{DelayDivision, ProjectV2, StepEvent, TRACK_COUNT, TrackKind, tie_source};
+use crate::model::{DelayDivision, ProjectV3, StepEvent, TRACK_COUNT, TrackKind, tie_source};
 
 #[derive(Clone, Debug)]
 pub enum EngineCommand {
-    ReplaceProject(ProjectV2),
-    SetProject(ProjectV2),
+    ReplaceProject(ProjectV3),
+    SetProject(ProjectV3),
     PlayPause,
     Stop,
 }
@@ -81,7 +81,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
     }
 }
 
-pub fn effective_level(project: &ProjectV2, track: usize, step: usize) -> f32 {
+pub fn effective_level(project: &ProjectV3, track: usize, step: usize) -> f32 {
     let t = &project.tracks[track];
     if t.muted {
         return 0.0;
@@ -98,7 +98,7 @@ pub fn delay_samples(d: DelayDivision, bpm: u16, sr: u32) -> usize {
 }
 
 pub struct Engine {
-    pub project: ProjectV2,
+    pub project: ProjectV3,
     pub transport: Transport,
     pub playheads: [Option<usize>; TRACK_COUNT],
     clock: StepClock,
@@ -106,7 +106,7 @@ pub struct Engine {
     voices: [bool; TRACK_COUNT],
 }
 impl Engine {
-    pub fn new(project: ProjectV2, sr: u32) -> Self {
+    pub fn new(project: ProjectV3, sr: u32) -> Self {
         let bpm = project.globals.tempo_bpm;
         Self {
             project,
@@ -195,7 +195,7 @@ mod tests {
     }
     #[test]
     fn lock_restores() {
-        let mut p = ProjectV2::new();
+        let mut p = ProjectV3::new();
         p.tracks[0].steps[0] = Some(StepEvent::Trigger {
             locks: crate::model::ParameterLocks {
                 level: crate::model::Percent::new(20),
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn tracks_cycle_at_independent_lengths_and_live_resize_keeps_position() {
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         project.globals.tempo_bpm = 60;
         project.tracks[0].steps.resize(3, None);
         project.tracks[1].steps.resize(5, None);

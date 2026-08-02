@@ -4,7 +4,7 @@
     "tempo_bpm": 110,
     "delay_division": "eighth",
     "delay_feedback": 30,
-    "reverb_time_seconds": 2.5,
+    "reverb_time_seconds": 2.9,
     "key": "C",
     "scale": "major"
   },
@@ -100,9 +100,34 @@
       },
       "steps": [
         null,
+        null,
         {
           "type": "trigger",
           "locks": {}
+        },
+        {
+          "type": "trigger",
+          "locks": {
+            "decay": 80
+          }
+        },
+        null,
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        null,
+        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
+        {
+          "type": "trigger",
+          "locks": {
+            "decay": 60
+          }
         },
         null,
         null,
@@ -111,21 +136,6 @@
           "type": "trigger",
           "locks": {}
         },
-        null,
-        null,
-        null,
-        {
-          "type": "trigger",
-          "locks": {}
-        },
-        null,
-        null,
-        null,
-        {
-          "type": "trigger",
-          "locks": {}
-        },
-        null,
         null
       ]
     },
@@ -134,17 +144,17 @@
       "name": "Synth 1",
       "level": 50,
       "muted": false,
-      "delay_send": 0,
-      "reverb_send": 0,
+      "delay_send": 1,
+      "reverb_send": 20,
       "instrument": {
         "waveform": "square",
-        "cutoff": 20,
-        "resonance": 20,
+        "cutoff": 10,
+        "resonance": 40,
         "filter_envelope": 100,
         "attack": 20,
         "decay": 60,
-        "sustain": 70,
-        "release": 15
+        "sustain": 60,
+        "release": 50
       },
       "steps": [
         {
@@ -171,8 +181,8 @@
         null,
         {
           "type": "note",
-          "degree": 4,
-          "octave": 1,
+          "degree": 2,
+          "octave": 2,
           "locks": {}
         },
         null,
@@ -196,7 +206,7 @@
         null
       ],
       "input_degree": 2,
-      "input_octave": 1
+      "input_octave": 2
     },
     {
       "kind": "synth",

@@ -24,4 +24,4 @@ cargo build --release
 Run with `cargo run --release`, optionally passing a project path and `--audio-device <exact-name>`. Use `--list-audio-devices` to discover output names. The terminal must be at least 120 columns by 34 rows for the full fader layout.
 
 Projects are strict, human-readable `.groove.json` files. A supplied name is never modified automatically.
-The current schema uses `format_version: 2`; earlier format-v1 project files are rejected without migration.
+The current strict schema uses `format_version: 3`; earlier project versions are rejected without migration. Eligible parameters can each have an independent track-level LFO, opened from the parameter editor with `Shift+L`.

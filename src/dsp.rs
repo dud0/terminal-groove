@@ -1,10 +1,104 @@
 use std::f32::consts::PI;
 
+use crate::model::{LfoConfig, LfoWaveform};
+
 pub fn exp_map(percent: u8, min: f32, max: f32) -> f32 {
     if percent == 0 {
         min
     } else {
         min * (max / min).powf(percent as f32 / 100.0)
+    }
+}
+
+pub fn exp_map_f32(percent: f32, min: f32, max: f32) -> f32 {
+    min * (max / min).powf(percent.clamp(0.0, 100.0) / 100.0)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Lfo {
+    phase: f32,
+    held: f32,
+    smoothed: f32,
+    rng: u32,
+    seed: u32,
+    active: bool,
+}
+
+impl Lfo {
+    pub fn new(seed: u32) -> Self {
+        let seed = seed.max(1);
+        Self {
+            phase: 0.0,
+            held: 0.0,
+            smoothed: 0.0,
+            rng: seed,
+            seed,
+            active: false,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.phase = 0.0;
+        self.smoothed = 0.0;
+        self.rng = self.seed;
+        self.held = 0.0;
+        self.active = false;
+    }
+
+    pub fn disable(&mut self) {
+        self.active = false;
+        self.smoothed = 0.0;
+    }
+
+    pub fn value(&self) -> f32 {
+        self.smoothed
+    }
+
+    pub fn next(&mut self, config: Option<LfoConfig>, tempo_bpm: u16, sample_rate: f32) -> f32 {
+        let Some(config) = config.filter(|config| config.enabled) else {
+            self.disable();
+            return 0.0;
+        };
+        if !self.active {
+            self.phase = 0.0;
+            self.smoothed = 0.0;
+            self.rng = self.seed;
+            self.held = self.random_bipolar();
+            self.active = true;
+        }
+        let raw = match config.waveform {
+            LfoWaveform::Sine => (std::f32::consts::TAU * self.phase).sin(),
+            LfoWaveform::Triangle => (2.0 / PI) * (std::f32::consts::TAU * self.phase).sin().asin(),
+            LfoWaveform::Square => {
+                if self.phase < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            LfoWaveform::Saw => self.phase * 2.0 - 1.0,
+            LfoWaveform::SampleAndHold => self.held,
+        };
+        let smoothing = 1.0 - (-1.0 / (sample_rate * 0.005).max(1.0)).exp();
+        self.smoothed += (raw - self.smoothed) * smoothing;
+        let increment = config.rate.hz(tempo_bpm) / sample_rate;
+        self.phase += increment.max(0.0);
+        if self.phase >= 1.0 {
+            self.phase = self.phase.fract();
+            if config.waveform == LfoWaveform::SampleAndHold {
+                self.held = self.random_bipolar();
+            }
+        }
+        self.smoothed
+    }
+
+    fn random_bipolar(&mut self) -> f32 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.rng = x;
+        x as i32 as f32 / i32::MAX as f32
     }
 }
 
@@ -90,10 +184,10 @@ pub enum EnvStage {
 pub struct Adsr {
     pub stage: EnvStage,
     value: f32,
-    attack: Smoother,
-    decay: Smoother,
-    sustain: Smoother,
-    release: Smoother,
+    attack_percent: Smoother,
+    decay_percent: Smoother,
+    sustain_percent: Smoother,
+    release_percent: Smoother,
     sr: f32,
 }
 impl Adsr {
@@ -101,18 +195,18 @@ impl Adsr {
         Self {
             stage: EnvStage::Idle,
             value: 0.0,
-            attack: Smoother::new(0.0),
-            decay: Smoother::new(0.1),
-            sustain: Smoother::new(0.7),
-            release: Smoother::new(0.1),
+            attack_percent: Smoother::new(0.0),
+            decay_percent: Smoother::new(25.0),
+            sustain_percent: Smoother::new(70.0),
+            release_percent: Smoother::new(15.0),
             sr,
         }
     }
-    pub fn configure(&mut self, a: f32, d: f32, s: f32, r: f32, samples: u32) {
-        self.attack.set(a, samples);
-        self.decay.set(d, samples);
-        self.sustain.set(s, samples);
-        self.release.set(r, samples);
+    pub fn configure_percent(&mut self, a: u8, d: u8, s: u8, r: u8, samples: u32) {
+        self.attack_percent.set(a as f32, samples);
+        self.decay_percent.set(d as f32, samples);
+        self.sustain_percent.set(s as f32, samples);
+        self.release_percent.set(r as f32, samples);
     }
     pub fn gate_on(&mut self) {
         self.stage = EnvStage::Attack
@@ -123,10 +217,29 @@ impl Adsr {
         }
     }
     pub fn next_sample(&mut self) -> f32 {
-        let attack = self.attack.next_value();
-        let decay = self.decay.next_value();
-        let sustain = self.sustain.next_value();
-        let release = self.release.next_value();
+        self.next_sample_modulated(0.0, 0.0, 0.0, 0.0)
+    }
+
+    pub fn next_sample_modulated(
+        &mut self,
+        attack_offset: f32,
+        decay_offset: f32,
+        sustain_offset: f32,
+        release_offset: f32,
+    ) -> f32 {
+        let attack_percent = (self.attack_percent.next_value() + attack_offset).clamp(0.0, 100.0);
+        let decay_percent = (self.decay_percent.next_value() + decay_offset).clamp(0.0, 100.0);
+        let sustain =
+            (self.sustain_percent.next_value() + sustain_offset).clamp(0.0, 100.0) / 100.0;
+        let release_percent =
+            (self.release_percent.next_value() + release_offset).clamp(0.0, 100.0);
+        let attack = if attack_percent == 0.0 {
+            0.0
+        } else {
+            exp_map_f32(attack_percent, 0.001, 2.0)
+        };
+        let decay = exp_map_f32(decay_percent, 0.005, 3.0);
+        let release = exp_map_f32(release_percent, 0.005, 5.0);
         match self.stage {
             EnvStage::Idle => {}
             EnvStage::Attack => {
@@ -620,6 +733,55 @@ mod tests {
                 let (l, r) = reverb.process(input, input);
                 assert!(l.is_finite() && r.is_finite());
                 assert!(l.abs() <= 1.0 && r.abs() <= 1.0);
+            }
+        }
+    }
+
+    #[test]
+    fn lfo_rate_phase_reset_and_randomness_are_deterministic() {
+        use crate::model::{LfoRate, Percent};
+
+        let config = LfoConfig {
+            rate: LfoRate::Free {
+                rate_percent: Percent::new(100).unwrap(),
+            },
+            depth: Percent::new(100).unwrap(),
+            ..Default::default()
+        };
+        let mut lfo = Lfo::new(7);
+        for _ in 0..50 {
+            assert!(lfo.next(Some(config), 120, 1_000.0).is_finite());
+        }
+        assert!(lfo.phase.min(1.0 - lfo.phase) < 0.0001, "{}", lfo.phase);
+        lfo.reset();
+        assert_eq!(lfo.phase, 0.0);
+        assert_eq!(lfo.value(), 0.0);
+
+        let random = LfoConfig {
+            waveform: LfoWaveform::SampleAndHold,
+            ..config
+        };
+        let mut first = Lfo::new(99);
+        let mut second = Lfo::new(99);
+        for _ in 0..200 {
+            assert_eq!(
+                first.next(Some(random), 120, 1_000.0),
+                second.next(Some(random), 120, 1_000.0)
+            );
+        }
+    }
+
+    #[test]
+    fn all_lfo_waveforms_remain_bipolar_and_finite() {
+        for waveform in LfoWaveform::ALL {
+            let config = LfoConfig {
+                waveform,
+                ..Default::default()
+            };
+            let mut lfo = Lfo::new(123);
+            for _ in 0..48_000 {
+                let value = lfo.next(Some(config), 240, 48_000.0);
+                assert!(value.is_finite() && (-1.0..=1.0).contains(&value));
             }
         }
     }

@@ -1,4 +1,4 @@
-use crate::model::ProjectV2;
+use crate::model::ProjectV3;
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
@@ -33,13 +33,26 @@ pub enum ProjectIoError {
     },
 }
 
-pub fn load(path: &Path) -> Result<ProjectV2, ProjectIoError> {
+pub fn load(path: &Path) -> Result<ProjectV3, ProjectIoError> {
     let bytes = fs::read(path).map_err(|source| ProjectIoError::Read {
         path: path.into(),
         source,
     })?;
-    let project: ProjectV2 =
+    let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|source| ProjectIoError::Json {
+            path: path.into(),
+            source,
+        })?;
+    if let Some(version) = value.get("format_version").and_then(|value| value.as_u64())
+        && version != 3
+    {
+        return Err(ProjectIoError::Validation {
+            path: path.into(),
+            source: crate::model::ValidationError::Version(version as u32),
+        });
+    }
+    let project: ProjectV3 =
+        serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
         })?;
@@ -52,7 +65,7 @@ pub fn load(path: &Path) -> Result<ProjectV2, ProjectIoError> {
     Ok(project)
 }
 
-pub fn save_atomic(path: &Path, project: &ProjectV2) -> Result<(), ProjectIoError> {
+pub fn save_atomic(path: &Path, project: &ProjectV3) -> Result<(), ProjectIoError> {
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
@@ -94,7 +107,7 @@ mod tests {
     fn round_trip_and_newline() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("x.groove.json");
-        let p = ProjectV2::new();
+        let p = ProjectV3::new();
         save_atomic(&f, &p).unwrap();
         assert_eq!(load(&f).unwrap(), p);
         assert!(fs::read(&f).unwrap().ends_with(b"\n"));
@@ -112,20 +125,21 @@ mod tests {
     }
     #[test]
     fn default_schema_uses_required_names() {
-        let value = serde_json::to_value(ProjectV2::new()).unwrap();
-        assert_eq!(value["format_version"], 2);
+        let value = serde_json::to_value(ProjectV3::new()).unwrap();
+        assert_eq!(value["format_version"], 3);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["tracks"].as_array().unwrap().len(), 6);
         assert_eq!(value["tracks"][0]["name"], "Kick");
+        assert_eq!(value["tracks"][0]["lfos"], serde_json::json!({}));
         assert!(value["tracks"][0].get("input_degree").is_none());
     }
 
     #[test]
-    fn mixed_track_lengths_round_trip_and_format_v1_is_rejected() {
+    fn mixed_track_lengths_round_trip_and_format_v2_is_rejected() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("mixed.groove.json");
-        let mut project = ProjectV2::new();
+        let mut project = ProjectV3::new();
         for (track, length) in project.tracks.iter_mut().zip([1, 7, 16, 31, 32, 64]) {
             track.steps.resize(length, None);
         }
@@ -133,14 +147,53 @@ mod tests {
         assert_eq!(load(&f).unwrap(), project);
 
         let mut value = serde_json::to_value(project).unwrap();
-        value["format_version"] = 1.into();
+        value["format_version"] = 2.into();
         fs::write(&f, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
             load(&f),
             Err(ProjectIoError::Validation {
-                source: crate::model::ValidationError::Version(1),
+                source: crate::model::ValidationError::Version(2),
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn lfo_schema_round_trips_synced_and_free_rates() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("lfos.groove.json");
+        let mut project = ProjectV3::new();
+        project.tracks[0].lfos.tone = Some(crate::model::LfoConfig {
+            waveform: crate::model::LfoWaveform::SampleAndHold,
+            rate: crate::model::LfoRate::Free {
+                rate_percent: crate::model::Percent::new(75).unwrap(),
+            },
+            depth: crate::model::Percent::new(40).unwrap(),
+            enabled: true,
+        });
+        project.tracks[3].lfos.cutoff = Some(crate::model::LfoConfig::default());
+        save_atomic(&path, &project).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded, project);
+        let json = fs::read_to_string(path).unwrap();
+        assert!(json.contains("sample_and_hold"));
+        assert!(json.contains("rate_percent"));
+        assert!(json.contains("quarter"));
+    }
+
+    #[test]
+    fn lfo_schema_rejects_unknown_and_missing_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invalid-lfo.groove.json");
+        let mut value = serde_json::to_value(ProjectV3::new()).unwrap();
+        value["tracks"][0]["lfos"]["wat"] =
+            serde_json::to_value(crate::model::LfoConfig::default()).unwrap();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+
+        let mut value = serde_json::to_value(ProjectV3::new()).unwrap();
+        value["tracks"][0].as_object_mut().unwrap().remove("lfos");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
     }
 }
