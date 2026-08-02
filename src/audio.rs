@@ -215,51 +215,6 @@ pub fn open(requested: Option<&str>, project: &ProjectV5) -> Result<Audio> {
     })
 }
 
-fn overlay_locks(target: &mut ParameterLocks, overlay: ParameterLocks) {
-    if overlay.level.is_some() {
-        target.level = overlay.level;
-    }
-    if overlay.delay_send.is_some() {
-        target.delay_send = overlay.delay_send;
-    }
-    if overlay.reverb_send.is_some() {
-        target.reverb_send = overlay.reverb_send;
-    }
-    if overlay.tune.is_some() {
-        target.tune = overlay.tune;
-    }
-    if overlay.tone.is_some() {
-        target.tone = overlay.tone;
-    }
-    if overlay.snappy.is_some() {
-        target.snappy = overlay.snappy;
-    }
-    if overlay.decay.is_some() {
-        target.decay = overlay.decay;
-    }
-    if overlay.waveform.is_some() {
-        target.waveform = overlay.waveform;
-    }
-    if overlay.cutoff.is_some() {
-        target.cutoff = overlay.cutoff;
-    }
-    if overlay.resonance.is_some() {
-        target.resonance = overlay.resonance;
-    }
-    if overlay.filter_envelope.is_some() {
-        target.filter_envelope = overlay.filter_envelope;
-    }
-    if overlay.attack.is_some() {
-        target.attack = overlay.attack;
-    }
-    if overlay.sustain.is_some() {
-        target.sustain = overlay.sustain;
-    }
-    if overlay.release.is_some() {
-        target.release = overlay.release;
-    }
-}
-
 fn mark_failed(status: &AudioStatus) {
     status.failed.store(true, Ordering::Release);
     status.running.store(false, Ordering::Release);
@@ -730,11 +685,11 @@ impl Renderer {
                     let mut i = (source + 1) % t.step_count as usize;
                     while i != step {
                         if let Some(StepEvent::Tie { locks: tie_locks }) = t.steps[i] {
-                            overlay_locks(&mut locks, tie_locks);
+                            locks.overlay(tie_locks);
                         }
                         i = (i + 1) % t.step_count as usize;
                     }
-                    overlay_locks(&mut locks, *event.locks());
+                    locks.overlay(*event.locks());
                 }
             }
         }

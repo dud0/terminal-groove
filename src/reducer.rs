@@ -1,6 +1,6 @@
 use crate::model::{
-    Instrument, LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterLocks,
-    ParameterValue, Percent, ProjectV5, StepEvent, TrackKind, Waveform, tie_source,
+    LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterValue, Percent, ProjectV5,
+    StepEvent, TrackKind, Waveform, tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -365,7 +365,10 @@ impl Editor {
                 return Err(EditError::InvalidParameter);
             }
             match scope {
-                Scope::Base => set_track_parameter(t, parameter, value),
+                Scope::Base => t
+                    .set_parameter(parameter, value)
+                    .then_some(())
+                    .ok_or(EditError::InvalidParameter),
                 Scope::Lock => {
                     let event = t
                         .steps
@@ -373,7 +376,11 @@ impl Editor {
                         .ok_or(EditError::InvalidStep)?
                         .as_mut()
                         .ok_or(EditError::EmptyLock)?;
-                    set_lock_parameter(event.locks_mut(), parameter, value)
+                    event
+                        .locks_mut()
+                        .set(parameter, value)
+                        .then_some(())
+                        .ok_or(EditError::InvalidParameter)
                 }
             }
         })
@@ -394,7 +401,7 @@ impl Editor {
         if !parameter.is_valid_for(t.kind) {
             return Err(EditError::InvalidParameter);
         }
-        let base = track_parameter(t, parameter)?;
+        let base = t.parameter(parameter).ok_or(EditError::InvalidParameter)?;
         if scope == Scope::Base {
             return Ok(base);
         }
@@ -404,7 +411,7 @@ impl Editor {
             .ok_or(EditError::InvalidStep)?
             .as_ref()
             .ok_or(EditError::EmptyLock)?;
-        Ok(lock_parameter(event.locks(), parameter).unwrap_or(base))
+        Ok(event.locks().get(parameter).unwrap_or(base))
     }
 
     pub fn clear_parameter_lock(
@@ -424,7 +431,7 @@ impl Editor {
                 .ok_or(EditError::InvalidStep)?
                 .as_mut()
                 .ok_or(EditError::EmptyLock)?;
-            clear_lock_parameter(event.locks_mut(), parameter);
+            event.locks_mut().clear(parameter);
             Ok(())
         })
     }
@@ -483,203 +490,6 @@ impl Editor {
             }
             Ok(())
         })
-    }
-}
-
-fn track_parameter(
-    t: &crate::model::Track,
-    parameter: ParameterId,
-) -> Result<ParameterValue, EditError> {
-    let value = match parameter {
-        ParameterId::Level => ParameterValue::Percent(t.level),
-        ParameterId::DelaySend => ParameterValue::Percent(t.delay_send),
-        ParameterId::ReverbSend => ParameterValue::Percent(t.reverb_send),
-        ParameterId::Tune => match t.instrument {
-            Instrument::Kick(p) => ParameterValue::Percent(p.tune),
-            Instrument::Snare(p) => ParameterValue::Percent(p.tune),
-            Instrument::Hat(p) => ParameterValue::Percent(p.tune),
-            _ => return Err(EditError::InvalidParameter),
-        },
-        ParameterId::Tone => match t.instrument {
-            Instrument::Snare(p) => ParameterValue::Percent(p.tone),
-            _ => return Err(EditError::InvalidParameter),
-        },
-        ParameterId::Snappy => match t.instrument {
-            Instrument::Snare(p) => ParameterValue::Percent(p.snappy),
-            _ => return Err(EditError::InvalidParameter),
-        },
-        ParameterId::Decay => match t.instrument {
-            Instrument::Kick(p) => ParameterValue::Percent(p.decay),
-            Instrument::Hat(p) => ParameterValue::Percent(p.decay),
-            Instrument::Bass(p) => ParameterValue::Percent(p.decay),
-            Instrument::Synth(p) => ParameterValue::Percent(p.decay),
-            _ => return Err(EditError::InvalidParameter),
-        },
-        ParameterId::Waveform => match t.instrument {
-            Instrument::Bass(p) => ParameterValue::Waveform(p.waveform),
-            Instrument::Synth(p) => ParameterValue::Waveform(p.waveform),
-            _ => return Err(EditError::InvalidParameter),
-        },
-        ParameterId::Cutoff => match t.instrument {
-            Instrument::Bass(p) => ParameterValue::Percent(p.cutoff),
-            Instrument::Synth(p) => ParameterValue::Percent(p.cutoff),
-            _ => return Err(EditError::InvalidParameter),
-        },
-        ParameterId::Resonance => match t.instrument {
-            Instrument::Bass(p) => ParameterValue::Percent(p.resonance),
-            Instrument::Synth(p) => ParameterValue::Percent(p.resonance),
-            _ => return Err(EditError::InvalidParameter),
-        },
-        ParameterId::FilterEnvelope => match t.instrument {
-            Instrument::Bass(p) => ParameterValue::Percent(p.filter_envelope),
-            Instrument::Synth(p) => ParameterValue::Percent(p.filter_envelope),
-            _ => return Err(EditError::InvalidParameter),
-        },
-        ParameterId::Attack => match t.instrument {
-            Instrument::Kick(p) => ParameterValue::Percent(p.attack),
-            Instrument::Synth(p) => ParameterValue::Percent(p.attack),
-            _ => return Err(EditError::InvalidParameter),
-        },
-        ParameterId::Sustain => match t.instrument {
-            Instrument::Synth(p) => ParameterValue::Percent(p.sustain),
-            _ => return Err(EditError::InvalidParameter),
-        },
-        ParameterId::Release => match t.instrument {
-            Instrument::Synth(p) => ParameterValue::Percent(p.release),
-            _ => return Err(EditError::InvalidParameter),
-        },
-    };
-    Ok(value)
-}
-
-fn set_track_parameter(
-    t: &mut crate::model::Track,
-    parameter: ParameterId,
-    value: ParameterValue,
-) -> Result<(), EditError> {
-    match (parameter, value) {
-        (ParameterId::Level, ParameterValue::Percent(v)) => t.level = v,
-        (ParameterId::DelaySend, ParameterValue::Percent(v)) => t.delay_send = v,
-        (ParameterId::ReverbSend, ParameterValue::Percent(v)) => t.reverb_send = v,
-        (ParameterId::Tune, ParameterValue::Percent(v)) => match &mut t.instrument {
-            Instrument::Kick(p) => p.tune = v,
-            Instrument::Snare(p) => p.tune = v,
-            Instrument::Hat(p) => p.tune = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        (ParameterId::Tone, ParameterValue::Percent(v)) => match &mut t.instrument {
-            Instrument::Snare(p) => p.tone = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        (ParameterId::Snappy, ParameterValue::Percent(v)) => match &mut t.instrument {
-            Instrument::Snare(p) => p.snappy = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        (ParameterId::Decay, ParameterValue::Percent(v)) => match &mut t.instrument {
-            Instrument::Kick(p) => p.decay = v,
-            Instrument::Hat(p) => p.decay = v,
-            Instrument::Bass(p) => p.decay = v,
-            Instrument::Synth(p) => p.decay = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        (ParameterId::Waveform, ParameterValue::Waveform(v)) => match &mut t.instrument {
-            Instrument::Bass(p) => p.waveform = v,
-            Instrument::Synth(p) => p.waveform = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        (ParameterId::Cutoff, ParameterValue::Percent(v)) => match &mut t.instrument {
-            Instrument::Bass(p) => p.cutoff = v,
-            Instrument::Synth(p) => p.cutoff = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        (ParameterId::Resonance, ParameterValue::Percent(v)) => match &mut t.instrument {
-            Instrument::Bass(p) => p.resonance = v,
-            Instrument::Synth(p) => p.resonance = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        (ParameterId::FilterEnvelope, ParameterValue::Percent(v)) => match &mut t.instrument {
-            Instrument::Bass(p) => p.filter_envelope = v,
-            Instrument::Synth(p) => p.filter_envelope = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        (ParameterId::Attack, ParameterValue::Percent(v)) => match &mut t.instrument {
-            Instrument::Kick(p) => p.attack = v,
-            Instrument::Synth(p) => p.attack = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        (ParameterId::Sustain, ParameterValue::Percent(v)) => match &mut t.instrument {
-            Instrument::Synth(p) => p.sustain = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        (ParameterId::Release, ParameterValue::Percent(v)) => match &mut t.instrument {
-            Instrument::Synth(p) => p.release = v,
-            _ => return Err(EditError::InvalidParameter),
-        },
-        _ => return Err(EditError::InvalidParameter),
-    }
-    Ok(())
-}
-
-fn lock_parameter(l: &ParameterLocks, parameter: ParameterId) -> Option<ParameterValue> {
-    match parameter {
-        ParameterId::Level => l.level.map(ParameterValue::Percent),
-        ParameterId::DelaySend => l.delay_send.map(ParameterValue::Percent),
-        ParameterId::ReverbSend => l.reverb_send.map(ParameterValue::Percent),
-        ParameterId::Tune => l.tune.map(ParameterValue::Percent),
-        ParameterId::Tone => l.tone.map(ParameterValue::Percent),
-        ParameterId::Snappy => l.snappy.map(ParameterValue::Percent),
-        ParameterId::Decay => l.decay.map(ParameterValue::Percent),
-        ParameterId::Waveform => l.waveform.map(ParameterValue::Waveform),
-        ParameterId::Cutoff => l.cutoff.map(ParameterValue::Percent),
-        ParameterId::Resonance => l.resonance.map(ParameterValue::Percent),
-        ParameterId::FilterEnvelope => l.filter_envelope.map(ParameterValue::Percent),
-        ParameterId::Attack => l.attack.map(ParameterValue::Percent),
-        ParameterId::Sustain => l.sustain.map(ParameterValue::Percent),
-        ParameterId::Release => l.release.map(ParameterValue::Percent),
-    }
-}
-
-fn set_lock_parameter(
-    l: &mut ParameterLocks,
-    parameter: ParameterId,
-    value: ParameterValue,
-) -> Result<(), EditError> {
-    match (parameter, value) {
-        (ParameterId::Level, ParameterValue::Percent(v)) => l.level = Some(v),
-        (ParameterId::DelaySend, ParameterValue::Percent(v)) => l.delay_send = Some(v),
-        (ParameterId::ReverbSend, ParameterValue::Percent(v)) => l.reverb_send = Some(v),
-        (ParameterId::Tune, ParameterValue::Percent(v)) => l.tune = Some(v),
-        (ParameterId::Tone, ParameterValue::Percent(v)) => l.tone = Some(v),
-        (ParameterId::Snappy, ParameterValue::Percent(v)) => l.snappy = Some(v),
-        (ParameterId::Decay, ParameterValue::Percent(v)) => l.decay = Some(v),
-        (ParameterId::Waveform, ParameterValue::Waveform(v)) => l.waveform = Some(v),
-        (ParameterId::Cutoff, ParameterValue::Percent(v)) => l.cutoff = Some(v),
-        (ParameterId::Resonance, ParameterValue::Percent(v)) => l.resonance = Some(v),
-        (ParameterId::FilterEnvelope, ParameterValue::Percent(v)) => l.filter_envelope = Some(v),
-        (ParameterId::Attack, ParameterValue::Percent(v)) => l.attack = Some(v),
-        (ParameterId::Sustain, ParameterValue::Percent(v)) => l.sustain = Some(v),
-        (ParameterId::Release, ParameterValue::Percent(v)) => l.release = Some(v),
-        _ => return Err(EditError::InvalidParameter),
-    }
-    Ok(())
-}
-
-fn clear_lock_parameter(l: &mut ParameterLocks, parameter: ParameterId) {
-    match parameter {
-        ParameterId::Level => l.level = None,
-        ParameterId::DelaySend => l.delay_send = None,
-        ParameterId::ReverbSend => l.reverb_send = None,
-        ParameterId::Tune => l.tune = None,
-        ParameterId::Tone => l.tone = None,
-        ParameterId::Snappy => l.snappy = None,
-        ParameterId::Decay => l.decay = None,
-        ParameterId::Waveform => l.waveform = None,
-        ParameterId::Cutoff => l.cutoff = None,
-        ParameterId::Resonance => l.resonance = None,
-        ParameterId::FilterEnvelope => l.filter_envelope = None,
-        ParameterId::Attack => l.attack = None,
-        ParameterId::Sustain => l.sustain = None,
-        ParameterId::Release => l.release = None,
     }
 }
 fn clear_with_ties(t: &mut crate::model::Track, step: usize) {

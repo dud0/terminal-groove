@@ -417,7 +417,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         KeyCode::Backspace | KeyCode::Delete if a.row > 0 => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.clear(track, step)) {
-                sync_track(a, audio, track)
+                sync_project(a, audio);
             }
         }
         KeyCode::Char('p') if a.row > 0 => {
@@ -448,13 +448,13 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         KeyCode::Char('A') if a.row > 0 => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.toggle_accent(track, step)) {
-                sync_step(a, audio, track, step);
+                sync_project(a, audio);
             }
         }
         KeyCode::Char('G') if a.row > 0 => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.toggle_slide(track, step)) {
-                sync_step(a, audio, track, step);
+                sync_project(a, audio);
             }
         }
         KeyCode::Char(c) if a.row == 0 => {
@@ -485,7 +485,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         KeyCode::Char('t') if a.row > 3 => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.toggle_tie(track, step)) {
-                sync_track(a, audio, track)
+                sync_project(a, audio);
             }
         }
         KeyCode::Char(c @ '1'..='8') if a.row > 3 => {
@@ -841,7 +841,7 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
             }
             match a.editor.clear_parameter_lock(track, a.step, parameter) {
                 Ok(true) => {
-                    sync_step(a, audio, track, a.step);
+                    sync_project(a, audio);
                     a.mode = Mode::Navigation;
                 }
                 Ok(false) => {
@@ -871,7 +871,7 @@ fn open_lfo_editor(a: &mut App, audio: &mut Audio, parameter: ParameterId) {
     let track = a.row.saturating_sub(1);
     let kind = a.editor.project.tracks[track].kind;
     if !parameter.supports_lfo(kind) {
-        a.status = format!("{} cannot be LFO-modulated", parameter_name(parameter));
+        a.status = format!("{} cannot be LFO-modulated", parameter.display_name());
         return;
     }
     let existing = a.editor.lfo(track, parameter).ok().flatten();
@@ -897,7 +897,7 @@ fn open_lfo_editor(a: &mut App, audio: &mut Audio, parameter: ParameterId) {
         parameter,
         field: LfoField::Enabled,
     };
-    a.status = format!("Editing track LFO for {}", parameter_name(parameter));
+    a.status = format!("Editing track LFO for {}", parameter.display_name());
 }
 
 fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
@@ -920,7 +920,7 @@ fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
         KeyCode::Backspace | KeyCode::Delete => {
             if set_lfo_config(a, audio, parameter, None, None) {
                 a.mode = Mode::ParameterEdit(parameter);
-                a.status = format!("Removed {} LFO", parameter_name(parameter));
+                a.status = format!("Removed {} LFO", parameter.display_name());
             }
             return Ok(true);
         }
@@ -1019,7 +1019,7 @@ fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
         let key =
             crate::reducer::CoalesceKey(track, usize::MAX, parameter as u8 ^ ((field as u8) << 4));
         if set_lfo_config(a, audio, parameter, Some(config), Some(key)) {
-            a.status = format!("{} LFO updated", parameter_name(parameter));
+            a.status = format!("{} LFO updated", parameter.display_name());
         }
     }
     Ok(true)
@@ -1056,31 +1056,15 @@ fn set_lfo_config(
 }
 
 fn parameter_shortcut(kind: TrackKind, c: char) -> Option<ParameterId> {
-    match (kind, c) {
-        (_, 'v') => Some(ParameterId::Level),
-        (_, 'y') => Some(ParameterId::DelaySend),
-        (_, 'b') => Some(ParameterId::ReverbSend),
-        (TrackKind::Kick | TrackKind::Snare | TrackKind::Hat, 'u') => Some(ParameterId::Tune),
-        (TrackKind::Snare, 't') => Some(ParameterId::Tone),
-        (TrackKind::Snare, 's') => Some(ParameterId::Snappy),
-        (TrackKind::Kick | TrackKind::Hat, 'd') => Some(ParameterId::Decay),
-        (TrackKind::Kick, 'a') => Some(ParameterId::Attack),
-        (TrackKind::Bass | TrackKind::Synth, 'w') => Some(ParameterId::Waveform),
-        (TrackKind::Bass | TrackKind::Synth, 'c') => Some(ParameterId::Cutoff),
-        (TrackKind::Bass | TrackKind::Synth, 'R') => Some(ParameterId::Resonance),
-        (TrackKind::Bass | TrackKind::Synth, 'f') => Some(ParameterId::FilterEnvelope),
-        (TrackKind::Bass, 'd') => Some(ParameterId::Decay),
-        (TrackKind::Synth, 'a') => Some(ParameterId::Attack),
-        (TrackKind::Synth, 'd') => Some(ParameterId::Decay),
-        (TrackKind::Synth, 's') => Some(ParameterId::Sustain),
-        (TrackKind::Synth, 'r') => Some(ParameterId::Release),
-        _ => None,
-    }
+    parameter_descriptors(kind)
+        .iter()
+        .find(|descriptor| descriptor.shortcut.starts_with(c))
+        .map(|descriptor| descriptor.id)
 }
 
 fn enter_parameter_edit(a: &mut App, parameter: ParameterId) {
     a.mode = Mode::ParameterEdit(parameter);
-    a.status = format!("Editing {}", parameter_name(parameter));
+    a.status = format!("Editing {}", parameter.display_name());
 }
 
 fn switch_parameter_editor(a: &mut App, parameter: ParameterId) {
@@ -1143,14 +1127,14 @@ fn set_parameter(
         .set_parameter(track, step, a.scope, parameter, value, key)
     {
         Ok(true) => {
-            let synced = sync_parameter_change(a, audio, track, step, direct_entry);
+            let synced = sync_project_with_smoothing(a, audio, direct_entry);
             if synced {
                 if let (Some(from), ParameterValue::Percent(to)) = (previous, value) {
                     a.start_fader_animation(track, step, parameter, from, to);
                 }
             }
             if synced && keep_editing {
-                a.status = format!("{} set", parameter_name(parameter));
+                a.status = format!("{} set", parameter.display_name());
             }
             synced
         }
@@ -1193,44 +1177,10 @@ fn apply<F: FnOnce(&mut Editor) -> Result<bool, crate::reducer::EditError>>(
         }
     }
 }
-fn sync_step(a: &mut App, audio: &mut Audio, track: usize, step: usize) -> bool {
-    let _ = (track, step);
-    sync_project(a, audio)
-}
-fn sync_parameter_change(
-    a: &mut App,
-    audio: &mut Audio,
-    track: usize,
-    step: usize,
-    direct_entry: bool,
-) -> bool {
-    if a.scope == Scope::Base {
-        sync_track_parameters(a, audio, track, direct_entry)
-    } else {
-        sync_step_with_smoothing(a, audio, track, step, direct_entry)
-    }
-}
-fn sync_track_parameters(a: &mut App, audio: &mut Audio, track: usize, direct_entry: bool) -> bool {
-    let _ = track;
-    sync_project_with_smoothing(a, audio, direct_entry)
-}
-fn sync_track(a: &mut App, audio: &mut Audio, track: usize) {
-    let _ = track;
-    sync_project(a, audio);
-}
 fn sync_project(a: &mut App, audio: &mut Audio) -> bool {
     sync_project_with_smoothing(a, audio, false)
 }
-fn sync_step_with_smoothing(
-    a: &mut App,
-    audio: &mut Audio,
-    track: usize,
-    step: usize,
-    direct_entry: bool,
-) -> bool {
-    let _ = (track, step);
-    sync_project_with_smoothing(a, audio, direct_entry)
-}
+
 fn sync_project_with_smoothing(a: &mut App, audio: &mut Audio, direct_entry: bool) -> bool {
     let smoothing = if direct_entry {
         ParameterSmoothing::Fader
@@ -1596,25 +1546,6 @@ fn refresh_audio_status(a: &mut App, audio: &Audio) {
     }
 }
 
-fn parameter_name(parameter: ParameterId) -> &'static str {
-    match parameter {
-        ParameterId::Level => "level",
-        ParameterId::DelaySend => "delay send",
-        ParameterId::ReverbSend => "reverb send",
-        ParameterId::Tune => "tune",
-        ParameterId::Tone => "tone",
-        ParameterId::Snappy => "snappy",
-        ParameterId::Decay => "decay",
-        ParameterId::Waveform => "waveform",
-        ParameterId::Cutoff => "cutoff",
-        ParameterId::Resonance => "resonance",
-        ParameterId::FilterEnvelope => "filter envelope",
-        ParameterId::Attack => "attack",
-        ParameterId::Sustain => "sustain",
-        ParameterId::Release => "release",
-    }
-}
-
 fn scope_name(scope: Scope) -> &'static str {
     match scope {
         Scope::Base => "BASE",
@@ -1626,10 +1557,10 @@ fn mode_name(mode: &Mode) -> String {
     match mode {
         Mode::Navigation => "Navigation".into(),
         Mode::ParameterEdit(parameter) => {
-            format!("Parameter edit ({})", parameter_name(*parameter))
+            format!("Parameter edit ({})", parameter.display_name())
         }
         Mode::LfoEdit { parameter, .. } => {
-            format!("Track LFO edit ({})", parameter_name(*parameter))
+            format!("Track LFO edit ({})", parameter.display_name())
         }
         Mode::GlobalEdit(id) => format!("Global edit ({})", global_name(*id)),
         Mode::TempoInput(_) => "Tempo numeric input".into(),
@@ -1960,23 +1891,7 @@ enum ValueOrigin {
 }
 
 fn lock_has_parameter(event: &StepEvent, parameter: ParameterId) -> bool {
-    let locks = event.locks();
-    match parameter {
-        ParameterId::Level => locks.level.is_some(),
-        ParameterId::DelaySend => locks.delay_send.is_some(),
-        ParameterId::ReverbSend => locks.reverb_send.is_some(),
-        ParameterId::Tune => locks.tune.is_some(),
-        ParameterId::Tone => locks.tone.is_some(),
-        ParameterId::Snappy => locks.snappy.is_some(),
-        ParameterId::Decay => locks.decay.is_some(),
-        ParameterId::Waveform => locks.waveform.is_some(),
-        ParameterId::Cutoff => locks.cutoff.is_some(),
-        ParameterId::Resonance => locks.resonance.is_some(),
-        ParameterId::FilterEnvelope => locks.filter_envelope.is_some(),
-        ParameterId::Attack => locks.attack.is_some(),
-        ParameterId::Sustain => locks.sustain.is_some(),
-        ParameterId::Release => locks.release.is_some(),
-    }
+    event.locks().get(parameter).is_some()
 }
 
 fn displayed_parameter(
@@ -2689,7 +2604,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     let mode_line = if lock_editing {
         let parameter = match a.mode {
             Mode::ParameterEdit(parameter) | Mode::LfoEdit { parameter, .. } => {
-                parameter_name(parameter)
+                parameter.display_name()
             }
             _ => unreachable!(),
         };
@@ -2819,7 +2734,7 @@ fn render_lfo_popup(
 ) {
     let popup_area = lfo_popup_rect(area);
     f.render_widget(Clear, popup_area);
-    let panel = Block::bordered().title(format!("Track LFO · {}", parameter_name(parameter)));
+    let panel = Block::bordered().title(format!("Track LFO · {}", parameter.display_name()));
     let inner = panel.inner(popup_area);
     f.render_widget(panel, popup_area);
 

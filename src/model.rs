@@ -563,6 +563,76 @@ impl ParameterLocks {
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
     }
+
+    pub fn get(&self, parameter: ParameterId) -> Option<ParameterValue> {
+        match parameter {
+            ParameterId::Level => self.level.map(ParameterValue::Percent),
+            ParameterId::DelaySend => self.delay_send.map(ParameterValue::Percent),
+            ParameterId::ReverbSend => self.reverb_send.map(ParameterValue::Percent),
+            ParameterId::Tune => self.tune.map(ParameterValue::Percent),
+            ParameterId::Tone => self.tone.map(ParameterValue::Percent),
+            ParameterId::Snappy => self.snappy.map(ParameterValue::Percent),
+            ParameterId::Decay => self.decay.map(ParameterValue::Percent),
+            ParameterId::Waveform => self.waveform.map(ParameterValue::Waveform),
+            ParameterId::Cutoff => self.cutoff.map(ParameterValue::Percent),
+            ParameterId::Resonance => self.resonance.map(ParameterValue::Percent),
+            ParameterId::FilterEnvelope => self.filter_envelope.map(ParameterValue::Percent),
+            ParameterId::Attack => self.attack.map(ParameterValue::Percent),
+            ParameterId::Sustain => self.sustain.map(ParameterValue::Percent),
+            ParameterId::Release => self.release.map(ParameterValue::Percent),
+        }
+    }
+
+    pub fn set(&mut self, parameter: ParameterId, value: ParameterValue) -> bool {
+        match (parameter, value) {
+            (ParameterId::Level, ParameterValue::Percent(v)) => self.level = Some(v),
+            (ParameterId::DelaySend, ParameterValue::Percent(v)) => self.delay_send = Some(v),
+            (ParameterId::ReverbSend, ParameterValue::Percent(v)) => self.reverb_send = Some(v),
+            (ParameterId::Tune, ParameterValue::Percent(v)) => self.tune = Some(v),
+            (ParameterId::Tone, ParameterValue::Percent(v)) => self.tone = Some(v),
+            (ParameterId::Snappy, ParameterValue::Percent(v)) => self.snappy = Some(v),
+            (ParameterId::Decay, ParameterValue::Percent(v)) => self.decay = Some(v),
+            (ParameterId::Waveform, ParameterValue::Waveform(v)) => self.waveform = Some(v),
+            (ParameterId::Cutoff, ParameterValue::Percent(v)) => self.cutoff = Some(v),
+            (ParameterId::Resonance, ParameterValue::Percent(v)) => self.resonance = Some(v),
+            (ParameterId::FilterEnvelope, ParameterValue::Percent(v)) => {
+                self.filter_envelope = Some(v)
+            }
+            (ParameterId::Attack, ParameterValue::Percent(v)) => self.attack = Some(v),
+            (ParameterId::Sustain, ParameterValue::Percent(v)) => self.sustain = Some(v),
+            (ParameterId::Release, ParameterValue::Percent(v)) => self.release = Some(v),
+            _ => return false,
+        }
+        true
+    }
+
+    pub fn clear(&mut self, parameter: ParameterId) {
+        match parameter {
+            ParameterId::Level => self.level = None,
+            ParameterId::DelaySend => self.delay_send = None,
+            ParameterId::ReverbSend => self.reverb_send = None,
+            ParameterId::Tune => self.tune = None,
+            ParameterId::Tone => self.tone = None,
+            ParameterId::Snappy => self.snappy = None,
+            ParameterId::Decay => self.decay = None,
+            ParameterId::Waveform => self.waveform = None,
+            ParameterId::Cutoff => self.cutoff = None,
+            ParameterId::Resonance => self.resonance = None,
+            ParameterId::FilterEnvelope => self.filter_envelope = None,
+            ParameterId::Attack => self.attack = None,
+            ParameterId::Sustain => self.sustain = None,
+            ParameterId::Release => self.release = None,
+        }
+    }
+
+    pub fn overlay(&mut self, overlay: Self) {
+        for parameter in ParameterId::ALL {
+            if let Some(value) = overlay.get(parameter) {
+                let set = self.set(parameter, value);
+                debug_assert!(set);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -876,24 +946,8 @@ fn validate_locks(
     kind: TrackKind,
     l: &ParameterLocks,
 ) -> Result<(), ValidationError> {
-    let present = [
-        (ParameterId::Level, l.level.is_some()),
-        (ParameterId::DelaySend, l.delay_send.is_some()),
-        (ParameterId::ReverbSend, l.reverb_send.is_some()),
-        (ParameterId::Tune, l.tune.is_some()),
-        (ParameterId::Tone, l.tone.is_some()),
-        (ParameterId::Snappy, l.snappy.is_some()),
-        (ParameterId::Decay, l.decay.is_some()),
-        (ParameterId::Waveform, l.waveform.is_some()),
-        (ParameterId::Cutoff, l.cutoff.is_some()),
-        (ParameterId::Resonance, l.resonance.is_some()),
-        (ParameterId::FilterEnvelope, l.filter_envelope.is_some()),
-        (ParameterId::Attack, l.attack.is_some()),
-        (ParameterId::Sustain, l.sustain.is_some()),
-        (ParameterId::Release, l.release.is_some()),
-    ];
-    let bad = present.into_iter().find_map(|(parameter, present)| {
-        (present && !parameter.is_valid_for(kind)).then_some(parameter.name())
+    let bad = ParameterId::ALL.into_iter().find_map(|parameter| {
+        (l.get(parameter).is_some() && !parameter.is_valid_for(kind)).then_some(parameter.name())
     });
     bad.map_or(Ok(()), |name| Err(ValidationError::Lock(ti, si, name)))
 }
@@ -1023,6 +1077,146 @@ impl ParameterId {
             Self::Sustain => "sustain",
             Self::Release => "release",
         }
+    }
+
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::DelaySend => "delay send",
+            Self::ReverbSend => "reverb send",
+            Self::FilterEnvelope => "filter envelope",
+            _ => self.name(),
+        }
+    }
+}
+
+impl Track {
+    pub fn parameter(&self, parameter: ParameterId) -> Option<ParameterValue> {
+        let value = match parameter {
+            ParameterId::Level => ParameterValue::Percent(self.level),
+            ParameterId::DelaySend => ParameterValue::Percent(self.delay_send),
+            ParameterId::ReverbSend => ParameterValue::Percent(self.reverb_send),
+            ParameterId::Tune => match self.instrument {
+                Instrument::Kick(p) => ParameterValue::Percent(p.tune),
+                Instrument::Snare(p) => ParameterValue::Percent(p.tune),
+                Instrument::Hat(p) => ParameterValue::Percent(p.tune),
+                _ => return None,
+            },
+            ParameterId::Tone => match self.instrument {
+                Instrument::Snare(p) => ParameterValue::Percent(p.tone),
+                _ => return None,
+            },
+            ParameterId::Snappy => match self.instrument {
+                Instrument::Snare(p) => ParameterValue::Percent(p.snappy),
+                _ => return None,
+            },
+            ParameterId::Decay => match self.instrument {
+                Instrument::Kick(p) => ParameterValue::Percent(p.decay),
+                Instrument::Hat(p) => ParameterValue::Percent(p.decay),
+                Instrument::Bass(p) => ParameterValue::Percent(p.decay),
+                Instrument::Synth(p) => ParameterValue::Percent(p.decay),
+                _ => return None,
+            },
+            ParameterId::Waveform => match self.instrument {
+                Instrument::Bass(p) => ParameterValue::Waveform(p.waveform),
+                Instrument::Synth(p) => ParameterValue::Waveform(p.waveform),
+                _ => return None,
+            },
+            ParameterId::Cutoff => match self.instrument {
+                Instrument::Bass(p) => ParameterValue::Percent(p.cutoff),
+                Instrument::Synth(p) => ParameterValue::Percent(p.cutoff),
+                _ => return None,
+            },
+            ParameterId::Resonance => match self.instrument {
+                Instrument::Bass(p) => ParameterValue::Percent(p.resonance),
+                Instrument::Synth(p) => ParameterValue::Percent(p.resonance),
+                _ => return None,
+            },
+            ParameterId::FilterEnvelope => match self.instrument {
+                Instrument::Bass(p) => ParameterValue::Percent(p.filter_envelope),
+                Instrument::Synth(p) => ParameterValue::Percent(p.filter_envelope),
+                _ => return None,
+            },
+            ParameterId::Attack => match self.instrument {
+                Instrument::Kick(p) => ParameterValue::Percent(p.attack),
+                Instrument::Synth(p) => ParameterValue::Percent(p.attack),
+                _ => return None,
+            },
+            ParameterId::Sustain => match self.instrument {
+                Instrument::Synth(p) => ParameterValue::Percent(p.sustain),
+                _ => return None,
+            },
+            ParameterId::Release => match self.instrument {
+                Instrument::Synth(p) => ParameterValue::Percent(p.release),
+                _ => return None,
+            },
+        };
+        Some(value)
+    }
+
+    pub fn set_parameter(&mut self, parameter: ParameterId, value: ParameterValue) -> bool {
+        match (parameter, value) {
+            (ParameterId::Level, ParameterValue::Percent(v)) => self.level = v,
+            (ParameterId::DelaySend, ParameterValue::Percent(v)) => self.delay_send = v,
+            (ParameterId::ReverbSend, ParameterValue::Percent(v)) => self.reverb_send = v,
+            (ParameterId::Tune, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Kick(p) => p.tune = v,
+                Instrument::Snare(p) => p.tune = v,
+                Instrument::Hat(p) => p.tune = v,
+                _ => return false,
+            },
+            (ParameterId::Tone, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Snare(p) => p.tone = v,
+                _ => return false,
+            },
+            (ParameterId::Snappy, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Snare(p) => p.snappy = v,
+                _ => return false,
+            },
+            (ParameterId::Decay, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Kick(p) => p.decay = v,
+                Instrument::Hat(p) => p.decay = v,
+                Instrument::Bass(p) => p.decay = v,
+                Instrument::Synth(p) => p.decay = v,
+                _ => return false,
+            },
+            (ParameterId::Waveform, ParameterValue::Waveform(v)) => match &mut self.instrument {
+                Instrument::Bass(p) => p.waveform = v,
+                Instrument::Synth(p) => p.waveform = v,
+                _ => return false,
+            },
+            (ParameterId::Cutoff, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Bass(p) => p.cutoff = v,
+                Instrument::Synth(p) => p.cutoff = v,
+                _ => return false,
+            },
+            (ParameterId::Resonance, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Bass(p) => p.resonance = v,
+                Instrument::Synth(p) => p.resonance = v,
+                _ => return false,
+            },
+            (ParameterId::FilterEnvelope, ParameterValue::Percent(v)) => {
+                match &mut self.instrument {
+                    Instrument::Bass(p) => p.filter_envelope = v,
+                    Instrument::Synth(p) => p.filter_envelope = v,
+                    _ => return false,
+                }
+            }
+            (ParameterId::Attack, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Kick(p) => p.attack = v,
+                Instrument::Synth(p) => p.attack = v,
+                _ => return false,
+            },
+            (ParameterId::Sustain, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Synth(p) => p.sustain = v,
+                _ => return false,
+            },
+            (ParameterId::Release, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Synth(p) => p.release = v,
+                _ => return false,
+            },
+            _ => return false,
+        }
+        true
     }
 }
 
@@ -1162,6 +1356,64 @@ mod tests {
             Err(ValidationError::Lock(4, 0, "tone"))
         ));
     }
+
+    #[test]
+    fn shared_parameter_access_matches_track_compatibility() {
+        let mut project = ProjectV5::new();
+        for track in &mut project.tracks {
+            for parameter in ParameterId::ALL {
+                let current = track.parameter(parameter);
+                assert_eq!(
+                    current.is_some(),
+                    parameter.is_valid_for(track.kind),
+                    "{} access disagrees with {:?} compatibility",
+                    parameter.name(),
+                    track.kind
+                );
+                if let Some(value) = current {
+                    assert!(track.set_parameter(parameter, value));
+                    assert_eq!(track.parameter(parameter), Some(value));
+                }
+            }
+        }
+
+        assert!(!project.tracks[0].set_parameter(
+            ParameterId::Level,
+            ParameterValue::Waveform(Waveform::Square)
+        ));
+    }
+
+    #[test]
+    fn shared_lock_access_sets_clears_and_overlays_every_parameter() {
+        let percent = ParameterValue::Percent(p(42));
+        let mut locks = ParameterLocks::default();
+        for parameter in ParameterId::ALL {
+            let value = if parameter.is_waveform() {
+                ParameterValue::Waveform(Waveform::Square)
+            } else {
+                percent
+            };
+            assert!(locks.set(parameter, value));
+            assert_eq!(locks.get(parameter), Some(value));
+            locks.clear(parameter);
+            assert_eq!(locks.get(parameter), None);
+        }
+
+        locks.set(ParameterId::Level, ParameterValue::Percent(p(20)));
+        locks.set(ParameterId::Cutoff, ParameterValue::Percent(p(30)));
+        let mut overlay = ParameterLocks::default();
+        overlay.set(ParameterId::Cutoff, ParameterValue::Percent(p(90)));
+        locks.overlay(overlay);
+        assert_eq!(
+            locks.get(ParameterId::Level),
+            Some(ParameterValue::Percent(p(20)))
+        );
+        assert_eq!(
+            locks.get(ParameterId::Cutoff),
+            Some(ParameterValue::Percent(p(90)))
+        );
+    }
+
     #[test]
     fn all_keys_map_degrees() {
         for key in PitchClass::ALL {
