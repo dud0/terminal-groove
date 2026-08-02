@@ -2615,16 +2615,32 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         (false, true) => "  ↓ more tracks",
         (false, false) => "",
     };
+    let pattern_help = format!(
+        "[↑↓] vertical  [←→] step  [Shift+←→] bank  [Shift+1..6] track  [l] length  [Shift+D] double{scroll_hint}"
+    );
+    let pattern_title = if a.mode == Mode::VelocityEdit {
+        Line::from(vec![
+            Span::raw("Pattern  "),
+            Span::styled(
+                " VELOCITY EDITING ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!("  {pattern_help}")),
+        ])
+    } else {
+        Line::from(format!("Pattern  {pattern_help}"))
+    };
     f.render_widget(
         Table::new(rows, widths)
             .column_spacing(0)
             .header(Row::new(header_cells))
             .block(
-                Block::bordered()
-                    .title(format!(
-                        "Pattern  [↑↓] vertical  [←→] step  [Shift+←→] bank  [Shift+1..6] track  [l] length  [Shift+D] double{scroll_hint}"
-                    ))
-                    .title_bottom(". empty   x trigger   D:O note   D*O locked note   - tie   * lock"),
+                Block::bordered().title(pattern_title).title_bottom(
+                    ". empty   x trigger   D:O note   D*O locked note   - tie   * lock",
+                ),
             ),
         chunks[2],
     );
@@ -2652,6 +2668,17 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(" ({parameter}) | {}", a.status)),
+        ])
+    } else if a.mode == Mode::VelocityEdit {
+        Line::from(vec![
+            Span::styled(
+                " VELOCITY EDITING ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(" | {}", a.status)),
         ])
     } else {
         Line::from(format!("Mode: {} | {}", mode_name(&a.mode), a.status))
@@ -3594,6 +3621,46 @@ mod tests {
                 .iter()
                 .any(|cell| { cell.fg == Color::Black && cell.bg == Color::LightYellow })
         );
+    }
+
+    #[test]
+    fn velocity_editing_has_a_prominent_banner() {
+        let mut project = ProjectV4::new();
+        project.tracks[3].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            velocity: Percent::new(70).unwrap(),
+            locks: Default::default(),
+        });
+        let mut app = App::new(project, None);
+        app.row = 4;
+        app.mode = Mode::VelocityEdit;
+
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("VELOCITY EDITING"));
+        assert!(screen.contains("Event velocity"));
+        assert!(screen.contains("Velocity 70%"));
+
+        let backend = TestBackend::new(120, 34);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_with_device(frame, &app, "null"))
+            .unwrap();
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .any(|cell| { cell.fg == Color::Black && cell.bg == Color::LightCyan })
+        );
+    }
+
+    #[test]
+    fn navigation_does_not_show_velocity_editing_banner() {
+        let app = App::new(ProjectV4::new(), None);
+        let screen = rendered(&app, 120, 34);
+        assert!(!screen.contains("VELOCITY EDITING"));
     }
 
     #[test]
