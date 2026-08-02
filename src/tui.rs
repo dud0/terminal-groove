@@ -877,25 +877,30 @@ fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     };
     let changed = match k.code {
         KeyCode::Up | KeyCode::Down => {
+            let previous = config;
             match field {
-                LfoField::Enabled => config.enabled = !config.enabled,
+                LfoField::Enabled => {
+                    let current = usize::from(!config.enabled);
+                    config.enabled = lfo_choice_index(current, 2, k.code) == 0;
+                }
                 LfoField::Waveform => {
                     let index = LfoWaveform::ALL
                         .iter()
                         .position(|waveform| *waveform == config.waveform)
                         .unwrap();
-                    let len = LfoWaveform::ALL.len() as i32;
                     config.waveform =
-                        LfoWaveform::ALL[(index as i32 + direction).rem_euclid(len) as usize];
+                        LfoWaveform::ALL[lfo_choice_index(index, LfoWaveform::ALL.len(), k.code)];
                 }
                 LfoField::RateMode => {
-                    config.rate = match config.rate {
-                        LfoRate::Synced { .. } => LfoRate::Free {
+                    let current = usize::from(matches!(config.rate, LfoRate::Free { .. }));
+                    config.rate = match (lfo_choice_index(current, 2, k.code), config.rate) {
+                        (1, LfoRate::Synced { .. }) => LfoRate::Free {
                             rate_percent: Percent::new(50).unwrap(),
                         },
-                        LfoRate::Free { .. } => LfoRate::Synced {
+                        (0, LfoRate::Free { .. }) => LfoRate::Synced {
                             division: LfoDivision::Quarter,
                         },
+                        (_, rate) => rate,
                     };
                 }
                 LfoField::Rate => match &mut config.rate {
@@ -904,9 +909,8 @@ fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
                             .iter()
                             .position(|value| value == division)
                             .unwrap();
-                        let len = LfoDivision::ALL.len() as i32;
-                        *division =
-                            LfoDivision::ALL[(index as i32 + direction).rem_euclid(len) as usize];
+                        *division = LfoDivision::ALL
+                            [lfo_choice_index(index, LfoDivision::ALL.len(), k.code)];
                     }
                     LfoRate::Free { rate_percent } => {
                         *rate_percent = rate_percent.saturating_add(percent_delta);
@@ -914,7 +918,7 @@ fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
                 },
                 LfoField::Depth => config.depth = config.depth.saturating_add(percent_delta),
             }
-            true
+            config != previous
         }
         KeyCode::Char(c) => crate::reducer::percentage_key(c).is_some_and(|value| match field {
             LfoField::Depth => {
@@ -940,6 +944,14 @@ fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
         }
     }
     Ok(true)
+}
+
+fn lfo_choice_index(current: usize, len: usize, key: KeyCode) -> usize {
+    match key {
+        KeyCode::Up => current.saturating_sub(1),
+        KeyCode::Down => current.saturating_add(1).min(len.saturating_sub(1)),
+        _ => current,
+    }
 }
 
 fn set_lfo_config(
@@ -2480,11 +2492,13 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         Mode::LfoEdit { parameter, field } => {
             let track = a.row - 1;
             if let Ok(Some(config)) = a.editor.lfo(track, *parameter) {
-                popup(
+                render_lfo_popup(
                     f,
                     area,
-                    &format!("Track LFO · {}", parameter_name(*parameter)),
-                    &lfo_popup_text(config, *field, a.editor.project.globals.tempo_bpm),
+                    *parameter,
+                    config,
+                    *field,
+                    a.editor.project.globals.tempo_bpm,
                 );
             }
         }
@@ -2540,51 +2554,331 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     }
 }
 
-fn lfo_popup_text(config: LfoConfig, selected: LfoField, tempo_bpm: u16) -> String {
-    let marker = |field| if selected == field { ">" } else { " " };
-    let (mode, rate) = match config.rate {
-        LfoRate::Synced { division } => ("Synced", division.to_string()),
-        LfoRate::Free { rate_percent } => (
-            "Free",
-            format!(
-                "{}% ({:.3} Hz)",
-                rate_percent.get(),
-                config.rate.hz(tempo_bpm)
-            ),
-        ),
+fn render_lfo_popup(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    parameter: ParameterId,
+    config: LfoConfig,
+    selected: LfoField,
+    tempo_bpm: u16,
+) {
+    let popup_area = lfo_popup_rect(area);
+    f.render_widget(Clear, popup_area);
+    let panel = Block::bordered().title(format!("Track LFO · {}", parameter_name(parameter)));
+    let inner = panel.inner(popup_area);
+    f.render_widget(panel, popup_area);
+
+    let controls_area = Rect {
+        height: inner.height.saturating_sub(3),
+        ..inner
     };
-    format!(
-        "{} Enabled   {}\n{} Waveform  {}\n{} Rate mode {}\n{} Rate      {}\n{} Depth     ±{} percentage points\n\n[←/→] select  [↑/↓] adjust  [Shift+↑/↓] ±10\n[0-9] set free rate/depth  [Del] remove  [Enter/Esc] close",
-        marker(LfoField::Enabled),
-        if config.enabled { "ON" } else { "OFF" },
-        marker(LfoField::Waveform),
-        lfo_waveform_name(config.waveform),
-        marker(LfoField::RateMode),
-        mode,
-        marker(LfoField::Rate),
-        rate,
-        marker(LfoField::Depth),
-        config.depth.get(),
-    )
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1, 5); 5])
+        .split(controls_area);
+    for (index, field) in LfoField::ALL.iter().enumerate() {
+        render_lfo_control(
+            f,
+            columns[index],
+            config,
+            *field,
+            selected == *field,
+            tempo_bpm,
+        );
+    }
+
+    let help_area = Rect {
+        x: inner.x,
+        y: inner.y + inner.height.saturating_sub(2),
+        width: inner.width,
+        height: 2.min(inner.height),
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from("[←/→] select   [↑/↓] adjust   [Shift+↑/↓] ±10"),
+            Line::from("[0-9] set free rate/depth   [Del] remove   [Enter/Esc] close"),
+        ])
+        .alignment(Alignment::Center),
+        help_area,
+    );
 }
 
-fn lfo_waveform_name(waveform: LfoWaveform) -> &'static str {
-    match waveform {
-        LfoWaveform::Sine => "Sine",
-        LfoWaveform::Triangle => "Triangle",
-        LfoWaveform::Square => "Square",
-        LfoWaveform::Saw => "Saw",
-        LfoWaveform::SampleAndHold => "Sample & hold",
+fn render_lfo_control(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    config: LfoConfig,
+    field: LfoField,
+    active: bool,
+    tempo_bpm: u16,
+) {
+    let accent = Color::LightCyan;
+    let style = if active {
+        Style::default()
+            .fg(accent)
+            .reversed()
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(accent).add_modifier(Modifier::BOLD)
+    };
+    let label = match field {
+        LfoField::Enabled => "Enabled",
+        LfoField::Waveform => "Waveform",
+        LfoField::RateMode => "Rate Mode",
+        LfoField::Rate => "Rate",
+        LfoField::Depth => "Depth",
+    };
+    let block = (if active {
+        Block::bordered()
+            .border_type(BorderType::Double)
+            .border_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .style(Style::default().reversed())
+    } else {
+        Block::bordered().border_style(Style::default().fg(accent))
+    })
+    .title(Line::from(Span::styled(label, style)));
+    let content = block.inner(area);
+    f.render_widget(block, area);
+    if content.height == 0 {
+        return;
+    }
+
+    match field {
+        LfoField::Enabled => render_lfo_switch(f, content, "ON", "OFF", config.enabled, style),
+        LfoField::Waveform => {
+            let choices = ["Sine", "Triangle", "Square", "Saw", "Sample & hold"];
+            let current = LfoWaveform::ALL
+                .iter()
+                .position(|waveform| *waveform == config.waveform)
+                .unwrap();
+            render_lfo_selector(f, content, &choices, current, style);
+        }
+        LfoField::RateMode => render_lfo_switch(
+            f,
+            content,
+            "SYNCED",
+            "FREE",
+            matches!(config.rate, LfoRate::Synced { .. }),
+            style,
+        ),
+        LfoField::Rate => match config.rate {
+            LfoRate::Synced { division } => {
+                let choices = LfoDivision::ALL.map(|value| value.to_string());
+                let current = LfoDivision::ALL
+                    .iter()
+                    .position(|value| *value == division)
+                    .unwrap();
+                render_lfo_selector(
+                    f,
+                    Rect {
+                        height: content.height.saturating_sub(1),
+                        ..content
+                    },
+                    &choices,
+                    current,
+                    style,
+                );
+                render_centered(
+                    f,
+                    &format!("{:.3} Hz", config.rate.hz(tempo_bpm)),
+                    Rect {
+                        y: content.y + content.height.saturating_sub(1),
+                        height: 1.min(content.height),
+                        ..content
+                    },
+                    style,
+                );
+            }
+            LfoRate::Free { rate_percent } => {
+                render_centered(
+                    f,
+                    &format!("{}%", rate_percent.get()),
+                    Rect {
+                        height: 1,
+                        ..content
+                    },
+                    style,
+                );
+                render_lfo_fader(
+                    f,
+                    Rect {
+                        y: content.y + 1,
+                        height: content.height.saturating_sub(2),
+                        ..content
+                    },
+                    rate_percent.get(),
+                    style,
+                );
+                render_centered(
+                    f,
+                    &format!("{:.3} Hz", config.rate.hz(tempo_bpm)),
+                    Rect {
+                        y: content.y + content.height.saturating_sub(1),
+                        height: 1.min(content.height),
+                        ..content
+                    },
+                    style,
+                );
+            }
+        },
+        LfoField::Depth => {
+            render_centered(
+                f,
+                &format!("±{} pp", config.depth.get()),
+                Rect {
+                    height: 1,
+                    ..content
+                },
+                style,
+            );
+            render_lfo_fader(
+                f,
+                Rect {
+                    y: content.y + 1,
+                    height: content.height.saturating_sub(1),
+                    ..content
+                },
+                config.depth.get(),
+                style,
+            );
+        }
+    }
+}
+
+fn render_lfo_fader(f: &mut ratatui::Frame, area: Rect, value: u8, active_style: Style) {
+    let height = area.height.min(10);
+    let start_y = area.y + area.height.saturating_sub(height) / 2;
+    let filled = fader_segments(value);
+    for segment in 0..height {
+        let is_filled = usize::from(segment) >= 10usize.saturating_sub(filled);
+        let style = if is_filled {
+            active_style
+        } else {
+            lfo_inactive_style(active_style)
+        };
+        render_centered(
+            f,
+            if is_filled { "███" } else { "···" },
+            Rect {
+                x: area.x,
+                y: start_y + segment,
+                width: area.width,
+                height: 1,
+            },
+            style,
+        );
+    }
+}
+
+fn render_lfo_switch(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    top: &str,
+    bottom: &str,
+    top_selected: bool,
+    style: Style,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let top_y = area.y;
+    let bottom_y = area.y + area.height - 1;
+    render_centered(
+        f,
+        &format!("{} {top}", if top_selected { "●" } else { "○" }),
+        Rect { height: 1, ..area },
+        if top_selected {
+            style
+        } else {
+            lfo_inactive_style(style)
+        },
+    );
+    for y in top_y + 1..bottom_y {
+        render_centered(
+            f,
+            "│",
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
+            lfo_inactive_style(style),
+        );
+    }
+    if area.height > 1 {
+        render_centered(
+            f,
+            &format!("{} {bottom}", if top_selected { "○" } else { "●" }),
+            Rect {
+                y: bottom_y,
+                height: 1,
+                ..area
+            },
+            if top_selected {
+                lfo_inactive_style(style)
+            } else {
+                style
+            },
+        );
+    }
+}
+
+fn render_lfo_selector<T: AsRef<str>>(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    choices: &[T],
+    selected: usize,
+    style: Style,
+) {
+    if area.height == 0 || choices.is_empty() {
+        return;
+    }
+    let visible = choices.len().min(usize::from(area.height));
+    let half = visible / 2;
+    let start = selected
+        .saturating_sub(half)
+        .min(choices.len().saturating_sub(visible));
+    let y = area.y + area.height.saturating_sub(visible as u16) / 2;
+    for (row, choice) in choices[start..start + visible].iter().enumerate() {
+        let index = start + row;
+        let text = if index == selected {
+            format!("● {}", choice.as_ref())
+        } else {
+            format!("○ {}", choice.as_ref())
+        };
+        let choice_style = if index == selected {
+            style
+        } else {
+            lfo_inactive_style(style)
+        };
+        render_centered(
+            f,
+            &text,
+            Rect {
+                x: area.x,
+                y: y + row as u16,
+                width: area.width,
+                height: 1,
+            },
+            choice_style,
+        );
+    }
+}
+
+fn lfo_inactive_style(active_style: Style) -> Style {
+    if active_style.add_modifier.contains(Modifier::REVERSED) {
+        active_style
+    } else {
+        Style::default().fg(Color::DarkGray)
     }
 }
 
 fn popup(f: &mut ratatui::Frame, area: Rect, title: &str, text: &str) {
-    let r = Rect {
-        x: area.x + 10,
-        y: area.y + 5,
-        width: area.width - 20,
-        height: (area.height - 10).max(5),
-    };
+    let r = popup_rect(area);
     f.render_widget(Clear, r);
     f.render_widget(
         Paragraph::new(text)
@@ -2592,6 +2886,26 @@ fn popup(f: &mut ratatui::Frame, area: Rect, title: &str, text: &str) {
             .block(Block::default().borders(Borders::ALL).title(title)),
         r,
     )
+}
+
+fn lfo_popup_rect(area: Rect) -> Rect {
+    let width = area.width.saturating_sub(4).min(92);
+    let height = area.height.saturating_sub(4).min(20);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
+}
+
+fn popup_rect(area: Rect) -> Rect {
+    Rect {
+        x: area.x + 10,
+        y: area.y + 5,
+        width: area.width - 20,
+        height: (area.height - 10).max(5),
+    }
 }
 
 #[cfg(test)]
@@ -2786,27 +3100,102 @@ mod tests {
         };
         let screen = rendered(&app, 120, 34);
         assert!(screen.contains("Track LFO · cutoff"));
-        assert!(screen.contains("Waveform  Sine"));
-        assert!(screen.contains("> Depth"));
+        assert!(screen.contains("● Sine"));
+        assert!(screen.contains("±10 pp"));
+        assert!(screen.contains("███"));
+        assert!(screen.contains("║"));
         assert!(screen.contains("~"));
     }
 
     #[test]
-    fn lfo_popup_reports_synced_and_physical_free_rates() {
-        let synced = lfo_popup_text(LfoConfig::default(), LfoField::Rate, 120);
-        assert!(synced.contains("Synced"));
-        assert!(synced.contains("1/4"));
-        let free = lfo_popup_text(
-            LfoConfig {
-                rate: LfoRate::Free {
-                    rate_percent: Percent::new(100).unwrap(),
-                },
-                ..Default::default()
-            },
-            LfoField::Rate,
-            120,
+    fn lfo_modal_is_centered_and_capped_on_large_terminals() {
+        assert_eq!(
+            lfo_popup_rect(Rect::new(0, 0, 120, 34)),
+            Rect::new(14, 7, 92, 20)
         );
+        assert_eq!(
+            lfo_popup_rect(Rect::new(0, 0, 200, 50)),
+            Rect::new(54, 15, 92, 20)
+        );
+    }
+
+    #[test]
+    fn lfo_control_bank_reports_synced_and_physical_free_rates() {
+        let mut project = ProjectV3::new();
+        project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
+        let mut app = App::new(project, None);
+        app.row = 4;
+        app.mode = Mode::LfoEdit {
+            parameter: ParameterId::Cutoff,
+            field: LfoField::Rate,
+        };
+        let synced = rendered(&app, 120, 34);
+        assert!(synced.contains("SYNCED"));
+        assert!(synced.contains("● 1/4"));
+        assert!(synced.contains("○ 4 bars"));
+        assert!(synced.contains("○ 1/16T"));
+        assert!(synced.contains("2.000 Hz"));
+
+        app.editor.project.tracks[3].lfos.cutoff = Some(LfoConfig {
+            rate: LfoRate::Free {
+                rate_percent: Percent::new(100).unwrap(),
+            },
+            ..Default::default()
+        });
+        let free = rendered(&app, 120, 34);
+        assert!(free.contains("100%"));
         assert!(free.contains("20.000 Hz"));
+    }
+
+    #[test]
+    fn lfo_option_arrows_follow_the_visual_list_direction() {
+        let quarter = LfoDivision::ALL
+            .iter()
+            .position(|division| *division == LfoDivision::Quarter)
+            .unwrap();
+        assert_eq!(
+            LfoDivision::ALL[lfo_choice_index(quarter, LfoDivision::ALL.len(), KeyCode::Up,)],
+            LfoDivision::QuarterDotted
+        );
+        assert_eq!(
+            LfoDivision::ALL[lfo_choice_index(quarter, LfoDivision::ALL.len(), KeyCode::Down,)],
+            LfoDivision::QuarterTriplet
+        );
+        assert_eq!(lfo_choice_index(0, LfoDivision::ALL.len(), KeyCode::Up), 0);
+        assert_eq!(
+            lfo_choice_index(
+                LfoDivision::ALL.len() - 1,
+                LfoDivision::ALL.len(),
+                KeyCode::Down,
+            ),
+            LfoDivision::ALL.len() - 1
+        );
+        assert_eq!(lfo_choice_index(0, 2, KeyCode::Up), 0);
+        assert_eq!(lfo_choice_index(0, 2, KeyCode::Down), 1);
+        assert_eq!(lfo_choice_index(1, 2, KeyCode::Up), 0);
+        assert_eq!(lfo_choice_index(1, 2, KeyCode::Down), 1);
+    }
+
+    #[test]
+    fn lfo_controls_are_laid_out_left_to_right() {
+        let mut project = ProjectV3::new();
+        project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
+        let mut app = App::new(project, None);
+        app.row = 4;
+        app.mode = Mode::LfoEdit {
+            parameter: ParameterId::Cutoff,
+            field: LfoField::Enabled,
+        };
+        let screen = rendered(&app, 120, 34);
+        let enabled = screen.rfind("Enabled").unwrap();
+        let waveform = screen.rfind("Waveform").unwrap();
+        let rate_mode = screen.rfind("Rate Mode").unwrap();
+        let rate = screen.rfind("Rate").unwrap();
+        let depth = screen.rfind("Depth").unwrap();
+        assert!(enabled < waveform);
+        assert!(waveform < rate_mode);
+        assert!(rate_mode < rate);
+        assert!(rate < depth);
     }
 
     #[test]
