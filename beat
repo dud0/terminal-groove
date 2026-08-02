@@ -1,7 +1,7 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "globals": {
-    "tempo_bpm": 120,
+    "tempo_bpm": 110,
     "delay_division": "eighth",
     "delay_feedback": 30,
     "reverb_time_seconds": 2.5,
@@ -28,7 +28,10 @@
         null,
         null,
         null,
-        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
         null,
         null,
         null,
@@ -39,7 +42,10 @@
         null,
         null,
         null,
-        null,
+        {
+          "type": "trigger",
+          "locks": {}
+        },
         null,
         null,
         null
@@ -94,7 +100,6 @@
       },
       "steps": [
         null,
-        null,
         {
           "type": "trigger",
           "locks": {}
@@ -113,35 +118,31 @@
           "type": "trigger",
           "locks": {}
         },
+        null,
+        null,
+        null,
         {
           "type": "trigger",
           "locks": {}
         },
         null,
-        null,
-        {
-          "type": "trigger",
-          "locks": {
-            "decay": 65
-          }
-        },
         null
       ]
     },
     {
       "kind": "synth",
       "name": "Synth 1",
-      "level": 80,
+      "level": 50,
       "muted": false,
       "delay_send": 0,
       "reverb_send": 0,
       "instrument": {
-        "waveform": "saw",
-        "cutoff": 40,
-        "resonance": 10,
-        "filter_envelope": 25,
-        "attack": 0,
-        "decay": 25,
+        "waveform": "square",
+        "cutoff": 20,
+        "resonance": 20,
+        "filter_envelope": 100,
+        "attack": 20,
+        "decay": 60,
         "sustain": 70,
         "release": 15
       },
@@ -149,7 +150,7 @@
         {
           "type": "note",
           "degree": 1,
-          "octave": 3,
+          "octave": 1,
           "locks": {}
         },
         {
@@ -161,46 +162,41 @@
           "locks": {}
         },
         {
-          "type": "tie",
+          "type": "note",
+          "degree": 1,
+          "octave": 1,
           "locks": {}
         },
         null,
         null,
+        {
+          "type": "note",
+          "degree": 4,
+          "octave": 1,
+          "locks": {}
+        },
         null,
         null,
         {
           "type": "note",
           "degree": 2,
-          "octave": 3,
-          "locks": {}
-        },
-        {
-          "type": "tie",
-          "locks": {}
-        },
-        {
-          "type": "tie",
-          "locks": {}
-        },
-        {
-          "type": "tie",
+          "octave": 1,
           "locks": {}
         },
         null,
         null,
         {
           "type": "note",
-          "degree": 1,
-          "octave": 3,
+          "degree": 4,
+          "octave": 1,
           "locks": {}
         },
-        {
-          "type": "tie",
-          "locks": {}
-        }
+        null,
+        null,
+        null
       ],
-      "input_degree": 1,
-      "input_octave": 3
+      "input_degree": 2,
+      "input_octave": 1
     },
     {
       "kind": "synth",
@@ -214,59 +210,30 @@
         "cutoff": 65,
         "resonance": 10,
         "filter_envelope": 25,
-        "attack": 26,
-        "decay": 42,
-        "sustain": 25,
-        "release": 18
+        "attack": 0,
+        "decay": 25,
+        "sustain": 70,
+        "release": 15
       },
       "steps": [
         null,
         null,
         null,
         null,
-        {
-          "type": "note",
-          "degree": 2,
-          "octave": 3,
-          "locks": {}
-        },
-        {
-          "type": "note",
-          "degree": 4,
-          "octave": 3,
-          "locks": {}
-        },
-        {
-          "type": "note",
-          "degree": 8,
-          "octave": 3,
-          "locks": {}
-        },
         null,
-        {
-          "type": "note",
-          "degree": 2,
-          "octave": 3,
-          "locks": {}
-        },
-        {
-          "type": "tie",
-          "locks": {}
-        },
-        {
-          "type": "tie",
-          "locks": {}
-        },
-        {
-          "type": "tie",
-          "locks": {}
-        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
         null,
         null,
         null,
         null
       ],
-      "input_degree": 2,
+      "input_degree": 1,
       "input_octave": 3
     },
     {

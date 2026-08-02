@@ -307,11 +307,12 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 
 - Pressing a parameter shortcut enters a visibly labelled value editor.
 - Pressing another valid parameter shortcut switches the editor to that parameter without leaving the current BASE/LOCK scope.
-- A number-row percentage assignment applies immediately and returns to navigation mode.
-- Arrow assignments apply immediately and keep the editor open for repeated changes.
+- Left/right cycles through the selected track's visible parameter controls and wraps at either end. Shift+left/right continues to move between step banks.
+- A number-row percentage assignment applies immediately, keeps the parameter editor open, and ramps the affected continuous control to its new value over approximately 30 ms like a quick fader movement.
+- Up/down assignments apply immediately and keep the editor open for repeated changes. On waveform, either direction switches between Saw and Square.
 - Enter or Esc returns to navigation without reverting changes already made.
 - A series of repeated arrow changes to one value is coalesced into one undo transaction until the parameter changes, editing ends, or 300 ms elapses without another adjustment.
-- Waveform and mute are discrete immediate actions rather than percentage editors.
+- Mute remains a discrete immediate action; waveform has its own persistent two-value editor.
 
 ### 5.4 Audition behavior
 

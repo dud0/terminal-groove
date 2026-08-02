@@ -90,10 +90,10 @@ pub enum EnvStage {
 pub struct Adsr {
     pub stage: EnvStage,
     value: f32,
-    attack: f32,
-    decay: f32,
-    sustain: f32,
-    release: f32,
+    attack: Smoother,
+    decay: Smoother,
+    sustain: Smoother,
+    release: Smoother,
     sr: f32,
 }
 impl Adsr {
@@ -101,18 +101,18 @@ impl Adsr {
         Self {
             stage: EnvStage::Idle,
             value: 0.0,
-            attack: 0.0,
-            decay: 0.1,
-            sustain: 0.7,
-            release: 0.1,
+            attack: Smoother::new(0.0),
+            decay: Smoother::new(0.1),
+            sustain: Smoother::new(0.7),
+            release: Smoother::new(0.1),
             sr,
         }
     }
-    pub fn configure(&mut self, a: f32, d: f32, s: f32, r: f32) {
-        self.attack = a;
-        self.decay = d;
-        self.sustain = s;
-        self.release = r
+    pub fn configure(&mut self, a: f32, d: f32, s: f32, r: f32, samples: u32) {
+        self.attack.set(a, samples);
+        self.decay.set(d, samples);
+        self.sustain.set(s, samples);
+        self.release.set(r, samples);
     }
     pub fn gate_on(&mut self) {
         self.stage = EnvStage::Attack
@@ -123,14 +123,18 @@ impl Adsr {
         }
     }
     pub fn next_sample(&mut self) -> f32 {
+        let attack = self.attack.next_value();
+        let decay = self.decay.next_value();
+        let sustain = self.sustain.next_value();
+        let release = self.release.next_value();
         match self.stage {
             EnvStage::Idle => {}
             EnvStage::Attack => {
-                if self.attack <= 0.0 {
+                if attack <= 0.0 {
                     self.value = 1.0;
                     self.stage = EnvStage::Decay
                 } else {
-                    self.value += 1.0 / (self.attack * self.sr);
+                    self.value += 1.0 / (attack * self.sr);
                     if self.value >= 1.0 {
                         self.value = 1.0;
                         self.stage = EnvStage::Decay
@@ -138,15 +142,15 @@ impl Adsr {
                 }
             }
             EnvStage::Decay => {
-                self.value -= (1.0 - self.sustain) / (self.decay * self.sr).max(1.0);
-                if self.value <= self.sustain {
-                    self.value = self.sustain;
+                self.value -= (1.0 - sustain) / (decay * self.sr).max(1.0);
+                if self.value <= sustain {
+                    self.value = sustain;
                     self.stage = EnvStage::Sustain
                 }
             }
-            EnvStage::Sustain => self.value = self.sustain,
+            EnvStage::Sustain => self.value = sustain,
             EnvStage::Release => {
-                self.value -= self.value.max(0.0001) / (self.release * self.sr).max(1.0);
+                self.value -= self.value.max(0.0001) / (release * self.sr).max(1.0);
                 if self.value <= 0.0001 {
                     self.value = 0.0;
                     self.stage = EnvStage::Idle

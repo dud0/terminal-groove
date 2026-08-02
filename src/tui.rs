@@ -1,5 +1,5 @@
 use crate::{
-    audio::{Audio, AudioCommand},
+    audio::{Audio, AudioCommand, ParameterSmoothing},
     model::{
         DelayDivision, GlobalParameterId, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent,
         ProjectV2, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
@@ -22,7 +22,14 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Row, Table, Wrap},
 };
-use std::{io::stdout, path::PathBuf, sync::atomic::Ordering, time::Duration};
+use std::{
+    io::stdout,
+    path::PathBuf,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
+
+const DIRECT_PARAMETER_RAMP: Duration = Duration::from_millis(30);
 
 struct TerminalGuard;
 impl TerminalGuard {
@@ -72,6 +79,32 @@ pub struct App {
     playheads: [Option<usize>; TRACK_COUNT],
     playing: bool,
     paused: bool,
+    fader_animations: Vec<FaderAnimation>,
+}
+
+#[derive(Clone, Copy)]
+struct FaderAnimation {
+    track: usize,
+    step: usize,
+    scope: Scope,
+    parameter: ParameterId,
+    from: Percent,
+    to: Percent,
+    started: Instant,
+}
+impl FaderAnimation {
+    fn value_at(self, now: Instant) -> Percent {
+        let elapsed = now.saturating_duration_since(self.started);
+        let progress = (elapsed.as_secs_f32() / DIRECT_PARAMETER_RAMP.as_secs_f32()).min(1.0);
+        Percent::new(
+            (self.from.get() as f32 + (self.to.get() as f32 - self.from.get() as f32) * progress)
+                .round() as u8,
+        )
+        .unwrap()
+    }
+    fn is_complete(self, now: Instant) -> bool {
+        now.saturating_duration_since(self.started) >= DIRECT_PARAMETER_RAMP
+    }
 }
 impl App {
     pub fn new(project: ProjectV2, path: Option<PathBuf>) -> Self {
@@ -90,7 +123,67 @@ impl App {
             playheads: [None; TRACK_COUNT],
             playing: false,
             paused: false,
+            fader_animations: Vec::new(),
         }
+    }
+    fn start_fader_animation(
+        &mut self,
+        track: usize,
+        step: usize,
+        parameter: ParameterId,
+        from: Percent,
+        to: Percent,
+    ) {
+        let now = Instant::now();
+        let scope = self.scope;
+        if let Some(existing) = self.fader_animations.iter_mut().find(|animation| {
+            animation.track == track
+                && animation.step == step
+                && animation.scope == scope
+                && animation.parameter == parameter
+        }) {
+            existing.from = existing.value_at(now);
+            existing.to = to;
+            existing.started = now;
+        } else {
+            self.fader_animations.push(FaderAnimation {
+                track,
+                step,
+                scope,
+                parameter,
+                from,
+                to,
+                started: now,
+            });
+        }
+    }
+    fn animated_percent(
+        &self,
+        track: usize,
+        step: usize,
+        parameter: ParameterId,
+        origin: ValueOrigin,
+        target: Percent,
+    ) -> Percent {
+        let now = Instant::now();
+        self.fader_animations
+            .iter()
+            .rev()
+            .find(|animation| {
+                animation.track == track
+                    && animation.parameter == parameter
+                    && animation.to == target
+                    && match animation.scope {
+                        Scope::Base => origin == ValueOrigin::Base,
+                        Scope::Lock => {
+                            self.scope == Scope::Lock
+                                && animation.step == step
+                                && origin == ValueOrigin::Lock
+                        }
+                    }
+            })
+            .map(|animation| animation.value_at(now))
+            .unwrap_or(target)
     }
 }
 
@@ -106,6 +199,8 @@ pub fn run(project: ProjectV2, path: Option<PathBuf>, audio: &mut Audio) -> Resu
     let mut app = App::new(project, path);
     while !app.quit {
         refresh_audio_status(&mut app, audio);
+        app.fader_animations
+            .retain(|animation| !animation.is_complete(Instant::now()));
         terminal.draw(|f| draw(f, &app, audio))?;
         if event::poll(Duration::from_millis(8))? {
             if let Event::Key(k) = event::read()? {
@@ -339,11 +434,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         KeyCode::Char(c) if a.row > 0 && !(a.row > 3 && (c == 't' || ('1'..='8').contains(&c))) => {
             if let Some(parameter) = parameter_shortcut(a.editor.project.tracks[a.row - 1].kind, c)
             {
-                if parameter.is_waveform() {
-                    toggle_waveform(a, audio)?;
-                } else {
-                    enter_parameter_edit(a, parameter);
-                }
+                enter_parameter_edit(a, parameter);
             }
         }
         KeyCode::Char('t') if a.row > 3 => {
@@ -566,7 +657,7 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
             if k.modifiers.contains(KeyModifiers::SHIFT) {
                 move_step_bank(a, false);
             } else {
-                move_step(a, false);
+                move_parameter_editor(a, false);
             }
             Ok(true)
         }
@@ -574,7 +665,7 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
             if k.modifiers.contains(KeyModifiers::SHIFT) {
                 move_step_bank(a, true);
             } else {
-                move_step(a, true);
+                move_parameter_editor(a, true);
             }
             Ok(true)
         }
@@ -587,14 +678,24 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
             let delta = if k.code == KeyCode::Up { delta } else { -delta };
             let current = match a.editor.parameter_value(track, a.step, a.scope, parameter) {
                 Ok(ParameterValue::Percent(v)) => v,
-                Ok(ParameterValue::Waveform(_)) => return Ok(true),
+                Ok(ParameterValue::Waveform(waveform)) => {
+                    set_parameter(
+                        a,
+                        audio,
+                        parameter,
+                        ParameterValue::Waveform(flipped_waveform(waveform)),
+                        true,
+                        false,
+                    );
+                    return Ok(true);
+                }
                 Err(e) => {
                     a.status = e.to_string();
                     return Ok(true);
                 }
             };
             let value = ParameterValue::Percent(current.saturating_add(delta));
-            set_parameter(a, audio, parameter, value, true);
+            set_parameter(a, audio, parameter, value, true, false);
             Ok(true)
         }
         KeyCode::Char('?') => {
@@ -613,18 +714,19 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
         KeyCode::Char(' ') | KeyCode::Char('.') => Ok(false),
         KeyCode::Char(c) => {
             if let Some(next) = parameter_shortcut(a.editor.project.tracks[track].kind, c) {
-                if next.is_waveform() {
-                    toggle_waveform(a, audio)?;
-                } else {
-                    enter_parameter_edit(a, next);
-                }
+                switch_parameter_editor(a, next);
                 return Ok(true);
             }
             if let Some(value) = crate::reducer::percentage_key(c) {
-                if !parameter.is_waveform()
-                    && set_parameter(a, audio, parameter, ParameterValue::Percent(value), false)
-                {
-                    a.mode = Mode::Navigation;
+                if !parameter.is_waveform() {
+                    set_parameter(
+                        a,
+                        audio,
+                        parameter,
+                        ParameterValue::Percent(value),
+                        true,
+                        true,
+                    );
                 }
             }
             Ok(true)
@@ -681,12 +783,42 @@ fn enter_parameter_edit(a: &mut App, parameter: ParameterId) {
     a.status = format!("Editing {}", parameter_name(parameter));
 }
 
+fn switch_parameter_editor(a: &mut App, parameter: ParameterId) {
+    a.editor.end_coalescing();
+    enter_parameter_edit(a, parameter);
+}
+
+fn move_parameter_editor(a: &mut App, forward: bool) {
+    let Mode::ParameterEdit(current) = a.mode else {
+        return;
+    };
+    let descriptors = parameter_descriptors(a.editor.project.tracks[a.row - 1].kind);
+    let index = descriptors
+        .iter()
+        .position(|descriptor| descriptor.id == current)
+        .unwrap_or(0);
+    let next = if forward {
+        (index + 1) % descriptors.len()
+    } else {
+        (index + descriptors.len() - 1) % descriptors.len()
+    };
+    switch_parameter_editor(a, descriptors[next].id);
+}
+
+fn flipped_waveform(waveform: Waveform) -> Waveform {
+    match waveform {
+        Waveform::Square => Waveform::Saw,
+        Waveform::Saw => Waveform::Square,
+    }
+}
+
 fn set_parameter(
     a: &mut App,
     audio: &mut Audio,
     parameter: ParameterId,
     value: ParameterValue,
     keep_editing: bool,
+    direct_entry: bool,
 ) -> bool {
     if audio.available_commands() == 0 {
         a.status = "Audio command queue full; edit rejected".into();
@@ -694,13 +826,29 @@ fn set_parameter(
     }
     let track = a.row - 1;
     let step = a.step;
+    let previous = direct_entry
+        .then(|| {
+            a.editor
+                .parameter_value(track, step, a.scope, parameter)
+                .ok()
+        })
+        .flatten()
+        .and_then(|value| match value {
+            ParameterValue::Percent(value) => Some(value),
+            ParameterValue::Waveform(_) => None,
+        });
     let key = keep_editing.then_some(coalesce_key(track, step, parameter));
     match a
         .editor
         .set_parameter(track, step, a.scope, parameter, value, key)
     {
         Ok(true) => {
-            let synced = sync_parameter_change(a, audio, track, step);
+            let synced = sync_parameter_change(a, audio, track, step, direct_entry);
+            if synced {
+                if let (Some(from), ParameterValue::Percent(to)) = (previous, value) {
+                    a.start_fader_animation(track, step, parameter, from, to);
+                }
+            }
             if synced && keep_editing {
                 a.status = format!("{} set", parameter_name(parameter));
             }
@@ -721,34 +869,6 @@ fn coalesce_key(track: usize, step: usize, parameter: ParameterId) -> crate::red
     crate::reducer::CoalesceKey(track, step, parameter as u8)
 }
 
-fn toggle_waveform(a: &mut App, audio: &mut Audio) -> Result<()> {
-    if audio.available_commands() == 0 {
-        a.status = "Audio command queue full; edit rejected".into();
-        return Ok(());
-    }
-    let track = a.row - 1;
-    match a.editor.toggle_waveform(track, a.step, a.scope) {
-        Ok(true) => {
-            if sync_parameter_change(a, audio, track, a.step) {
-                a.status = format!("Waveform {}", waveform_name(a, track, a.step));
-            }
-        }
-        Ok(false) => a.status = "No change".into(),
-        Err(e) => a.status = e.to_string(),
-    }
-    Ok(())
-}
-
-fn waveform_name(a: &App, track: usize, step: usize) -> &'static str {
-    match a
-        .editor
-        .parameter_value(track, step, a.scope, ParameterId::Waveform)
-    {
-        Ok(ParameterValue::Waveform(Waveform::Square)) => "square",
-        Ok(ParameterValue::Waveform(Waveform::Saw)) => "saw",
-        _ => "unchanged",
-    }
-}
 fn apply<F: FnOnce(&mut Editor) -> Result<bool, crate::reducer::EditError>>(
     a: &mut App,
     audio: &Audio,
@@ -777,23 +897,50 @@ fn sync_step(a: &mut App, audio: &mut Audio, track: usize, step: usize) -> bool 
     let _ = (track, step);
     sync_project(a, audio)
 }
-fn sync_parameter_change(a: &mut App, audio: &mut Audio, track: usize, step: usize) -> bool {
+fn sync_parameter_change(
+    a: &mut App,
+    audio: &mut Audio,
+    track: usize,
+    step: usize,
+    direct_entry: bool,
+) -> bool {
     if a.scope == Scope::Base {
-        sync_track_parameters(a, audio, track)
+        sync_track_parameters(a, audio, track, direct_entry)
     } else {
-        sync_step(a, audio, track, step)
+        sync_step_with_smoothing(a, audio, track, step, direct_entry)
     }
 }
-fn sync_track_parameters(a: &mut App, audio: &mut Audio, track: usize) -> bool {
+fn sync_track_parameters(a: &mut App, audio: &mut Audio, track: usize, direct_entry: bool) -> bool {
     let _ = track;
-    sync_project(a, audio)
+    sync_project_with_smoothing(a, audio, direct_entry)
 }
 fn sync_track(a: &mut App, audio: &mut Audio, track: usize) {
     let _ = track;
     sync_project(a, audio);
 }
 fn sync_project(a: &mut App, audio: &mut Audio) -> bool {
-    if audio.send(Audio::snapshot(&a.editor.project)).is_err() {
+    sync_project_with_smoothing(a, audio, false)
+}
+fn sync_step_with_smoothing(
+    a: &mut App,
+    audio: &mut Audio,
+    track: usize,
+    step: usize,
+    direct_entry: bool,
+) -> bool {
+    let _ = (track, step);
+    sync_project_with_smoothing(a, audio, direct_entry)
+}
+fn sync_project_with_smoothing(a: &mut App, audio: &mut Audio, direct_entry: bool) -> bool {
+    let smoothing = if direct_entry {
+        ParameterSmoothing::Fader
+    } else {
+        ParameterSmoothing::Default
+    };
+    if audio
+        .send(Audio::snapshot_with_smoothing(&a.editor.project, smoothing))
+        .is_err()
+    {
         a.editor.undo();
         a.status = "Audio command queue full; edit rejected".into();
         false
@@ -1387,7 +1534,17 @@ fn displayed_parameter(
         .parameter_value(track, step, Scope::Base, parameter)
         .ok()?;
     if a.scope == Scope::Base {
-        return Some((base, ValueOrigin::Base));
+        let value = match base {
+            ParameterValue::Percent(target) => ParameterValue::Percent(a.animated_percent(
+                track,
+                step,
+                parameter,
+                ValueOrigin::Base,
+                target,
+            )),
+            value => value,
+        };
+        return Some((value, ValueOrigin::Base));
     }
     let locked = a
         .editor
@@ -1401,14 +1558,18 @@ fn displayed_parameter(
         .editor
         .parameter_value(track, step, Scope::Lock, parameter)
         .unwrap_or(base);
-    Some((
-        value,
-        if locked {
-            ValueOrigin::Lock
-        } else {
-            ValueOrigin::Base
-        },
-    ))
+    let origin = if locked {
+        ValueOrigin::Lock
+    } else {
+        ValueOrigin::Base
+    };
+    let value = match value {
+        ParameterValue::Percent(target) => {
+            ParameterValue::Percent(a.animated_percent(track, step, parameter, origin, target))
+        }
+        value => value,
+    };
+    Some((value, origin))
 }
 
 fn fader_segments(value: u8) -> usize {
@@ -2170,6 +2331,61 @@ mod tests {
             ParameterGroup::Mixer.color(),
             ParameterGroup::Filter.color()
         );
+    }
+
+    #[test]
+    fn parameter_editor_arrows_cycle_visible_controls_and_wrap() {
+        let mut app = App::new(ProjectV2::new(), None);
+        app.row = 1;
+        app.step = 4;
+        app.scope = Scope::Lock;
+        app.mode = Mode::ParameterEdit(ParameterId::Level);
+        move_parameter_editor(&mut app, false);
+        assert!(matches!(app.mode, Mode::ParameterEdit(ParameterId::Decay)));
+        assert_eq!((app.row, app.step, app.scope), (1, 4, Scope::Lock));
+        move_parameter_editor(&mut app, true);
+        assert!(matches!(app.mode, Mode::ParameterEdit(ParameterId::Level)));
+
+        app.row = 4;
+        move_parameter_editor(&mut app, true);
+        move_parameter_editor(&mut app, true);
+        move_parameter_editor(&mut app, true);
+        assert!(matches!(
+            app.mode,
+            Mode::ParameterEdit(ParameterId::Waveform)
+        ));
+    }
+
+    #[test]
+    fn waveform_editor_switches_between_its_two_values() {
+        assert_eq!(flipped_waveform(Waveform::Saw), Waveform::Square);
+        assert_eq!(flipped_waveform(Waveform::Square), Waveform::Saw);
+    }
+
+    #[test]
+    fn fader_animation_interpolates_and_reaches_its_target() {
+        let started = Instant::now();
+        let animation = FaderAnimation {
+            track: 0,
+            step: 0,
+            scope: Scope::Base,
+            parameter: ParameterId::Level,
+            from: Percent::new(20).unwrap(),
+            to: Percent::new(80).unwrap(),
+            started,
+        };
+        assert_eq!(animation.value_at(started).get(), 20);
+        assert_eq!(
+            animation
+                .value_at(started + DIRECT_PARAMETER_RAMP / 2)
+                .get(),
+            50
+        );
+        assert_eq!(
+            animation.value_at(started + DIRECT_PARAMETER_RAMP).get(),
+            80
+        );
+        assert!(animation.is_complete(started + DIRECT_PARAMETER_RAMP));
     }
 
     #[test]

@@ -35,6 +35,21 @@ pub struct AudioProject {
     globals: Globals,
     tracks: [AudioTrack; TRACK_COUNT],
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParameterSmoothing {
+    Default,
+    Fader,
+}
+impl ParameterSmoothing {
+    fn samples(self, sample_rate: f32) -> u32 {
+        let seconds = match self {
+            Self::Default => 0.005,
+            Self::Fader => 0.030,
+        };
+        (sample_rate * seconds).round().max(1.0) as u32
+    }
+}
 impl AudioProject {
     pub fn from_project(project: &ProjectV2) -> Self {
         Self {
@@ -62,8 +77,14 @@ impl AudioProject {
 pub enum AudioCommand {
     PlayPause,
     Stop,
-    ReplaceProject(AudioProject),
-    Audition { track: u8, step: u8 },
+    ReplaceProject {
+        project: AudioProject,
+        smoothing: ParameterSmoothing,
+    },
+    Audition {
+        track: u8,
+        step: u8,
+    },
 }
 pub struct AudioStatus {
     pub running: AtomicBool,
@@ -102,7 +123,16 @@ impl Audio {
         self.producer.slots()
     }
     pub fn snapshot(project: &ProjectV2) -> AudioCommand {
-        AudioCommand::ReplaceProject(AudioProject::from_project(project))
+        Self::snapshot_with_smoothing(project, ParameterSmoothing::Default)
+    }
+    pub fn snapshot_with_smoothing(
+        project: &ProjectV2,
+        smoothing: ParameterSmoothing,
+    ) -> AudioCommand {
+        AudioCommand::ReplaceProject {
+            project: AudioProject::from_project(project),
+            smoothing,
+        }
     }
 }
 
@@ -196,7 +226,8 @@ struct SynthVoice {
     wave: Waveform,
     cutoff: Smoother,
     resonance: Smoother,
-    filter_env: f32,
+    filter_env: Smoother,
+    locks: ParameterLocks,
     active: bool,
     remaining: u32,
     level: Smoother,
@@ -305,6 +336,7 @@ struct DrumVoice {
     level: Smoother,
     delay_send: Smoother,
     reverb_send: Smoother,
+    locks: ParameterLocks,
 }
 impl DrumVoice {
     fn new(seed: u32) -> Self {
@@ -318,6 +350,7 @@ impl DrumVoice {
             level: Smoother::new(0.0),
             delay_send: Smoother::new(0.0),
             reverb_send: Smoother::new(0.0),
+            locks: ParameterLocks::default(),
         }
     }
     fn noise(&mut self) -> f32 {
@@ -339,7 +372,8 @@ impl SynthVoice {
             wave: Waveform::Saw,
             cutoff: Smoother::new(4000.0),
             resonance: Smoother::new(0.7),
-            filter_env: 0.0,
+            filter_env: Smoother::new(0.0),
+            locks: ParameterLocks::default(),
             active: false,
             remaining: 0,
             level: Smoother::new(0.0),
@@ -449,7 +483,7 @@ impl Renderer {
                     playhead.store(u8::MAX, Ordering::Release);
                 }
             }
-            AudioCommand::ReplaceProject(project) => {
+            AudioCommand::ReplaceProject { project, smoothing } => {
                 self.project = project;
                 for (track, next) in self.next_steps.iter_mut().enumerate() {
                     if *next >= self.project.tracks[track].step_count as usize {
@@ -462,6 +496,7 @@ impl Renderer {
                 }
                 self.configure_effects();
                 self.update_mutes(false);
+                self.refresh_active_parameters(smoothing.samples(self.sr));
             }
             AudioCommand::Audition { track, step } => self.audition(track as usize, step as usize),
         }
@@ -498,6 +533,7 @@ impl Renderer {
         voice
             .reverb_send
             .set(locks.reverb_send.unwrap_or(t.reverb_send).normalized(), 0);
+        voice.locks = locks;
     }
     fn start_drum_voice(
         voice: &mut DrumVoice,
@@ -526,23 +562,31 @@ impl Renderer {
             _ => voice.filter.set_highpass(2800.0 + tone * 9000.0, 1.2, sr),
         }
     }
-    fn update_drum_mix(&mut self, track: usize, step: usize) {
+    fn update_drum_mix(&mut self, track: usize, step: usize, smoothing: u32) {
         let t = self.project.tracks[track];
         let locks = self.locks_at(track, step);
-        let smoothing = (self.sr * 0.005) as u32;
         let voice = &mut self.drums[track];
+        Self::apply_drum_mix(voice, t, locks, smoothing);
+    }
+    fn apply_drum_mix(
+        voice: &mut DrumVoice,
+        track: AudioTrack,
+        locks: ParameterLocks,
+        smoothing: u32,
+    ) {
         voice.level.set(
-            locks.level.unwrap_or(t.level).normalized().powi(2),
+            locks.level.unwrap_or(track.level).normalized().powi(2),
             smoothing,
         );
         voice.delay_send.set(
-            locks.delay_send.unwrap_or(t.delay_send).normalized(),
+            locks.delay_send.unwrap_or(track.delay_send).normalized(),
             smoothing,
         );
         voice.reverb_send.set(
-            locks.reverb_send.unwrap_or(t.reverb_send).normalized(),
+            locks.reverb_send.unwrap_or(track.reverb_send).normalized(),
             smoothing,
         );
+        voice.locks = locks;
     }
     fn apply_synth_params(
         project: &AudioProject,
@@ -550,6 +594,7 @@ impl Renderer {
         track: usize,
         locks: ParameterLocks,
         voice: &mut SynthVoice,
+        smoothing: u32,
     ) {
         let t = project.tracks[track];
         let Instrument::Synth(p) = t.instrument else {
@@ -557,7 +602,6 @@ impl Renderer {
         };
         voice.wave = locks.waveform.unwrap_or(p.waveform);
         let cutoff = locks.cutoff.unwrap_or(p.cutoff).get();
-        let smoothing = (sr * 0.005) as u32;
         voice.cutoff.set(
             exp_map(cutoff, 20.0, 20_000.0_f32.min(sr * 0.45)),
             smoothing,
@@ -566,10 +610,13 @@ impl Renderer {
             0.707 + locks.resonance.unwrap_or(p.resonance).normalized() * (10.0 - 0.707),
             smoothing,
         );
-        voice.filter_env = locks
-            .filter_envelope
-            .unwrap_or(p.filter_envelope)
-            .normalized();
+        voice.filter_env.set(
+            locks
+                .filter_envelope
+                .unwrap_or(p.filter_envelope)
+                .normalized(),
+            smoothing,
+        );
         voice.env.configure(
             if locks.attack.unwrap_or(p.attack).get() == 0 {
                 0.0
@@ -579,6 +626,7 @@ impl Renderer {
             exp_map(locks.decay.unwrap_or(p.decay).get(), 0.005, 3.0),
             locks.sustain.unwrap_or(p.sustain).normalized(),
             exp_map(locks.release.unwrap_or(p.release).get(), 0.005, 5.0),
+            smoothing,
         );
         voice.level.set(
             locks.level.unwrap_or(t.level).normalized().powi(2),
@@ -592,6 +640,7 @@ impl Renderer {
             locks.reverb_send.unwrap_or(t.reverb_send).normalized(),
             smoothing,
         );
+        voice.locks = locks;
     }
     fn configure_synth_voice(
         project: &AudioProject,
@@ -606,9 +655,62 @@ impl Renderer {
             + project.globals.key.semitone()
             + project.globals.scale.offsets()[degree as usize - 1];
         voice.freq = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
-        Self::apply_synth_params(project, sr, track, locks, voice);
+        Self::apply_synth_params(
+            project,
+            sr,
+            track,
+            locks,
+            voice,
+            ParameterSmoothing::Default.samples(sr),
+        );
         voice.env.gate_on();
         voice.active = true;
+    }
+    fn active_step_locks(&self, track: usize) -> Option<ParameterLocks> {
+        if !self.playing {
+            return None;
+        }
+        let count = self.project.tracks[track].step_count as usize;
+        let step = (self.next_steps[track] + count - 1) % count;
+        Some(self.locks_at(track, step))
+    }
+    fn refresh_active_parameters(&mut self, smoothing: u32) {
+        for track in 0..3 {
+            let params = self.project.tracks[track];
+            let locks = self
+                .active_step_locks(track)
+                .unwrap_or(self.drums[track].locks);
+            Self::apply_drum_mix(&mut self.drums[track], params, locks, smoothing);
+            let locks = self.preview_drums[track].locks;
+            Self::apply_drum_mix(&mut self.preview_drums[track], params, locks, smoothing);
+        }
+        for track in 3..TRACK_COUNT {
+            let index = track - 3;
+            if self.synth[index].active {
+                let locks = self
+                    .active_step_locks(track)
+                    .unwrap_or(self.synth[index].locks);
+                Self::apply_synth_params(
+                    &self.project,
+                    self.sr,
+                    track,
+                    locks,
+                    &mut self.synth[index],
+                    smoothing,
+                );
+            }
+            if self.preview[index].active {
+                let locks = self.preview[index].locks;
+                Self::apply_synth_params(
+                    &self.project,
+                    self.sr,
+                    track,
+                    locks,
+                    &mut self.preview[index],
+                    smoothing,
+                );
+            }
+        }
     }
     fn audition(&mut self, track: usize, step: usize) {
         if track >= TRACK_COUNT || step >= self.project.tracks[track].step_count as usize {
@@ -648,7 +750,7 @@ impl Renderer {
             self.status.playheads[track].store(step as u8, Ordering::Release);
             let t = self.project.tracks[track];
             if track < 3 {
-                self.update_drum_mix(track, step);
+                self.update_drum_mix(track, step, ParameterSmoothing::Default.samples(self.sr));
                 if let Some(StepEvent::Trigger { locks }) = t.steps[step] {
                     self.trigger_drum(track, locks);
                 }
@@ -680,6 +782,7 @@ impl Renderer {
                                 track,
                                 locks,
                                 &mut self.synth[vi],
+                                ParameterSmoothing::Default.samples(self.sr),
                             );
                         }
                     }
@@ -690,6 +793,7 @@ impl Renderer {
                             track,
                             ParameterLocks::default(),
                             &mut self.synth[vi],
+                            ParameterSmoothing::Default.samples(self.sr),
                         );
                         self.synth[vi].env.gate_off();
                         self.synth[vi].active = false;
@@ -713,7 +817,7 @@ impl Renderer {
             Waveform::Square => v.osc.next_square(v.freq, sr),
         };
         let env = v.env.next_sample();
-        let cutoff = (v.cutoff.next_value() * 2.0_f32.powf(env * v.filter_env * 6.0))
+        let cutoff = (v.cutoff.next_value() * 2.0_f32.powf(env * v.filter_env.next_value() * 6.0))
             .min(20_000.0_f32.min(sr * 0.45));
         let resonance = v.resonance.next_value();
         let level = v.level.next_value();
@@ -860,9 +964,14 @@ mod tests {
     fn snapshot_contains_all_steps_without_heap_backed_commands() {
         let mut p = ProjectV2::new();
         p.tracks[0].steps.resize(MAX_STEP_COUNT, None);
-        let AudioCommand::ReplaceProject(s) = Audio::snapshot(&p) else {
+        let AudioCommand::ReplaceProject {
+            project: s,
+            smoothing,
+        } = Audio::snapshot(&p)
+        else {
             panic!()
         };
+        assert_eq!(smoothing, ParameterSmoothing::Default);
         assert_eq!(s.globals.tempo_bpm, 120);
         assert_eq!(s.tracks[0].step_count as usize, MAX_STEP_COUNT);
         assert_eq!(s.tracks[1].step_count, 16);
@@ -946,6 +1055,30 @@ mod tests {
     }
 
     #[test]
+    fn fader_snapshot_ramps_an_active_drum_mixer_value_over_thirty_ms() {
+        let mut project = ProjectV2::new();
+        project.tracks[0].level = Percent::new(100).unwrap();
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.boundary();
+        for _ in 0..40 {
+            renderer.drums[0].level.next_value();
+        }
+
+        project.tracks[0].level = Percent::ZERO;
+        renderer.command(Audio::snapshot_with_smoothing(
+            &project,
+            ParameterSmoothing::Fader,
+        ));
+        let first = renderer.drums[0].level.next_value();
+        assert!(first > 0.0 && first < 1.0);
+        for _ in 1..240 {
+            renderer.drums[0].level.next_value();
+        }
+        assert_eq!(renderer.drums[0].level.next_value(), 0.0);
+    }
+
+    #[test]
     fn synth_filter_mappings_match_the_specified_limits() {
         let project = AudioProject::from_project(&ProjectV2::new());
         let mut voice = SynthVoice::new(48_000.0);
@@ -954,7 +1087,7 @@ mod tests {
             resonance: Percent::new(0),
             ..Default::default()
         };
-        Renderer::apply_synth_params(&project, 48_000.0, 3, locks, &mut voice);
+        Renderer::apply_synth_params(&project, 48_000.0, 3, locks, &mut voice, 240);
         for _ in 0..240 {
             voice.cutoff.next_value();
             voice.resonance.next_value();
@@ -963,7 +1096,7 @@ mod tests {
         assert!((voice.resonance.next_value() - 0.707).abs() < 0.001);
         locks.cutoff = Percent::new(100);
         locks.resonance = Percent::new(100);
-        Renderer::apply_synth_params(&project, 48_000.0, 3, locks, &mut voice);
+        Renderer::apply_synth_params(&project, 48_000.0, 3, locks, &mut voice, 240);
         for _ in 0..240 {
             voice.cutoff.next_value();
             voice.resonance.next_value();
