@@ -5,7 +5,7 @@ use crate::{
     },
     engine::{GateAction, StepClock, synth_action},
     model::{
-        ChorusMode, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT, ParameterId,
+        ChordShape, ChorusMode, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT, ParameterId,
         ParameterLocks, Percent, ProjectV6, StepEvent, TRACK_COUNT, Waveform,
     },
 };
@@ -33,6 +33,7 @@ struct AudioTrack {
     step_count: u8,
     input_degree: u8,
     input_octave: u8,
+    input_chord_shape: ChordShape,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct AudioProject {
@@ -71,6 +72,7 @@ impl AudioProject {
                     step_count: t.steps.len() as u8,
                     input_degree: t.input_degree.unwrap_or(1),
                     input_octave: t.input_octave.unwrap_or(3),
+                    input_chord_shape: t.input_chord_shape.unwrap_or_default(),
                 }
             }),
         }
@@ -257,11 +259,15 @@ struct SynthTrigger {
     octave: u8,
     accent: bool,
     slide: bool,
+    chord_shape: Option<ChordShape>,
 }
 
+const CHORD_GROUP_SIZE: usize = 4;
+
 struct ChordVoicePool {
-    voices: [SynthVoice; 6],
+    voices: [SynthVoice; CHORD_GROUP_SIZE * 2],
     group: usize,
+    voice_count: usize,
     active: bool,
     chorus: StereoChorus,
 }
@@ -271,6 +277,7 @@ impl ChordVoicePool {
         Self {
             voices: std::array::from_fn(|_| SynthVoice::new(sample_rate as f32)),
             group: 1,
+            voice_count: 0,
             active: false,
             chorus: StereoChorus::new(sample_rate),
         }
@@ -1071,15 +1078,29 @@ impl Renderer {
         voice.active = true;
     }
 
-    fn chord_midis(project: &AudioProject, degree: u8, octave: u8) -> [i32; 3] {
+    fn chord_midis(
+        project: &AudioProject,
+        degree: u8,
+        octave: u8,
+        shape: ChordShape,
+    ) -> ([i32; 4], usize) {
         let scale = project.globals.scale.offsets();
         let root = degree as usize - 1;
-        std::array::from_fn(|voice| {
-            let scale_degree = root + voice * 2;
-            12 * (octave as i32 + 1 + (scale_degree / 7) as i32)
+        let mut previous = 0;
+        let mut wraps = 0;
+        let mut midis = [0; 4];
+        for (voice, midi) in midis.iter_mut().enumerate().take(shape.degrees().len()) {
+            let chord_degree = shape.degrees()[voice];
+            if voice > 0 && chord_degree <= previous {
+                wraps += 7;
+            }
+            previous = chord_degree;
+            let scale_degree = root + usize::from(chord_degree - 1) + wraps;
+            *midi = 12 * (octave as i32 + 1 + (scale_degree / 7) as i32)
                 + project.globals.key.semitone()
-                + scale[scale_degree % 7]
-        })
+                + scale[scale_degree % 7];
+        }
+        (midis, shape.degrees().len())
     }
 
     fn trigger_chord(
@@ -1090,7 +1111,9 @@ impl Renderer {
         pool: &mut ChordVoicePool,
     ) {
         if pool.active {
-            for voice in &mut pool.voices[pool.group * 3..pool.group * 3 + 3] {
+            for voice in &mut pool.voices
+                [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
+            {
                 Self::apply_synth_params(
                     project,
                     sr,
@@ -1104,25 +1127,32 @@ impl Renderer {
             }
         }
         pool.group = 1 - pool.group;
-        let midis = Self::chord_midis(project, trigger.degree, trigger.octave);
-        for (voice, midi) in pool.voices[pool.group * 3..pool.group * 3 + 3]
+        let shape = trigger.chord_shape.unwrap_or_default();
+        let (midis, voice_count) =
+            Self::chord_midis(project, trigger.degree, trigger.octave, shape);
+        for (voice, midi) in pool.voices
+            [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + voice_count]
             .iter_mut()
-            .zip(midis)
+            .zip(midis.into_iter().take(voice_count))
         {
             let frequency = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
             Self::configure_synth_voice_frequency(project, sr, 4, frequency, trigger, locks, voice);
         }
+        pool.voice_count = voice_count;
         Self::configure_chorus(&mut pool.chorus, project.tracks[4], locks);
         pool.active = true;
     }
 
     fn release_chord(pool: &mut ChordVoicePool) {
         if pool.active {
-            for voice in &mut pool.voices[pool.group * 3..pool.group * 3 + 3] {
+            for voice in &mut pool.voices
+                [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
+            {
                 voice.env.gate_off();
                 voice.active = false;
             }
             pool.active = false;
+            pool.voice_count = 0;
         }
     }
     fn refresh_active_parameters(&mut self, smoothing: u32) {
@@ -1162,17 +1192,20 @@ impl Renderer {
             }
         }
         if self.chord.active {
-            let chorus_locks = self.chord.voices[self.chord.group * 3].locks;
-            for voice in &mut self.chord.voices[self.chord.group * 3..self.chord.group * 3 + 3] {
+            let chorus_locks = self.chord.voices[self.chord.group * CHORD_GROUP_SIZE].locks;
+            for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
+                ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
+            {
                 let locks = voice.locks;
                 Self::apply_synth_params(&self.project, self.sr, 4, locks, voice, smoothing);
             }
             Self::configure_chorus(&mut self.chord.chorus, self.project.tracks[4], chorus_locks);
         }
         if self.preview_chord.active {
-            let chorus_locks = self.preview_chord.voices[self.preview_chord.group * 3].locks;
-            for voice in &mut self.preview_chord.voices
-                [self.preview_chord.group * 3..self.preview_chord.group * 3 + 3]
+            let chorus_locks =
+                self.preview_chord.voices[self.preview_chord.group * CHORD_GROUP_SIZE].locks;
+            for voice in &mut self.preview_chord.voices[self.preview_chord.group * CHORD_GROUP_SIZE
+                ..self.preview_chord.group * CHORD_GROUP_SIZE + self.preview_chord.voice_count]
             {
                 let locks = voice.locks;
                 Self::apply_synth_params(&self.project, self.sr, 4, locks, voice, smoothing);
@@ -1198,20 +1231,21 @@ impl Renderer {
             return;
         }
         let t = self.project.tracks[track];
-        let (degree, octave, accent, slide, locks) = match t.steps[step] {
+        let (degree, octave, accent, slide, chord_shape, locks) = match t.steps[step] {
             Some(StepEvent::BassNote {
                 degree,
                 octave,
                 accent,
                 slide,
                 locks,
-            }) => (degree, octave, accent, slide, locks),
+            }) => (degree, octave, accent, slide, None, locks),
             Some(StepEvent::Note {
                 degree,
                 octave,
                 accent,
+                chord_shape,
                 locks,
-            }) => (degree, octave, accent, false, locks),
+            }) => (degree, octave, accent, false, chord_shape, locks),
             Some(StepEvent::Tie { .. }) => {
                 let Some(source) =
                     crate::model::tie_source(&t.steps[..t.step_count as usize], step)
@@ -1225,13 +1259,28 @@ impl Renderer {
                         accent,
                         slide,
                         ..
-                    }) => (degree, octave, accent, slide, self.locks_at(track, step)),
+                    }) => (
+                        degree,
+                        octave,
+                        accent,
+                        slide,
+                        None,
+                        self.locks_at(track, step),
+                    ),
                     Some(StepEvent::Note {
                         degree,
                         octave,
                         accent,
+                        chord_shape,
                         ..
-                    }) => (degree, octave, accent, false, self.locks_at(track, step)),
+                    }) => (
+                        degree,
+                        octave,
+                        accent,
+                        false,
+                        chord_shape,
+                        self.locks_at(track, step),
+                    ),
                     _ => return,
                 }
             }
@@ -1240,6 +1289,7 @@ impl Renderer {
                 t.input_octave,
                 false,
                 false,
+                (track == 4).then_some(t.input_chord_shape),
                 ParameterLocks::default(),
             ),
         };
@@ -1248,6 +1298,7 @@ impl Renderer {
             octave,
             accent,
             slide,
+            chord_shape,
         };
         if track == 4 {
             Self::trigger_chord(
@@ -1258,8 +1309,8 @@ impl Renderer {
                 &mut self.preview_chord,
             );
             let remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
-            for voice in &mut self.preview_chord.voices
-                [self.preview_chord.group * 3..self.preview_chord.group * 3 + 3]
+            for voice in &mut self.preview_chord.voices[self.preview_chord.group * CHORD_GROUP_SIZE
+                ..self.preview_chord.group * CHORD_GROUP_SIZE + self.preview_chord.voice_count]
             {
                 voice.remaining = remaining;
             }
@@ -1292,6 +1343,7 @@ impl Renderer {
                         octave,
                         accent,
                         slide,
+                        chord_shape,
                     } => {
                         let locks = self.locks_at(track, step);
                         let trigger = SynthTrigger {
@@ -1299,6 +1351,7 @@ impl Renderer {
                             octave,
                             accent,
                             slide,
+                            chord_shape,
                         };
                         if track == 4 {
                             Self::trigger_chord(
@@ -1323,8 +1376,9 @@ impl Renderer {
                         if matches!(t.steps[step], Some(StepEvent::Tie { .. })) {
                             let locks = self.locks_at(track, step);
                             if track == 4 {
-                                for voice in &mut self.chord.voices
-                                    [self.chord.group * 3..self.chord.group * 3 + 3]
+                                for voice in &mut self.chord.voices[self.chord.group
+                                    * CHORD_GROUP_SIZE
+                                    ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
                                 {
                                     Self::apply_synth_params(
                                         &self.project,
@@ -1350,8 +1404,8 @@ impl Renderer {
                     }
                     GateAction::Release => {
                         if track == 4 {
-                            for voice in &mut self.chord.voices
-                                [self.chord.group * 3..self.chord.group * 3 + 3]
+                            for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
+                                ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
                             {
                                 Self::apply_synth_params(
                                     &self.project,
@@ -1788,12 +1842,14 @@ mod tests {
                 degree: 1,
                 octave: 3,
                 accent: false,
+                chord_shape: None,
                 locks: Default::default(),
             });
             project.tracks[5].steps[step] = Some(StepEvent::Note {
                 degree: 5,
                 octave: 4,
                 accent: false,
+                chord_shape: None,
                 locks: Default::default(),
             });
         }
@@ -2218,6 +2274,7 @@ mod tests {
             degree: 1,
             octave: 3,
             accent: false,
+            chord_shape: None,
             locks: ParameterLocks {
                 cutoff: Percent::new(20),
                 ..Default::default()
@@ -2233,6 +2290,7 @@ mod tests {
             degree: 4,
             octave: 3,
             accent: true,
+            chord_shape: None,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -2241,7 +2299,7 @@ mod tests {
         renderer.boundary();
         let first_group = renderer.chord.group;
         let frequencies = std::array::from_fn::<_, 3, _>(|voice| {
-            renderer.chord.voices[first_group * 3 + voice]
+            renderer.chord.voices[first_group * CHORD_GROUP_SIZE + voice]
                 .freq
                 .next_value()
         });
@@ -2249,28 +2307,60 @@ mod tests {
         for (actual, expected) in frequencies.into_iter().zip(expected) {
             assert!((actual - expected).abs() < 0.001);
         }
-        for voice in &renderer.chord.voices[first_group * 3..first_group * 3 + 3] {
+        for voice in &renderer.chord.voices
+            [first_group * CHORD_GROUP_SIZE..first_group * CHORD_GROUP_SIZE + 3]
+        {
             assert_eq!(voice.locks.cutoff, Percent::new(20));
         }
 
         renderer.boundary();
         assert_eq!(renderer.chord.group, first_group);
-        for voice in &renderer.chord.voices[first_group * 3..first_group * 3 + 3] {
+        for voice in &renderer.chord.voices
+            [first_group * CHORD_GROUP_SIZE..first_group * CHORD_GROUP_SIZE + 3]
+        {
             assert_eq!(voice.locks.cutoff, Percent::new(20));
             assert_eq!(voice.locks.resonance, Percent::new(70));
         }
         renderer.boundary();
         assert_ne!(renderer.chord.group, first_group);
-        for voice in &renderer.chord.voices[first_group * 3..first_group * 3 + 3] {
+        for voice in &renderer.chord.voices
+            [first_group * CHORD_GROUP_SIZE..first_group * CHORD_GROUP_SIZE + 3]
+        {
             assert_eq!(voice.env.stage, crate::dsp::EnvStage::Release);
         }
-        for voice in &renderer.chord.voices[renderer.chord.group * 3..renderer.chord.group * 3 + 3]
+        for voice in &renderer.chord.voices
+            [renderer.chord.group * CHORD_GROUP_SIZE..renderer.chord.group * CHORD_GROUP_SIZE + 3]
         {
             assert_eq!(voice.env.stage, crate::dsp::EnvStage::Attack);
         }
 
         renderer.boundary();
         assert!(!renderer.chord.active);
+    }
+
+    #[test]
+    fn chord_track_renders_four_note_shapes_with_overlap_capacity() {
+        let mut project = ProjectV6::new();
+        project.tracks[4].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            chord_shape: Some(ChordShape::SeventhRoot),
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
+        renderer.boundary();
+        assert_eq!(renderer.chord.voice_count, 4);
+        let group = renderer.chord.group;
+        let expected = [48, 52, 55, 59];
+        for (voice, midi) in expected.into_iter().enumerate() {
+            let frequency = renderer.chord.voices[group * CHORD_GROUP_SIZE + voice]
+                .freq
+                .next_value();
+            let expected = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
+            assert!((frequency - expected).abs() < 0.001);
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::model::{
-    LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterValue, Percent, ProjectV6,
-    StepEvent, TrackKind, Waveform, tie_source,
+    ChordShape, LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterValue, Percent,
+    ProjectV6, StepEvent, TrackKind, Waveform, tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -25,6 +25,7 @@ pub enum EditError {
     CannotDouble,
     NoAccent,
     NoSlide,
+    NoChordShape,
 }
 impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -43,6 +44,7 @@ impl std::fmt::Display for EditError {
                 Self::CannotDouble => "track is longer than 32 steps and cannot be doubled",
                 Self::NoAccent => "accent requires a trigger or note",
                 Self::NoSlide => "slide requires a Bass note",
+                Self::NoChordShape => "chord shape requires a Chord note or empty Chord step",
             }
         )
     }
@@ -163,6 +165,8 @@ impl Editor {
                     degree: t.input_degree.unwrap(),
                     octave: t.input_octave.unwrap(),
                     accent: false,
+                    chord_shape: (t.kind == TrackKind::Chord)
+                        .then_some(t.input_chord_shape.unwrap_or_default()),
                     locks: Default::default(),
                 }
             } else {
@@ -183,16 +187,21 @@ impl Editor {
             if step >= t.steps.len() || !(1..=8).contains(&degree) {
                 return Err(EditError::InvalidStep);
             }
-            let (locks, accent, slide) = match t.steps[step].take() {
+            let (locks, accent, slide, chord_shape, existing_note) = match t.steps[step].take() {
                 Some(StepEvent::BassNote {
                     accent,
                     slide,
                     locks,
                     ..
-                }) => (locks, accent, slide),
-                Some(StepEvent::Note { accent, locks, .. }) => (locks, accent, false),
-                Some(event) => (*event.locks(), false, false),
-                None => (Default::default(), false, false),
+                }) => (locks, accent, slide, None, false),
+                Some(StepEvent::Note {
+                    accent,
+                    chord_shape,
+                    locks,
+                    ..
+                }) => (locks, accent, false, chord_shape, true),
+                Some(event) => (*event.locks(), false, false, None, false),
+                None => (Default::default(), false, false, None, false),
             };
             let octave = t.input_octave.unwrap();
             t.input_degree = Some(degree);
@@ -209,10 +218,44 @@ impl Editor {
                     degree,
                     octave,
                     accent,
+                    chord_shape: (t.kind == TrackKind::Chord).then_some(if existing_note {
+                        chord_shape.unwrap_or_default()
+                    } else {
+                        t.input_chord_shape.unwrap_or_default()
+                    }),
                     locks,
                 }
             });
             cleanup_invalid_ties(t);
+            Ok(())
+        })
+    }
+
+    pub fn set_chord_shape(
+        &mut self,
+        track: usize,
+        step: usize,
+        shape: ChordShape,
+    ) -> Result<bool, EditError> {
+        self.edit(None, move |project| {
+            let t = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if t.kind != TrackKind::Chord {
+                return Err(EditError::NoChordShape);
+            }
+            let event = t.steps.get_mut(step).ok_or(EditError::InvalidStep)?;
+            match event {
+                Some(StepEvent::Note { chord_shape, .. }) => {
+                    *chord_shape = (shape != ChordShape::default()).then_some(shape);
+                }
+                None => {
+                    t.input_chord_shape = (shape != ChordShape::default()).then_some(shape);
+                }
+                Some(StepEvent::Tie { .. }) => return Err(EditError::NoChordShape),
+                Some(_) => return Err(EditError::NoChordShape),
+            }
             Ok(())
         })
     }
@@ -775,5 +818,43 @@ mod tests {
             editor.set_lfo(0, ParameterId::Cutoff, Some(config), None),
             Err(EditError::InvalidParameter)
         );
+    }
+
+    #[test]
+    fn chord_shape_edits_selected_notes_and_empty_step_defaults() {
+        let mut editor = Editor::new(ProjectV6::new());
+        editor
+            .set_chord_shape(4, 0, ChordShape::SeventhRoot)
+            .unwrap();
+        assert_eq!(
+            editor.project.tracks[4].input_chord_shape,
+            Some(ChordShape::SeventhRoot)
+        );
+        editor.set_note(4, 0, 1).unwrap();
+        assert!(matches!(
+            editor.project.tracks[4].steps[0],
+            Some(StepEvent::Note {
+                chord_shape: Some(ChordShape::SeventhRoot),
+                ..
+            })
+        ));
+        editor
+            .set_chord_shape(4, 0, ChordShape::Sus4FirstInversion)
+            .unwrap();
+        assert!(matches!(
+            editor.project.tracks[4].steps[0],
+            Some(StepEvent::Note {
+                chord_shape: Some(ChordShape::Sus4FirstInversion),
+                ..
+            })
+        ));
+        assert!(editor.undo());
+        assert!(matches!(
+            editor.project.tracks[4].steps[0],
+            Some(StepEvent::Note {
+                chord_shape: Some(ChordShape::SeventhRoot),
+                ..
+            })
+        ));
     }
 }

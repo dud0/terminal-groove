@@ -256,4 +256,36 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
     }
+
+    #[test]
+    fn chord_shape_schema_round_trips_and_defaults_legacy_notes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("chords.groove.json");
+        let mut project = ProjectV6::new();
+        project.tracks[4].input_chord_shape = Some(crate::model::ChordShape::SeventhRoot);
+        project.tracks[4].steps[0] = Some(crate::model::StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            chord_shape: Some(crate::model::ChordShape::SeventhFirstInversion),
+            locks: Default::default(),
+        });
+        save_atomic(&path, &project).unwrap();
+        assert_eq!(load(&path).unwrap(), project);
+
+        let mut value = serde_json::to_value(project).unwrap();
+        value["tracks"][4]["steps"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("chord_shape");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let loaded = load(&path).unwrap();
+        assert!(matches!(
+            loaded.tracks[4].steps[0],
+            Some(crate::model::StepEvent::Note {
+                chord_shape: None,
+                ..
+            })
+        ));
+    }
 }

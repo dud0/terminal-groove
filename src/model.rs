@@ -425,6 +425,85 @@ pub enum TrackKind {
     Lead,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChordShape {
+    #[default]
+    TriadRoot,
+    TriadFirstInversion,
+    TriadSecondInversion,
+    SeventhRoot,
+    SeventhFirstInversion,
+    SeventhSecondInversion,
+    SeventhThirdInversion,
+    SixthRoot,
+    SixthFirstInversion,
+    SixthSecondInversion,
+    SixthThirdInversion,
+    Sus2Root,
+    Sus2FirstInversion,
+    Sus2SecondInversion,
+    Sus4Root,
+    Sus4FirstInversion,
+    Sus4SecondInversion,
+}
+
+impl ChordShape {
+    pub const ALL: [Self; 17] = [
+        Self::TriadRoot,
+        Self::TriadFirstInversion,
+        Self::TriadSecondInversion,
+        Self::SeventhRoot,
+        Self::SeventhFirstInversion,
+        Self::SeventhSecondInversion,
+        Self::SeventhThirdInversion,
+        Self::SixthRoot,
+        Self::SixthFirstInversion,
+        Self::SixthSecondInversion,
+        Self::SixthThirdInversion,
+        Self::Sus2Root,
+        Self::Sus2FirstInversion,
+        Self::Sus2SecondInversion,
+        Self::Sus4Root,
+        Self::Sus4FirstInversion,
+        Self::Sus4SecondInversion,
+    ];
+
+    pub const fn degrees(self) -> &'static [u8] {
+        match self {
+            Self::TriadRoot => &[1, 3, 5],
+            Self::TriadFirstInversion => &[3, 5, 1],
+            Self::TriadSecondInversion => &[5, 1, 3],
+            Self::SeventhRoot => &[1, 3, 5, 7],
+            Self::SeventhFirstInversion => &[3, 5, 7, 1],
+            Self::SeventhSecondInversion => &[5, 7, 1, 3],
+            Self::SeventhThirdInversion => &[7, 1, 3, 5],
+            Self::SixthRoot => &[1, 3, 5, 6],
+            Self::SixthFirstInversion => &[3, 5, 6, 1],
+            Self::SixthSecondInversion => &[5, 6, 1, 3],
+            Self::SixthThirdInversion => &[6, 1, 3, 5],
+            Self::Sus2Root => &[1, 2, 5],
+            Self::Sus2FirstInversion => &[2, 5, 1],
+            Self::Sus2SecondInversion => &[5, 1, 2],
+            Self::Sus4Root => &[1, 4, 5],
+            Self::Sus4FirstInversion => &[4, 5, 1],
+            Self::Sus4SecondInversion => &[5, 1, 4],
+        }
+    }
+}
+
+impl fmt::Display for ChordShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = self
+            .degrees()
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join("-");
+        write!(f, "{text}")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KickParameters {
@@ -739,6 +818,8 @@ pub enum StepEvent {
         degree: u8,
         octave: u8,
         accent: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chord_shape: Option<ChordShape>,
         locks: ParameterLocks,
     },
     Tie {
@@ -806,6 +887,8 @@ pub struct Track {
     pub input_degree: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_octave: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_chord_shape: Option<ChordShape>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -833,6 +916,7 @@ impl ProjectV6 {
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: None,
             input_octave: None,
+            input_chord_shape: None,
         };
         let synth = |kind: TrackKind, name: &str, instrument: Instrument| Track {
             kind,
@@ -846,6 +930,7 @@ impl ProjectV6 {
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: Some(1),
             input_octave: Some(3),
+            input_chord_shape: (kind == TrackKind::Chord).then_some(ChordShape::default()),
         };
         Self {
             format_version: 6,
@@ -968,6 +1053,7 @@ impl ProjectV6 {
             if !instrument_ok
                 || pitched != t.input_degree.is_some()
                 || pitched != t.input_octave.is_some()
+                || (t.kind != TrackKind::Chord && t.input_chord_shape.is_some())
             {
                 return Err(ValidationError::TrackOrder(ti, expected[ti].1));
             }
@@ -996,6 +1082,11 @@ impl ProjectV6 {
                     );
                     if !event_ok {
                         return Err(ValidationError::EventKind(ti, si));
+                    }
+                    if let StepEvent::Note { chord_shape, .. } = event {
+                        if t.kind == TrackKind::Lead && chord_shape.is_some() {
+                            return Err(ValidationError::EventKind(ti, si));
+                        }
                     }
                     if let StepEvent::Note { degree, octave, .. }
                     | StepEvent::BassNote { degree, octave, .. } = event
@@ -1028,18 +1119,37 @@ impl ProjectV6 {
             .map(|m| 440.0 * 2.0_f32.powf((m as f32 - 69.0) / 12.0))
     }
 
-    pub fn chord_midis(&self, degree: u8, octave: u8) -> Option<[i32; 3]> {
+    pub fn chord_midis_for(
+        &self,
+        degree: u8,
+        octave: u8,
+        shape: ChordShape,
+    ) -> Option<([i32; 4], usize)> {
         if !(1..=8).contains(&degree) || octave > 7 {
             return None;
         }
         let scale = self.globals.scale.offsets();
         let root = degree as usize - 1;
-        Some(std::array::from_fn(|voice| {
-            let scale_degree = root + voice * 2;
-            12 * (octave as i32 + 1 + (scale_degree / 7) as i32)
+        let mut previous = 0;
+        let mut wraps = 0;
+        let mut midis = [0; 4];
+        for (voice, midi) in midis.iter_mut().enumerate().take(shape.degrees().len()) {
+            let chord_degree = shape.degrees()[voice];
+            if voice > 0 && chord_degree <= previous {
+                wraps += 7;
+            }
+            previous = chord_degree;
+            let scale_degree = root + usize::from(chord_degree - 1) + wraps;
+            *midi = 12 * (octave as i32 + 1 + (scale_degree / 7) as i32)
                 + self.globals.key.semitone()
-                + scale[scale_degree % 7]
-        }))
+                + scale[scale_degree % 7];
+        }
+        Some((midis, shape.degrees().len()))
+    }
+
+    pub fn chord_midis(&self, degree: u8, octave: u8) -> Option<[i32; 3]> {
+        let (midis, _) = self.chord_midis_for(degree, octave, ChordShape::default())?;
+        Some([midis[0], midis[1], midis[2]])
     }
 }
 impl Default for ProjectV6 {
@@ -1462,6 +1572,24 @@ mod tests {
         assert_eq!(project.chord_midis(0, 3), None);
         assert_eq!(project.chord_midis(1, 8), None);
     }
+
+    #[test]
+    fn chord_shapes_use_diatonic_degrees_and_lift_inversions() {
+        let project = ProjectV6::new();
+        assert_eq!(ChordShape::SeventhRoot.to_string(), "1-3-5-7");
+        assert_eq!(
+            project.chord_midis_for(1, 3, ChordShape::SeventhRoot),
+            Some(([48, 52, 55, 59], 4))
+        );
+        assert_eq!(
+            project.chord_midis_for(1, 3, ChordShape::SeventhFirstInversion),
+            Some(([52, 55, 59, 60], 4))
+        );
+        assert_eq!(
+            project.chord_midis_for(1, 3, ChordShape::SeventhSecondInversion),
+            Some(([55, 59, 60, 64], 4))
+        );
+    }
     #[test]
     fn percent_clamps() {
         assert_eq!(Percent::new(101), None);
@@ -1474,6 +1602,7 @@ mod tests {
             degree: 1,
             octave: 3,
             accent: false,
+            chord_shape: None,
             locks: Default::default(),
         });
         s[0] = Some(StepEvent::Tie {
@@ -1529,6 +1658,7 @@ mod tests {
             degree: 1,
             octave: 3,
             accent: false,
+            chord_shape: None,
             locks: Default::default(),
         };
         assert_eq!(serde_json::to_value(trigger).unwrap()["accent"], false);
@@ -1565,6 +1695,7 @@ mod tests {
             degree: 1,
             octave: 3,
             accent: false,
+            chord_shape: None,
             locks: ParameterLocks {
                 tone: Percent::new(50),
                 ..Default::default()

@@ -42,7 +42,7 @@ All sound is synthesized in real time. The application contains no audio samples
 - Multiple patterns, pattern chaining, or song mode
 - Time-signature changes
 - Swing, microtiming, probability, or continuously variable event velocity
-- Polyphonic note entry outside the fixed Chord triad mapping, or oscillator detune
+- Polyphonic note entry outside the fixed Chord shape mapping, or oscillator detune
 - Per-track pan, solo, master-volume control, or configurable effect returns
 - User-defined track types or track reordering
 - Mouse control
@@ -83,17 +83,17 @@ Degree 1 is the root in the stored input octave. Degrees 2 through 7 use the sel
 
 Notes are stored as scale degree and octave rather than absolute pitch. Changing the global key or scale therefore reinterprets all existing pattern notes the next time they trigger. A note that is already sounding keeps its current pitch until a new note event starts; a tie does not retune it.
 
-Bass and Lead are monophonic. Chord interprets the stored degree as the root of a three-note diatonic triad:
+Bass and Lead are monophonic. Chord interprets the stored degree as the root of a selected diatonic shape. The available shapes are `1-3-5`, `1-3-5-7`, `1-3-5-6`, `1-2-5`, and `1-4-5`, plus their cyclic inversions. A shape is stored on each Chord note as an ordered scale-degree recipe, so its musical quality follows the current root and scale. For example, `1-3-5-7` can produce different seventh qualities depending on the root and scale.
 
 - A Bass or Lead note sets pitch, captures its accent, opens the gate, and retriggers its amplitude envelope.
-- A Chord note stacks the root, scale third, and scale fifth upward in close position. The stored octave is the root octave, and wrapped chord tones rise into the following octave.
-- Chord has six voices. A new note releases the previous triad and retriggers all three new tones, including common tones; one released triad may overlap before the oldest three voices are reused.
-- A following tie keeps the mono voice or complete triad open without retriggering pitch, accent, or envelopes.
+- A Chord note renders its selected shape in close position. The stored octave is the root octave; when an inversion recipe wraps from a higher degree to a lower degree, the wrapped tone rises by one scale octave.
+- Chord has two alternating four-voice groups. A new note releases the previous shape and retriggers all of its tones, including common tones; one released shape may overlap before the oldest group is reused.
+- A following tie keeps the mono voice or complete chord shape open without retriggering pitch, accent, or envelopes. A tie inherits the source note's Chord shape.
 - A following empty step closes the gate and begins release.
 - A following note closes/restarts the existing voice at the new pitch, with click-safe envelope handling.
 - Bass notes additionally store a Boolean slide. A slide remains armed through ties and glides to the next Bass note over a fixed 60 ms without retriggering its main envelope. An empty step clears it.
 
-Pressing a degree key replaces any existing event on the selected step with that note and preserves compatible locks and articulations. New notes are unaccented and new Bass notes have slide disabled. Pressing `Enter` on an empty pitched step inserts the track's last-entered degree and octave. Pressing `Enter` on a note or tie clears it and its locks.
+Pressing a degree key replaces any existing event on the selected step with that note and preserves compatible locks, articulations, and the Chord shape of an existing Chord note. New notes are unaccented and new Bass notes have slide disabled. Pressing `Enter` on an empty pitched step inserts the track's last-entered degree and octave; empty Chord steps also use the track's last-entered Chord shape. Pressing `Enter` on a note or tie clears it and its locks.
 
 ### 2.4 Tie invariants
 
@@ -318,6 +318,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Chord/Lead | `c` / `R` / `f` | Edit cutoff, resonance, or filter-envelope amount |
 | Chord/Lead | `a` / `d` / `s` / `r` | Edit ADSR |
 | Chord | `h` | Edit chorus Off/I/II mode |
+| Chord | `C` | Edit the selected Chord note's shape, or the Chord input shape on an empty step |
 | Global | `t` | Edit tempo |
 | Global | `y` | Edit delay division |
 | Global | `f` | Edit delay feedback |
@@ -340,6 +341,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - Enter or Esc returns to navigation without reverting changes already made.
 - A series of repeated arrow changes to one value is coalesced into one undo transaction until the parameter changes, editing ends, or 300 ms elapses without another adjustment.
 - Mute remains a discrete immediate action; Bass waveform and Chord chorus use discrete persistent editors.
+- `C` opens a compact centered Chord-shape selector on the Chord track. It reuses the LFO selector's vertical list: Up/Down selects a recipe and stops at the first or last value, while Enter/Esc closes without reverting edits. On an existing Chord note only that note changes; on an empty step the track's future input shape changes. Ties display their source shape and must be edited at the source note.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
 - `Shift+A` toggles accent immediately on a trigger or note. `Shift+G` toggles slide on a Bass note. Both are undoable and reject incompatible or empty steps visibly.
@@ -351,7 +353,7 @@ Adding or replacing a trigger or note automatically auditions it while transport
 `o` explicitly auditions at any transport state without changing transport or pattern data:
 
 - A drum row auditions the selected trigger's accent and locks, or an unaccented hit with base values on an empty step.
-- A Bass/Lead note auditions its pitch, accent, and locks; a Chord note auditions its complete triad.
+- A Bass/Lead note auditions its pitch, accent, and locks; a Chord note auditions its complete selected shape.
 - A tie resolves and auditions its source note and accent while applying effective tie-chain locks.
 - An empty pitched step auditions the last-entered note unaccented with base values.
 - A synth audition holds the gate for one quarter note at the current tempo and then enters release.
@@ -471,7 +473,7 @@ The top-level object is:
 - An `instrument` object with the applicable base values
 - A required sparse `lfos` object containing compatible per-destination assignments
 - A `steps` array containing 1 through 64 elements; its array length is the track length
-- Bass, Chord, and Lead additionally store `input_degree` and `input_octave`
+- Bass, Chord, and Lead additionally store `input_degree` and `input_octave`. Chord tracks may store `input_chord_shape`; omitted values mean `1-3-5`.
 
 Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. Lead stores the same percentage controls except `chorus`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
 
@@ -502,6 +504,8 @@ An empty step is JSON `null`. Populated step shapes are:
 ```
 
 `accent` is required and Boolean on triggers, `bass_note`, and `note`. `slide` is additionally required and Boolean on `bass_note`. Both are invalid on ties.
+
+Chord notes may include an optional `chord_shape` string. Omitted values mean `triad_root` (`1-3-5`). The stable shape names are `triad_root`, `triad_first_inversion`, `triad_second_inversion`, `seventh_root`, `seventh_first_inversion`, `seventh_second_inversion`, `seventh_third_inversion`, `sixth_root`, `sixth_first_inversion`, `sixth_second_inversion`, `sixth_third_inversion`, `sus2_root`, `sus2_first_inversion`, `sus2_second_inversion`, `sus4_root`, `sus4_first_inversion`, and `sus4_second_inversion`. The field is invalid on Lead notes.
 
 ```json
 {
@@ -539,6 +543,7 @@ The Rust model should express and validate the schema through these domain conce
 - `KickParameters`, `SnareParameters`, `HatParameters`, `BassParameters`, `ChordParameters`, and `LeadParameters`
 - `Step`
 - `StepEvent::{Trigger, BassNote, Note, Tie}`
+- `ChordShape`
 - `ParameterLocks`
 - `ParameterId`
 - `LfoAssignments`, `LfoConfig`, `LfoWaveform`, `LfoRate`, and `LfoDivision`
@@ -650,7 +655,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Degree 8 octave behavior and input-octave limits
 - Frequency conversion with A4 = 440 Hz
 - Tie creation, wrapped resolution, all-tie rejection, and dependent-tie cleanup
-- Bass/Lead gate transitions and Chord triad generation, six-voice overlap, retrigger, tie, and release behavior
+- Bass/Lead gate transitions and Chord shape generation, eight-voice overlap, retrigger, tie, and release behavior
 - Trigger/note accent defaults, tie inheritance, engine-specific timbre response, and latched tail behavior
 - Bass slide arming through ties, fixed 60 ms glide time, and legato envelope behavior
 - One-step lock overlay and restoration
@@ -668,7 +673,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Golden JSON for every track/event/lock and LFO rate/waveform variant
 - Default-project and populated-project round trips
 - Rejection of unknown versions/fields, bad ranges, wrong track order/count, step counts outside 1–64, invalid locks/LFO assignments, and invalid ties
-- Strict version 6 round trips and rejection of versions 1 through 5 without migration
+- Strict version 6 round trips, defaulting omitted Chord-shape fields to `1-3-5`, and rejection of versions 1 through 5 without migration
 - Failed loads preserve the active project
 - Atomic saves leave the previous file intact on failure
 - Successful save/load resets dirty state and load resets history
@@ -689,6 +694,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Parameter-mode precedence over normal up/down navigation
 - Accent and Bass-slide editing, source-note articulation readout on ties, and BASE/LOCK independence
 - LFO modal navigation, immediate edits, assignment badges, removal, and minimum-size rendering
+- Chord-shape selector navigation, per-note/default editing, inversion display, and minimum-size rendering
 - File prompts, dirty confirmations, error dialogs, and help overlay
 - Terminal restoration on normal and simulated failure paths
 
@@ -713,10 +719,10 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 3. Enter Bass degrees and octave changes, toggle accent and slide, create ordinary and loop-wrapped ties, and hear the fixed-time 303-style glide, mono envelope, and inherited-accent behavior.
 4. Add base values and locks while stopped and playing; verify locks apply only on their step and live edits take effect on the next pass.
 5. Edit each track parameter and confirm its fader fills, shortcut, active highlight, exact percentage, and physical readout. Add synced and free LFOs, verify their badges and modal values, and hear locks remain the modulation center.
-6. Audition empty and occupied drum/pitched steps with `o`, including Chord triads while transport is running, without pattern changes.
+6. Audition empty and occupied drum/pitched steps with `o`, including Chord shapes and inversions while transport is running, without pattern changes.
 7. Change key and scale and verify existing degree data follows the new harmony on future triggers.
 8. Undo and redo compound tie cleanup and repeated parameter edits, including returning to the saved clean revision.
-9. Save, inspect, reopen, and compare a version 6 project with accents, Bass slides, Chord/Lead settings, ties, locks, effects, mute states, and input octaves; verify versions 1 through 5 are rejected without altering the active project.
+9. Save, inspect, reopen, and compare a version 6 project with accents, Bass slides, Chord shapes/inversions, Chord/Lead settings, ties, locks, effects, mute states, and input octaves; verify versions 1 through 5 are rejected without altering the active project.
 10. List audio devices, use the default device, and select a unique explicit device.
 11. Play for at least ten minutes at a supported 48 kHz low-latency configuration without stream errors, non-finite output, timing drift, or audible clicks from normal parameter edits.
 12. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored.

@@ -1,4 +1,4 @@
-use crate::model::{StepEvent, tie_source};
+use crate::model::{ChordShape, StepEvent, tie_source};
 
 pub struct StepClock {
     sample_rate: f64,
@@ -49,6 +49,7 @@ pub enum GateAction {
         octave: u8,
         accent: bool,
         slide: bool,
+        chord_shape: Option<ChordShape>,
     },
     Hold,
     Release,
@@ -59,12 +60,14 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
             degree,
             octave,
             accent,
+            chord_shape,
             ..
         }) => GateAction::Trigger {
             degree: *degree,
             octave: *octave,
             accent: *accent,
             slide: false,
+            chord_shape: *chord_shape,
         },
         Some(StepEvent::BassNote {
             degree,
@@ -77,6 +80,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
             octave: *octave,
             accent: *accent,
             slide: *slide,
+            chord_shape: None,
         },
         Some(StepEvent::Tie { .. }) if voice_active => GateAction::Hold,
         Some(StepEvent::Tie { .. }) => tie_source(steps, step)
@@ -85,12 +89,14 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
                     degree,
                     octave,
                     accent,
+                    chord_shape,
                     ..
                 }) => Some(GateAction::Trigger {
                     degree,
                     octave,
                     accent,
                     slide: false,
+                    chord_shape,
                 }),
                 Some(StepEvent::BassNote {
                     degree,
@@ -103,6 +109,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
                     octave,
                     accent,
                     slide,
+                    chord_shape: None,
                 }),
                 _ => None,
             })
@@ -136,6 +143,7 @@ mod tests {
                 octave: 3,
                 accent: false,
                 locks: Default::default(),
+                chord_shape: None,
             }),
             Some(StepEvent::Tie {
                 locks: Default::default(),
@@ -148,6 +156,7 @@ mod tests {
                 octave: 3,
                 accent: false,
                 slide: false,
+                chord_shape: None,
             }
         );
         assert_eq!(synth_action(&steps, 1, true), GateAction::Hold);
