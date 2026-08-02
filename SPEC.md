@@ -337,7 +337,7 @@ At `120x34` or larger, the normal screen contains:
 2. Global row: the six global controls, current values, and their local shortcuts.
 3. Six variable-length sequencer track blocks: track name, mute state, absolute step range, and compact fixed-width step cells. The displayed range communicates the track length.
 4. A selected-control panel: vertical parameter faders for the selected track, or six global detail cards when the global row is selected.
-5. Status line: current mode, last successful operation or actionable error, and active-editor guidance.
+5. Status line: current mode, last successful operation or actionable error, and active-editor guidance. While a track parameter is being edited in `LOCK` scope, the selected-control panel and status line prominently show `LOCK PARAMETER EDITING` using contrasting styling.
 
 Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The waveform parameter uses the same column geometry as a two-position switch. Mixer parameters (level, delay send, and reverb send) are grouped separately from instrument parameters; synth filter parameters and envelope parameters each have their own group. Each group uses a distinct fader/heading color. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values; the `LOCK` word uses a contrasting color. Physical units are shown in the active parameter readout.
 

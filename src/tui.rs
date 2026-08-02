@@ -1754,26 +1754,53 @@ fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
 
 fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usize) {
     let t = &a.editor.project.tracks[track];
+    let lock_editing = a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_));
     let title = if t.kind == TrackKind::Synth {
         format!(
-            "{} · Step {} · [p] {} · [m] Mute {} · [o] Audition",
+            "{} · Step {} · [p] {} · [m] Mute {} · [o] Audition{}",
             track_label(t),
             a.step + 1,
             scope_name(a.scope),
-            if t.muted { "on" } else { "off" }
+            if t.muted { "on" } else { "off" },
+            if lock_editing {
+                " · !! LOCK PARAMETER EDITING !!"
+            } else {
+                ""
+            }
         )
     } else {
         format!(
-            "{} · Step {} · [p] {} · [m] Mute {} · [o] Audition",
+            "{} · Step {} · [p] {} · [m] Mute {} · [o] Audition{}",
             t.name,
             a.step + 1,
             scope_name(a.scope),
-            if t.muted { "on" } else { "off" }
+            if t.muted { "on" } else { "off" },
+            if lock_editing {
+                " · !! LOCK PARAMETER EDITING !!"
+            } else {
+                ""
+            }
         )
     };
-    let panel = Block::bordered().title(title).title_bottom(
-        "LOCK values show effective output · LOCK = step override · BASE = inherited/base",
-    );
+    let panel = Block::bordered()
+        .border_style(if lock_editing {
+            Style::default()
+                .fg(Color::LightMagenta)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        })
+        .title(Line::from(title).style(if lock_editing {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightYellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        }))
+        .title_bottom(
+            "LOCK values show effective output · LOCK = step override · BASE = inherited/base",
+        );
     let inner = panel.inner(area);
     f.render_widget(panel, area);
     let descriptors = parameter_descriptors(t.kind);
@@ -2166,11 +2193,26 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         let track = a.row - 1;
         render_parameter_bank(f, chunks[3], a, track);
     }
-    let mut status_lines = vec![Line::from(format!(
-        "Mode: {} | {}",
-        mode_name(&a.mode),
-        a.status
-    ))];
+    let lock_editing = a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_));
+    let mode_line = if lock_editing {
+        let parameter = match a.mode {
+            Mode::ParameterEdit(parameter) => parameter_name(parameter),
+            _ => unreachable!(),
+        };
+        Line::from(vec![
+            Span::styled(
+                " LOCK PARAMETER EDITING ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::LightYellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(" ({parameter}) | {}", a.status)),
+        ])
+    } else {
+        Line::from(format!("Mode: {} | {}", mode_name(&a.mode), a.status))
+    };
+    let mut status_lines = vec![mode_line];
     if let Mode::ParameterEdit(parameter) = a.mode {
         let track = a.row.saturating_sub(1);
         status_lines.push(Line::from(format!(
@@ -2479,6 +2521,40 @@ mod tests {
         let screen = rendered(&app, 120, 34);
         assert!(screen.contains("║"));
         assert!(screen.contains("Hz · BASE"));
+    }
+
+    #[test]
+    fn lock_parameter_editing_has_a_prominent_banner() {
+        let mut app = App::new(ProjectV2::new(), None);
+        app.row = 4;
+        app.scope = Scope::Lock;
+        app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("LOCK PARAMETER EDITING"));
+        assert!(screen.contains("(cutoff)"));
+
+        let backend = TestBackend::new(120, 34);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_with_device(frame, &app, "null"))
+            .unwrap();
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .any(|cell| { cell.fg == Color::Black && cell.bg == Color::LightYellow })
+        );
+    }
+
+    #[test]
+    fn base_parameter_editing_does_not_show_lock_editing_banner() {
+        let mut app = App::new(ProjectV2::new(), None);
+        app.row = 4;
+        app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
+        let screen = rendered(&app, 120, 34);
+        assert!(!screen.contains("LOCK PARAMETER EDITING"));
     }
 
     #[test]
