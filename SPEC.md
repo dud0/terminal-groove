@@ -8,7 +8,7 @@ Application and executable name: `terminal-groove`
 
 `terminal-groove` is a real-time groovebox operated entirely from a terminal. Its primary design goals are a fast keyboard workflow, predictable state transitions, and a transparent interface: the selected section and step, transport state, active editing mode, parameter values, triggers, notes, ties, locks, available shortcuts, dirty state, and audio errors must remain visible.
 
-The MVP has one continuously looping, one-bar pattern. The bar is fixed to 4/4 and divided into 16 sixteenth-note steps shared by all tracks.
+The project has six independently looping track sequences on a shared sixteenth-note clock. Each track contains 1 through 64 steps and defaults to 16 steps, allowing polymetric patterns while retaining a fixed 4/4 timing reference.
 
 There are exactly six tracks in this fixed order:
 
@@ -39,7 +39,7 @@ All sound is synthesized in real time. The application contains no audio samples
 - MIDI input, output, or clock sync
 - WAV or other audio export
 - Multiple patterns, pattern chaining, or song mode
-- Per-track pattern lengths, polymeter, or time-signature changes
+- Time-signature changes
 - Swing, microtiming, probability, velocity, or accents
 - Polyphonic synth tracks, portamento, or oscillator detune
 - Per-track pan, solo, master-volume control, or configurable effect returns
@@ -51,15 +51,18 @@ All sound is synthesized in real time. The application contains no audio samples
 
 ### 2.1 Timing and transport
 
-- Every track has exactly 16 steps, with one step equal to one sixteenth note.
+- Every track has 1 through 64 steps, with one step equal to one sixteenth note. Tracks advance together and wrap independently at their configured lengths.
 - At tempo `BPM`, the nominal duration of one step is `sample_rate * 60 / (BPM * 4)` samples.
 - The audio engine must use fractional sample accumulation rather than rounding every step independently, preventing cumulative timing drift.
-- Starting from the reset state triggers step 1 immediately.
+- Starting from the reset state triggers step 1 of every track immediately.
 - `Space` while playing pauses before the next unplayed step. Active synth gates are released, while delay and reverb tails continue.
 - `Space` while paused resumes by triggering the next unplayed step immediately and establishing a new timing origin.
 - `.` stops playback, resets the next step to step 1, releases all voices, and clears delay and reverb state.
 - The edit cursor is independent from the playhead.
 - Tempo changes become active at the next step boundary without skipping or repeating a step.
+- Changing a track length while playing preserves its next local step when that step remains in range; otherwise that track wraps to step 1. Other tracks do not restart.
+- Growing a track appends empty steps. Shrinking truncates removed steps immediately and clears ties made invalid by the new cyclic boundary. The complete resize and tie cleanup are one undoable edit.
+- Doubling a track of 1 through 32 steps appends an exact copy of all existing steps, including events and locks. Tracks longer than 32 steps cannot be doubled because the result would exceed 64.
 
 ### 2.2 Drum events
 
@@ -92,8 +95,8 @@ Pressing a degree key replaces any existing event on the selected step with that
 ### 2.4 Tie invariants
 
 - A tie is valid only when its immediately preceding step, considered cyclically, is a note or another valid tie that resolves to a note.
-- Step 1 may tie from step 16.
-- A pattern containing only ties is invalid.
+- Step 1 may tie cyclically from the track's final step.
+- A track sequence containing only ties is invalid.
 - Adding a tie to an empty step requires a valid predecessor. Otherwise, the edit is rejected and a visible status message explains why.
 - Pressing `t` on a tie clears it and its locks.
 - Pressing `t` on a note replaces the note with a tie only if the resulting tie graph remains valid.
@@ -246,12 +249,14 @@ The application uses ordinary portable terminal press events. It must not requir
 
 ### 5.1 Navigation mode
 
-- Up/down selects the global row or one of the six track rows. Vertical navigation clamps at the first and last row.
-- On a track, left/right moves the shared step cursor and wraps between steps 1 and 16.
+- Up/down moves between physically adjacent sequencer rows, preserving the selected cell's 32-column position. It moves within a track's continuation row when present and otherwise into the adjacent track; unavailable columns clamp to the destination row's final valid step. Vertical navigation clamps at the global row and final track row.
+- Up from Track 1's first row selects the global row; down from the global row selects Track 1 step 1. Changing tracks or selecting globals resets parameter scope to `BASE`; moving within a track preserves it.
+- On a track, left/right moves the selected step and wraps within its current length.
+- Shift+left/right moves between 16-step banks, preserving the within-bank offset when it exists and clamping within a partial final bank.
 - On the global row, left/right cycles through global parameters and wraps.
-- Returning from the global row to a track restores the shared step cursor.
 - `Enter` edits the selected global control or toggles/inserts the selected track event as defined in the sequencer model.
 - `Backspace` or `Delete` clears the selected event and its locks.
+- `l` opens numeric track-length input. Digits plus Enter set an exact length; up/down changes it by 1 and Shift+up/down by 16, clamped to 1–64. Arrow changes apply immediately and remain applied on Esc.
 - `Esc` exits overlays or parameter editing first; from track navigation it returns lock scope to `BASE`.
 
 ### 5.2 Key map
@@ -269,6 +274,9 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `Ctrl+Y` | Redo |
 | Anywhere | `?` | Toggle full help overlay |
 | Track | `p` | Toggle visible `BASE`/`LOCK` scope |
+| Track | `Shift+Left` / `Shift+Right` | Move to the previous/next 16-step bank |
+| Track | `l` | Edit the selected track length from 1 through 64 steps |
+| Track | `Shift+D` | Double the selected track by appending an exact copy, when its length is at most 32 |
 | Track | `v` | Edit level |
 | Track | `m` | Toggle mute immediately |
 | Track | `y` | Edit delay send |
@@ -326,7 +334,7 @@ At `120x34` or larger, the normal screen contains:
 
 1. Header: application name, project filename or `Untitled`, dirty marker, audio device/status, transport state, and tempo.
 2. Global row: the six global controls, current values, and their local shortcuts.
-3. Six fixed sequencer rows: track name, mute state, and 16 step cells.
+3. Six variable-length sequencer track blocks: track name, mute state, absolute step range, and compact fixed-width step cells. The displayed range communicates the track length.
 4. A selected-control panel: vertical parameter faders for the selected track, or six global detail cards when the global row is selected.
 5. Status line: current mode, last successful operation or actionable error, and active-editor guidance.
 
@@ -346,6 +354,8 @@ Step cells use these textual forms:
 The selected cell and currently playing cell have independent styling. If both refer to the same cell, the combined style must still communicate both states. Mute, event type, and lock state must not rely on color alone.
 
 Each synth row includes its current input octave in the track label (for example, `Synth 1 O3`).
+
+The sequencer grid uses 32 fixed-width cells per physical line with a visible divider after each 16-step bank. Steps 33 through 64 use a continuation line. Cells beyond a track's length are blank and cannot be selected. The detail panel is only as tall as its faders or global cards require, and all remaining vertical space is assigned to the sequencer. When expanded track blocks still exceed the pattern panel height, the panel scrolls by complete track blocks to keep the selected track visible. Wider terminals do not stretch individual step cells.
 
 When the terminal is smaller than `120x34`, replace the main layout with the current size, required size, and quit/help keys. The project and audio engine remain active so resizing restores the normal view.
 
@@ -382,7 +392,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`, but the application does not silently alter a user-supplied filename.
-- Version 1 is strict: reject unknown versions, fields, enum values, invalid numeric ranges, incorrect track layouts, incorrect step counts, incompatible lock names, and invalid tie graphs.
+- Version 2 is strict: reject unknown versions, fields, enum values, invalid numeric ranges, incorrect track layouts, step counts outside 1 through 64, incompatible lock names, and invalid tie graphs. Version 1 projects are unsupported and rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -392,7 +402,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 1,
+  "format_version": 2,
   "globals": {},
   "tracks": []
 }
@@ -422,7 +432,7 @@ The top-level object is:
 - `delay_send`: integer 0–100
 - `reverb_send`: integer 0–100
 - An `instrument` object with the applicable base values
-- A 16-element `steps` array
+- A `steps` array containing 1 through 64 elements; its array length is the track length
 - Synths additionally store `input_degree` and `input_octave`
 
 An empty step is JSON `null`. Populated step shapes are:
@@ -463,7 +473,7 @@ The `locks` object is always present on populated steps and contains only overri
 
 The Rust model should express and validate the schema through these domain concepts rather than untyped maps:
 
-- `ProjectV1`
+- `ProjectV2`
 - `Globals`
 - `Track` with fixed `TrackKind`
 - `DrumParameters` and `SynthParameters`
@@ -545,7 +555,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - The main thread owns terminal input, rendering, dialogs, undo/redo, file I/O, and the canonical editable project.
 - CPAL's audio callback owns transport timing, a mirrored engine project, voices, filters, effects, and sample conversion.
 - UI-to-audio communication uses a preallocated bounded SPSC queue containing fixed-size typed mutations and transport/audition commands.
-- Playhead and transport telemetry return through atomics or a second bounded channel where intermediate redundant playhead updates may be dropped.
+- Independent per-track playheads and transport telemetry return through atomics or a second bounded channel where intermediate redundant playhead updates may be dropped.
 - Project load happens while transport is stopped and may rebuild the audio engine outside the callback.
 - The callback must not allocate, free heap-backed messages, lock a mutex, block, access the filesystem, format text, or log.
 - Noise generators use preallocated deterministic PRNG state local to each voice.
@@ -584,13 +594,15 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Number-row percentage mapping and arrow clamping
 - Undo/redo ordering, coalescing, redo invalidation, and dirty-revision restoration
 - Tempo step-length accumulation without cumulative drift
+- Independent track cycles, live resizing, and reset/resume positions
+- Resizing and exact sequence doubling at valid boundaries, including undo and rejection above 32 steps
 - Delay-division duration at representative tempos and sample rates
 
 ### 12.2 Persistence tests
 
 - Golden JSON for every track/event/lock variant
 - Default-project and populated-project round trips
-- Rejection of unknown versions/fields, bad ranges, wrong track order/count, wrong step count, invalid locks, and invalid ties
+- Rejection of unknown versions/fields, bad ranges, wrong track order/count, step counts outside 1–64, invalid locks, and invalid ties
 - Failed loads preserve the active project
 - Atomic saves leave the previous file intact on failure
 - Successful save/load resets dirty state and load resets history
@@ -598,6 +610,8 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 ### 12.3 TUI and reducer tests
 
 - Ratatui `TestBackend` rendering at `120x34` and larger
+- Fixed-width 32-cell rows, 16-step bank divider, continuation rows, and track-block scrolling
+- Physical-row vertical navigation, bank navigation, length input, and doubling shortcut
 - Small-terminal resize screen
 - Ten-segment fader fill, waveform switch, active-parameter styling, and local shortcut labels
 - Effective `LOCK` values with explicit/inherited origin labels

@@ -1,4 +1,4 @@
-use crate::model::ProjectV1;
+use crate::model::ProjectV2;
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
@@ -33,12 +33,12 @@ pub enum ProjectIoError {
     },
 }
 
-pub fn load(path: &Path) -> Result<ProjectV1, ProjectIoError> {
+pub fn load(path: &Path) -> Result<ProjectV2, ProjectIoError> {
     let bytes = fs::read(path).map_err(|source| ProjectIoError::Read {
         path: path.into(),
         source,
     })?;
-    let project: ProjectV1 =
+    let project: ProjectV2 =
         serde_json::from_slice(&bytes).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
@@ -52,7 +52,7 @@ pub fn load(path: &Path) -> Result<ProjectV1, ProjectIoError> {
     Ok(project)
 }
 
-pub fn save_atomic(path: &Path, project: &ProjectV1) -> Result<(), ProjectIoError> {
+pub fn save_atomic(path: &Path, project: &ProjectV2) -> Result<(), ProjectIoError> {
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
@@ -94,7 +94,7 @@ mod tests {
     fn round_trip_and_newline() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("x.groove.json");
-        let p = ProjectV1::new();
+        let p = ProjectV2::new();
         save_atomic(&f, &p).unwrap();
         assert_eq!(load(&f).unwrap(), p);
         assert!(fs::read(&f).unwrap().ends_with(b"\n"));
@@ -112,12 +112,35 @@ mod tests {
     }
     #[test]
     fn default_schema_uses_required_names() {
-        let value = serde_json::to_value(ProjectV1::new()).unwrap();
-        assert_eq!(value["format_version"], 1);
+        let value = serde_json::to_value(ProjectV2::new()).unwrap();
+        assert_eq!(value["format_version"], 2);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["tracks"].as_array().unwrap().len(), 6);
         assert_eq!(value["tracks"][0]["name"], "Kick");
         assert!(value["tracks"][0].get("input_degree").is_none());
+    }
+
+    #[test]
+    fn mixed_track_lengths_round_trip_and_format_v1_is_rejected() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("mixed.groove.json");
+        let mut project = ProjectV2::new();
+        for (track, length) in project.tracks.iter_mut().zip([1, 7, 16, 31, 32, 64]) {
+            track.steps.resize(length, None);
+        }
+        save_atomic(&f, &project).unwrap();
+        assert_eq!(load(&f).unwrap(), project);
+
+        let mut value = serde_json::to_value(project).unwrap();
+        value["format_version"] = 1.into();
+        fs::write(&f, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            load(&f),
+            Err(ProjectIoError::Validation {
+                source: crate::model::ValidationError::Version(1),
+                ..
+            })
+        ));
     }
 }

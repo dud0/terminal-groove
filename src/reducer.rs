@@ -1,6 +1,6 @@
 use crate::model::{
-    ParameterId, ParameterLocks, ParameterValue, Percent, ProjectV1, STEP_COUNT, StepEvent,
-    TrackKind, Waveform, tie_source,
+    MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterLocks, ParameterValue, Percent,
+    ProjectV2, StepEvent, TrackKind, Waveform, tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -21,6 +21,8 @@ pub enum EditError {
     EmptyLock,
     InvalidParameter,
     InvalidTie,
+    InvalidLength,
+    CannotDouble,
 }
 impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -35,6 +37,8 @@ impl std::fmt::Display for EditError {
                 Self::EmptyLock => "cannot lock an empty step",
                 Self::InvalidParameter => "parameter is incompatible with this track",
                 Self::InvalidTie => "tie requires a preceding note",
+                Self::InvalidLength => "track length must be between 1 and 64 steps",
+                Self::CannotDouble => "track is longer than 32 steps and cannot be doubled",
             }
         )
     }
@@ -42,8 +46,8 @@ impl std::fmt::Display for EditError {
 
 #[derive(Clone)]
 struct Revision {
-    before: ProjectV1,
-    after: ProjectV1,
+    before: ProjectV2,
+    after: ProjectV2,
     coalesce: Option<CoalesceKey>,
     at: Instant,
 }
@@ -51,13 +55,13 @@ struct Revision {
 pub struct CoalesceKey(pub usize, pub usize, pub u8);
 
 pub struct Editor {
-    pub project: ProjectV1,
-    saved: ProjectV1,
+    pub project: ProjectV2,
+    saved: ProjectV2,
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
 }
 impl Editor {
-    pub fn new(project: ProjectV1) -> Self {
+    pub fn new(project: ProjectV2) -> Self {
         Self {
             saved: project.clone(),
             project,
@@ -76,7 +80,7 @@ impl Editor {
             revision.coalesce = None;
         }
     }
-    pub fn replace_loaded(&mut self, p: ProjectV1) {
+    pub fn replace_loaded(&mut self, p: ProjectV2) {
         self.project = p.clone();
         self.saved = p;
         self.undo.clear();
@@ -84,7 +88,7 @@ impl Editor {
     }
     pub fn edit<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
     where
-        F: FnOnce(&mut ProjectV1) -> Result<(), EditError>,
+        F: FnOnce(&mut ProjectV2) -> Result<(), EditError>,
     {
         let before = self.project.clone();
         f(&mut self.project)?;
@@ -135,7 +139,7 @@ impl Editor {
     pub fn toggle_event(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
         self.edit(None, move |p| {
             let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
-            if step >= STEP_COUNT {
+            if step >= t.steps.len() {
                 return Err(EditError::InvalidStep);
             }
             if t.steps[step].is_some() {
@@ -162,7 +166,7 @@ impl Editor {
             if t.kind != TrackKind::Synth {
                 return Err(EditError::NotSynth);
             }
-            if step >= 16 || !(1..=8).contains(&degree) {
+            if step >= t.steps.len() || !(1..=8).contains(&degree) {
                 return Err(EditError::InvalidStep);
             }
             let locks = match t.steps[step].take() {
@@ -186,7 +190,7 @@ impl Editor {
             if t.kind != TrackKind::Synth {
                 return Err(EditError::NotSynth);
             }
-            if step >= 16 {
+            if step >= t.steps.len() {
                 return Err(EditError::InvalidStep);
             }
             match t.steps[step].take() {
@@ -209,10 +213,39 @@ impl Editor {
     pub fn clear(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
         self.edit(None, move |p| {
             let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
-            if step >= 16 {
+            if step >= t.steps.len() {
                 return Err(EditError::InvalidStep);
             }
             clear_with_ties(t, step);
+            Ok(())
+        })
+    }
+
+    pub fn set_track_length(
+        &mut self,
+        track: usize,
+        length: usize,
+        key: Option<CoalesceKey>,
+    ) -> Result<bool, EditError> {
+        if !(MIN_STEP_COUNT..=MAX_STEP_COUNT).contains(&length) {
+            return Err(EditError::InvalidLength);
+        }
+        self.edit(key, move |p| {
+            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
+            t.steps.resize(length, None);
+            cleanup_invalid_ties(t);
+            Ok(())
+        })
+    }
+
+    pub fn duplicate_track(&mut self, track: usize) -> Result<bool, EditError> {
+        self.edit(None, move |p| {
+            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
+            if t.steps.len() > MAX_STEP_COUNT / 2 {
+                return Err(EditError::CannotDouble);
+            }
+            let copy = t.steps.clone();
+            t.steps.extend(copy);
             Ok(())
         })
     }
@@ -495,7 +528,7 @@ fn clear_with_ties(t: &mut crate::model::Track, step: usize) {
 }
 fn cleanup_invalid_ties(t: &mut crate::model::Track) {
     loop {
-        let bad = (0..16).find(|&i| {
+        let bad = (0..t.steps.len()).find(|&i| {
             matches!(t.steps[i], Some(StepEvent::Tie { .. })) && tie_source(&t.steps, i).is_none()
         });
         if let Some(i) = bad {
@@ -520,7 +553,7 @@ mod tests {
     use super::*;
     #[test]
     fn undo_dirty_redo() {
-        let mut e = Editor::new(ProjectV1::new());
+        let mut e = Editor::new(ProjectV2::new());
         e.toggle_event(0, 0).unwrap();
         assert!(e.is_dirty());
         assert!(e.undo());
@@ -530,7 +563,7 @@ mod tests {
     }
     #[test]
     fn edit_invalidates_redo() {
-        let mut e = Editor::new(ProjectV1::new());
+        let mut e = Editor::new(ProjectV2::new());
         e.toggle_event(0, 0).unwrap();
         e.undo();
         e.toggle_event(0, 1).unwrap();
@@ -538,7 +571,7 @@ mod tests {
     }
     #[test]
     fn tie_cleanup_is_atomic() {
-        let mut e = Editor::new(ProjectV1::new());
+        let mut e = Editor::new(ProjectV2::new());
         e.set_note(3, 0, 1).unwrap();
         e.toggle_tie(3, 1).unwrap();
         e.toggle_tie(3, 2).unwrap();
@@ -558,7 +591,7 @@ mod tests {
 
     #[test]
     fn edits_all_track_parameter_kinds() {
-        let mut e = Editor::new(ProjectV1::new());
+        let mut e = Editor::new(ProjectV2::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
 
         e.set_parameter(0, 0, Scope::Base, ParameterId::Level, p(61), None)
@@ -610,7 +643,7 @@ mod tests {
 
     #[test]
     fn lock_edits_inherit_and_clear_one_parameter() {
-        let mut e = Editor::new(ProjectV1::new());
+        let mut e = Editor::new(ProjectV2::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
         e.toggle_event(0, 0).unwrap();
         assert_eq!(
@@ -652,7 +685,7 @@ mod tests {
 
     #[test]
     fn incompatible_and_empty_locks_are_rejected() {
-        let mut e = Editor::new(ProjectV1::new());
+        let mut e = Editor::new(ProjectV2::new());
         let value = ParameterValue::Percent(Percent::new(10).unwrap());
         assert_eq!(
             e.set_parameter(0, 0, Scope::Lock, ParameterId::Cutoff, value, None),
@@ -667,5 +700,60 @@ mod tests {
             e.set_parameter(3, 0, Scope::Lock, ParameterId::Tone, value, None),
             Err(EditError::InvalidParameter)
         );
+    }
+
+    #[test]
+    fn resize_cleans_wrapped_ties_and_undo_restores_them() {
+        let mut e = Editor::new(ProjectV2::new());
+        e.set_track_length(3, 4, None).unwrap();
+        e.set_note(3, 3, 1).unwrap();
+        e.toggle_tie(3, 0).unwrap();
+        e.set_track_length(3, 3, None).unwrap();
+        assert_eq!(e.project.tracks[3].steps.len(), 3);
+        assert!(e.project.tracks[3].steps[0].is_none());
+        assert!(e.undo());
+        assert_eq!(e.project.tracks[3].steps.len(), 4);
+        assert!(matches!(
+            e.project.tracks[3].steps[0],
+            Some(StepEvent::Tie { .. })
+        ));
+        assert!(matches!(
+            e.project.tracks[3].steps[3],
+            Some(StepEvent::Note { .. })
+        ));
+    }
+
+    #[test]
+    fn duplicate_track_copies_events_locks_and_is_one_undo_step() {
+        let mut e = Editor::new(ProjectV2::new());
+        e.set_track_length(3, 4, None).unwrap();
+        e.set_note(3, 3, 2).unwrap();
+        e.set_parameter(
+            3,
+            3,
+            Scope::Lock,
+            ParameterId::Cutoff,
+            ParameterValue::Percent(Percent::new(42).unwrap()),
+            None,
+        )
+        .unwrap();
+        e.toggle_tie(3, 0).unwrap();
+        let original = e.project.tracks[3].steps.clone();
+        e.duplicate_track(3).unwrap();
+        assert_eq!(e.project.tracks[3].steps.len(), 8);
+        assert_eq!(&e.project.tracks[3].steps[..4], original.as_slice());
+        assert_eq!(&e.project.tracks[3].steps[4..], original.as_slice());
+        assert!(e.undo());
+        assert_eq!(e.project.tracks[3].steps, original);
+    }
+
+    #[test]
+    fn duplicate_rejects_lengths_above_32_without_state_change() {
+        let mut e = Editor::new(ProjectV2::new());
+        e.set_track_length(0, 33, None).unwrap();
+        e.mark_saved();
+        assert_eq!(e.duplicate_track(0), Err(EditError::CannotDouble));
+        assert_eq!(e.project.tracks[0].steps.len(), 33);
+        assert!(!e.is_dirty());
     }
 }

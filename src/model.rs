@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
-pub const STEP_COUNT: usize = 16;
+pub const MIN_STEP_COUNT: usize = 1;
+pub const MAX_STEP_COUNT: usize = 64;
+pub const STEP_BANK_SIZE: usize = 16;
+pub const STEP_ROW_SIZE: usize = 32;
 pub const TRACK_COUNT: usize = 6;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -12,15 +15,15 @@ pub enum ValidationError {
     TrackCount,
     #[error("tracks[{0}]: expected {1}")]
     TrackOrder(usize, &'static str),
-    #[error("tracks[{0}].steps: expected exactly 16 steps")]
-    StepCount(usize),
+    #[error("tracks[{0}].steps: expected between 1 and 64 steps, got {1}")]
+    StepCount(usize, usize),
     #[error("tracks[{0}].steps[{1}]: event is incompatible with track")]
     EventKind(usize, usize),
     #[error("tracks[{0}].steps[{1}].locks: incompatible lock `{2}`")]
     Lock(usize, usize, &'static str),
     #[error("tracks[{0}].steps[{1}]: tie has no source note")]
     Tie(usize, usize),
-    #[error("tracks[{0}]: a pattern containing only ties is invalid")]
+    #[error("tracks[{0}]: a sequence containing only ties is invalid")]
     AllTies(usize),
 }
 
@@ -377,7 +380,7 @@ pub struct Track {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectV1 {
+pub struct ProjectV2 {
     pub format_version: u32,
     pub globals: Globals,
     pub tracks: Vec<Track>,
@@ -386,7 +389,7 @@ pub struct ProjectV1 {
 fn p(n: u8) -> Percent {
     Percent(n)
 }
-impl ProjectV1 {
+impl ProjectV2 {
     pub fn new() -> Self {
         let drum = |kind: TrackKind, name: &str, tone: u8, decay: u8| Track {
             kind,
@@ -399,7 +402,7 @@ impl ProjectV1 {
                 tone: p(tone),
                 decay: p(decay),
             }),
-            steps: vec![None; STEP_COUNT],
+            steps: vec![None; STEP_BANK_SIZE],
             input_degree: None,
             input_octave: None,
         };
@@ -420,12 +423,12 @@ impl ProjectV1 {
                 sustain: p(70),
                 release: p(15),
             }),
-            steps: vec![None; STEP_COUNT],
+            steps: vec![None; STEP_BANK_SIZE],
             input_degree: Some(1),
             input_octave: Some(3),
         };
         Self {
-            format_version: 1,
+            format_version: 2,
             globals: Globals::default(),
             tracks: vec![
                 drum(TrackKind::Kick, "Kick", 50, 35),
@@ -438,7 +441,7 @@ impl ProjectV1 {
         }
     }
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 1 {
+        if self.format_version != 2 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -463,8 +466,8 @@ impl ProjectV1 {
             if t.kind != expected[ti].0 || t.name != expected[ti].1 {
                 return Err(ValidationError::TrackOrder(ti, expected[ti].1));
             }
-            if t.steps.len() != STEP_COUNT {
-                return Err(ValidationError::StepCount(ti));
+            if !(MIN_STEP_COUNT..=MAX_STEP_COUNT).contains(&t.steps.len()) {
+                return Err(ValidationError::StepCount(ti, t.steps.len()));
             }
             let synth = t.kind == TrackKind::Synth;
             if synth != matches!(t.instrument, Instrument::Synth(_))
@@ -523,7 +526,7 @@ impl ProjectV1 {
             .map(|m| 440.0 * 2.0_f32.powf((m as f32 - 69.0) / 12.0))
     }
 }
-impl Default for ProjectV1 {
+impl Default for ProjectV2 {
     fn default() -> Self {
         Self::new()
     }
@@ -557,14 +560,15 @@ fn validate_locks(
     bad.map_or(Ok(()), |name| Err(ValidationError::Lock(ti, si, name)))
 }
 pub fn tie_source(steps: &[Step], at: usize) -> Option<usize> {
-    if steps.len() != STEP_COUNT {
+    if steps.is_empty() || at >= steps.len() {
         return None;
     }
-    let mut i = (at + STEP_COUNT - 1) % STEP_COUNT;
-    for _ in 0..STEP_COUNT {
+    let step_count = steps.len();
+    let mut i = (at + step_count - 1) % step_count;
+    for _ in 0..step_count {
         match &steps[i] {
             Some(StepEvent::Note { .. }) => return Some(i),
-            Some(StepEvent::Tie { .. }) => i = (i + STEP_COUNT - 1) % STEP_COUNT,
+            Some(StepEvent::Tie { .. }) => i = (i + step_count - 1) % step_count,
             _ => return None,
         }
     }
@@ -575,7 +579,7 @@ fn validate_ties(track: usize, steps: &[Step]) -> Result<(), ValidationError> {
         .iter()
         .filter(|s| matches!(s, Some(StepEvent::Tie { .. })))
         .count();
-    if ties == STEP_COUNT {
+    if ties == steps.len() {
         return Err(ValidationError::AllTies(track));
     }
     for (i, s) in steps.iter().enumerate() {
@@ -656,11 +660,11 @@ mod tests {
     use super::*;
     #[test]
     fn default_valid() {
-        ProjectV1::new().validate().unwrap();
+        ProjectV2::new().validate().unwrap();
     }
     #[test]
     fn scale_and_frequency() {
-        let mut p = ProjectV1::new();
+        let mut p = ProjectV2::new();
         assert_eq!(p.note_midi(8, 3), Some(60));
         p.globals.key = PitchClass::A;
         assert!((p.note_frequency(1, 4).unwrap() - 440.0).abs() < 0.001);
@@ -686,6 +690,31 @@ mod tests {
         assert_eq!(tie_source(&s, 0), Some(15));
     }
     #[test]
+    fn variable_step_counts_and_wrapped_ties_validate() {
+        let mut project = ProjectV2::new();
+        project.tracks[0].steps = vec![None; 1];
+        project.tracks[1].steps = vec![None; MAX_STEP_COUNT];
+        project.tracks[3].steps = vec![None; 3];
+        project.tracks[3].steps[2] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            locks: Default::default(),
+        });
+        project.tracks[3].steps[0] = Some(StepEvent::Tie {
+            locks: Default::default(),
+        });
+        assert_eq!(tie_source(&project.tracks[3].steps, 0), Some(2));
+        project.validate().unwrap();
+
+        project.tracks[0].steps.clear();
+        assert_eq!(project.validate(), Err(ValidationError::StepCount(0, 0)));
+        project.tracks[0].steps = vec![None; MAX_STEP_COUNT + 1];
+        assert_eq!(
+            project.validate(),
+            Err(ValidationError::StepCount(0, MAX_STEP_COUNT + 1))
+        );
+    }
+    #[test]
     fn pitch_class_json_is_stable() {
         assert_eq!(
             serde_json::to_string(&PitchClass::FSharp).unwrap(),
@@ -698,7 +727,7 @@ mod tests {
     }
     #[test]
     fn lock_compatibility_matches_track_kind() {
-        let mut drum = ProjectV1::new();
+        let mut drum = ProjectV2::new();
         drum.tracks[0].steps[0] = Some(StepEvent::Trigger {
             locks: ParameterLocks {
                 cutoff: Percent::new(50),
@@ -710,7 +739,7 @@ mod tests {
             Err(ValidationError::Lock(0, 0, "cutoff"))
         ));
 
-        let mut synth = ProjectV1::new();
+        let mut synth = ProjectV2::new();
         synth.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -728,7 +757,7 @@ mod tests {
     fn all_keys_map_degrees() {
         for key in PitchClass::ALL {
             for scale in [Scale::Major, Scale::NaturalMinor] {
-                let mut p = ProjectV1::new();
+                let mut p = ProjectV2::new();
                 p.globals.key = key;
                 p.globals.scale = scale;
                 for degree in 1..=8 {

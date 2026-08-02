@@ -1,8 +1,9 @@
 use crate::{
     audio::{Audio, AudioCommand},
     model::{
-        DelayDivision, GlobalParameterId, ParameterId, ParameterValue, Percent, ProjectV1, Scale,
-        StepEvent, TrackKind, Waveform,
+        DelayDivision, GlobalParameterId, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent,
+        ProjectV2, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
+        Waveform,
     },
     persistence,
     reducer::{Editor, Scope},
@@ -44,6 +45,7 @@ enum Mode {
     ParameterEdit(ParameterId),
     GlobalEdit(GlobalParameterId),
     TempoInput(String),
+    TrackLengthInput(String),
     FileInput(FileAction, String),
     OpenConfirm(PathBuf),
     Error(String),
@@ -67,12 +69,12 @@ pub struct App {
     pending_open: Option<PathBuf>,
     pending_quit: bool,
     quit: bool,
-    playhead: Option<usize>,
+    playheads: [Option<usize>; TRACK_COUNT],
     playing: bool,
     paused: bool,
 }
 impl App {
-    pub fn new(project: ProjectV1, path: Option<PathBuf>) -> Self {
+    pub fn new(project: ProjectV2, path: Option<PathBuf>) -> Self {
         Self {
             editor: Editor::new(project),
             row: 0,
@@ -85,14 +87,14 @@ impl App {
             pending_open: None,
             pending_quit: false,
             quit: false,
-            playhead: None,
+            playheads: [None; TRACK_COUNT],
             playing: false,
             paused: false,
         }
     }
 }
 
-pub fn run(project: ProjectV1, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
+pub fn run(project: ProjectV2, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
     let old_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -128,6 +130,9 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     }
     if matches!(a.mode, Mode::TempoInput(_)) {
         return handle_tempo_input(a, audio, k);
+    }
+    if matches!(a.mode, Mode::TrackLengthInput(_)) {
+        return handle_track_length_input(a, audio, k);
     }
     if matches!(a.mode, Mode::OpenConfirm(_)) {
         return handle_open_confirm(a, audio, k);
@@ -181,6 +186,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
                 if audio.available_commands() == 0 {
                     a.status = "Audio command queue full; undo rejected".into();
                 } else if a.editor.undo() {
+                    normalize_cursor(a);
                     a.status = "Undid edit".into();
                     sync_project(a, audio);
                 } else {
@@ -191,6 +197,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
                 if audio.available_commands() == 0 {
                     a.status = "Audio command queue full; redo rejected".into();
                 } else if a.editor.redo() {
+                    normalize_cursor(a);
                     a.status = "Redid edit".into();
                     sync_project(a, audio);
                 } else {
@@ -222,7 +229,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
             if audio.send(AudioCommand::Stop).is_ok() {
                 a.playing = false;
                 a.paused = false;
-                a.playhead = None;
+                a.playheads = [None; TRACK_COUNT];
                 a.status = "Stopped and reset".into()
             } else {
                 a.status = "Audio command queue full".into()
@@ -242,25 +249,27 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Up => {
-            a.row = a.row.saturating_sub(1);
-            a.scope = Scope::Base
+            move_step_vertical(a, false);
         }
         KeyCode::Down => {
-            a.row = (a.row + 1).min(6);
-            a.scope = Scope::Base
+            move_step_vertical(a, true);
         }
         KeyCode::Left => {
             if a.row == 0 {
                 a.global = (a.global + 5) % 6
+            } else if k.modifiers.contains(KeyModifiers::SHIFT) {
+                move_step_bank(a, false)
             } else {
-                a.step = (a.step + 15) % 16
+                move_step(a, false)
             }
         }
         KeyCode::Right => {
             if a.row == 0 {
                 a.global = (a.global + 1) % 6
+            } else if k.modifiers.contains(KeyModifiers::SHIFT) {
+                move_step_bank(a, true)
             } else {
-                a.step = (a.step + 1) % 16
+                move_step(a, true)
             }
         }
         KeyCode::Enter if a.row == 0 => enter_global_edit(a, global_id(a.global)),
@@ -302,6 +311,12 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
             });
             sync_project(a, audio);
         }
+        KeyCode::Char('l') if a.row > 0 => {
+            a.editor.end_coalescing();
+            a.mode = Mode::TrackLengthInput(String::new());
+            a.status = format!("Editing {} length", a.editor.project.tracks[a.row - 1].name);
+        }
+        KeyCode::Char('D') if a.row > 0 => duplicate_selected_track(a, audio),
         KeyCode::Char(c) if a.row == 0 => {
             if let Some(id) = global_shortcut(c) {
                 a.global = id as usize;
@@ -356,6 +371,187 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     Ok(())
 }
 
+fn move_step(a: &mut App, forward: bool) {
+    let track = a.row - 1;
+    let length = a.editor.project.tracks[track].steps.len();
+    a.step = if forward {
+        (a.step + 1) % length
+    } else {
+        (a.step + length - 1) % length
+    };
+}
+
+fn move_step_bank(a: &mut App, forward: bool) {
+    let track = a.row - 1;
+    let length = a.editor.project.tracks[track].steps.len();
+    let banks = length.div_ceil(STEP_BANK_SIZE);
+    if banks <= 1 {
+        return;
+    }
+    let bank = a.step / STEP_BANK_SIZE;
+    let offset = a.step % STEP_BANK_SIZE;
+    let next_bank = if forward {
+        (bank + 1) % banks
+    } else {
+        (bank + banks - 1) % banks
+    };
+    a.step = (next_bank * STEP_BANK_SIZE + offset).min(length - 1);
+}
+
+fn move_step_vertical(a: &mut App, down: bool) {
+    if a.row == 0 {
+        if down {
+            a.row = 1;
+            a.step = 0;
+            a.scope = Scope::Base;
+        }
+        return;
+    }
+
+    let track = a.row - 1;
+    let step_row = a.step / STEP_ROW_SIZE;
+    let column = a.step % STEP_ROW_SIZE;
+    let length = a.editor.project.tracks[track].steps.len();
+    if down {
+        if step_row + 1 < length.div_ceil(STEP_ROW_SIZE) {
+            a.step = ((step_row + 1) * STEP_ROW_SIZE + column).min(length - 1);
+        } else if track + 1 < TRACK_COUNT {
+            let destination = track + 1;
+            a.row = destination + 1;
+            a.step = column.min(a.editor.project.tracks[destination].steps.len() - 1);
+            a.scope = Scope::Base;
+        }
+    } else if step_row > 0 {
+        a.step -= STEP_ROW_SIZE;
+    } else if track == 0 {
+        a.row = 0;
+        a.scope = Scope::Base;
+    } else {
+        let destination = track - 1;
+        let destination_length = a.editor.project.tracks[destination].steps.len();
+        a.row = destination + 1;
+        a.step = ((destination_length - 1) / STEP_ROW_SIZE * STEP_ROW_SIZE + column)
+            .min(destination_length - 1);
+        a.scope = Scope::Base;
+    }
+}
+
+fn normalize_cursor(a: &mut App) {
+    if a.row > 0 {
+        a.step = a
+            .step
+            .min(a.editor.project.tracks[a.row - 1].steps.len() - 1);
+    }
+}
+
+fn set_selected_track_length(a: &mut App, audio: &mut Audio, length: usize, coalesce: bool) {
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; edit rejected".into();
+        return;
+    }
+    let track = a.row - 1;
+    let old_length = a.editor.project.tracks[track].steps.len();
+    let old_events = a.editor.project.tracks[track]
+        .steps
+        .iter()
+        .flatten()
+        .count();
+    let key = coalesce.then_some(crate::reducer::CoalesceKey(track, usize::MAX, u8::MAX));
+    match a.editor.set_track_length(track, length, key) {
+        Ok(true) => {
+            normalize_cursor(a);
+            if sync_project(a, audio) {
+                let new_events = a.editor.project.tracks[track]
+                    .steps
+                    .iter()
+                    .flatten()
+                    .count();
+                let removed = old_events.saturating_sub(new_events);
+                a.status = format!(
+                    "{} length: {} → {}{}",
+                    a.editor.project.tracks[track].name,
+                    old_length,
+                    length,
+                    if removed == 0 {
+                        String::new()
+                    } else {
+                        format!("; removed {removed} programmed step(s)")
+                    }
+                );
+            }
+        }
+        Ok(false) => a.status = "No change".into(),
+        Err(e) => a.status = e.to_string(),
+    }
+}
+
+fn duplicate_selected_track(a: &mut App, audio: &mut Audio) {
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; duplication rejected".into();
+        return;
+    }
+    let track = a.row - 1;
+    let old_length = a.editor.project.tracks[track].steps.len();
+    match a.editor.duplicate_track(track) {
+        Ok(true) if sync_project(a, audio) => {
+            a.status = format!(
+                "{} doubled: {} → {}",
+                a.editor.project.tracks[track].name,
+                old_length,
+                old_length * 2
+            );
+        }
+        Ok(true) => {}
+        Ok(false) => a.status = "No change".into(),
+        Err(e) => a.status = e.to_string(),
+    }
+}
+
+fn handle_track_length_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    let Mode::TrackLengthInput(mut input) = a.mode.clone() else {
+        return Ok(());
+    };
+    match k.code {
+        KeyCode::Esc => {
+            a.editor.end_coalescing();
+            a.mode = Mode::Navigation;
+        }
+        KeyCode::Backspace => {
+            input.pop();
+            a.mode = Mode::TrackLengthInput(input);
+        }
+        KeyCode::Char(c @ '0'..='9') if input.len() < 2 => {
+            input.push(c);
+            a.mode = Mode::TrackLengthInput(input);
+        }
+        KeyCode::Up | KeyCode::Down => {
+            let delta = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                STEP_BANK_SIZE
+            } else {
+                1
+            };
+            let current = a.editor.project.tracks[a.row - 1].steps.len();
+            let next = if k.code == KeyCode::Up {
+                current.saturating_add(delta).min(MAX_STEP_COUNT)
+            } else {
+                current.saturating_sub(delta).max(1)
+            };
+            set_selected_track_length(a, audio, next, true);
+            a.mode = Mode::TrackLengthInput(String::new());
+        }
+        KeyCode::Enter => match input.parse::<usize>() {
+            Ok(value @ 1..=MAX_STEP_COUNT) => {
+                set_selected_track_length(a, audio, value, false);
+                a.editor.end_coalescing();
+                a.mode = Mode::Navigation;
+            }
+            _ => a.status = "Track length must be an integer from 1 to 64".into(),
+        },
+        _ => {}
+    }
+    Ok(())
+}
+
 fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::ParameterEdit(parameter) = a.mode else {
         return Ok(false);
@@ -367,11 +563,19 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
     }
     match k.code {
         KeyCode::Left => {
-            a.step = (a.step + 15) % 16;
+            if k.modifiers.contains(KeyModifiers::SHIFT) {
+                move_step_bank(a, false);
+            } else {
+                move_step(a, false);
+            }
             Ok(true)
         }
         KeyCode::Right => {
-            a.step = (a.step + 1) % 16;
+            if k.modifiers.contains(KeyModifiers::SHIFT) {
+                move_step_bank(a, true);
+            } else {
+                move_step(a, true);
+            }
             Ok(true)
         }
         KeyCode::Up | KeyCode::Down => {
@@ -743,7 +947,7 @@ fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
             a.scope = Scope::Base;
             a.playing = false;
             a.paused = false;
-            a.playhead = None;
+            a.playheads = [None; TRACK_COUNT];
             a.status = format!("Opened {}", path.display());
             a.mode = Mode::Navigation;
         }
@@ -933,8 +1137,11 @@ fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()>
 fn refresh_audio_status(a: &mut App, audio: &Audio) {
     a.playing = audio.status.running.load(Ordering::Acquire);
     a.paused = audio.status.paused.load(Ordering::Acquire);
-    let p = audio.status.playhead.load(Ordering::Acquire);
-    a.playhead = (p < 16).then_some(p as usize);
+    for track in 0..TRACK_COUNT {
+        let step = audio.status.playheads[track].load(Ordering::Acquire);
+        a.playheads[track] =
+            (step < a.editor.project.tracks[track].steps.len() as u8).then_some(step as usize);
+    }
     if audio.status.failed.load(Ordering::Acquire) {
         a.status = "Audio stream failed; editing and saving remain available".into()
     } else if audio.status.non_finite.swap(false, Ordering::AcqRel) {
@@ -974,6 +1181,7 @@ fn mode_name(mode: &Mode) -> String {
         }
         Mode::GlobalEdit(id) => format!("Global edit ({})", global_name(*id)),
         Mode::TempoInput(_) => "Tempo numeric input".into(),
+        Mode::TrackLengthInput(_) => "Track length input".into(),
         Mode::FileInput(_, _) => "File-path input".into(),
         Mode::OpenConfirm(_) => "Unsaved confirmation".into(),
         Mode::Error(_) => "Error dialog".into(),
@@ -1452,7 +1660,8 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
         let active = matches!(a.mode, Mode::ParameterEdit(parameter) if parameter == descriptor.id);
         let group_color = descriptor.group.color();
         let block = if active {
-            Block::bordered()
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT)
                 .border_type(BorderType::Double)
                 .border_style(
                     Style::default()
@@ -1620,13 +1829,14 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         );
         return;
     }
+    let details_height = if a.row == 0 { 9 } else { 16 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2),
             Constraint::Length(3),
-            Constraint::Length(9),
-            Constraint::Min(17),
+            Constraint::Min(9),
+            Constraint::Length(details_height),
             Constraint::Length(2),
         ])
         .split(area);
@@ -1683,36 +1893,108 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             .block(Block::bordered().title("Globals [←→] select [Enter] edit")),
         chunks[1],
     );
-    let rows = a.editor.project.tracks.iter().enumerate().map(|(ti, t)| {
-        let mut cells: Vec<ratatui::widgets::Cell> = Vec::with_capacity(18);
-        cells.push(if t.muted { "M".into() } else { " ".into() });
-        cells.push(track_label(t).into());
-        for (si, s) in t.steps.iter().enumerate() {
-            let mut style = Style::default();
-            if a.row == ti + 1 && a.step == si {
-                style = style.reversed()
+    let available_rows = chunks[2].height.saturating_sub(3) as usize;
+    let heights = a
+        .editor
+        .project
+        .tracks
+        .iter()
+        .map(|track| track.steps.len().div_ceil(STEP_ROW_SIZE))
+        .collect::<Vec<_>>();
+    let selected_track = a.row.saturating_sub(1).min(TRACK_COUNT - 1);
+    let mut first_track = selected_track;
+    let mut used_rows = heights[selected_track];
+    while first_track > 0 && used_rows + heights[first_track - 1] <= available_rows {
+        first_track -= 1;
+        used_rows += heights[first_track];
+    }
+    let mut last_track = selected_track + 1;
+    while last_track < TRACK_COUNT && used_rows + heights[last_track] <= available_rows {
+        used_rows += heights[last_track];
+        last_track += 1;
+    }
+    let mut rows = Vec::new();
+    for (ti, &track_height) in heights
+        .iter()
+        .enumerate()
+        .take(last_track)
+        .skip(first_track)
+    {
+        let track = &a.editor.project.tracks[ti];
+        let length = track.steps.len();
+        for line_index in 0..track_height {
+            let line_start = line_index * STEP_ROW_SIZE;
+            let line_end = (line_start + STEP_ROW_SIZE).min(length);
+            let mut cells: Vec<ratatui::widgets::Cell> = Vec::with_capacity(37);
+            cells.push(if line_index == 0 && track.muted {
+                "M".into()
+            } else {
+                " ".into()
+            });
+            cells.push(if line_index == 0 {
+                track_label(track).into()
+            } else {
+                "↳".into()
+            });
+            cells.push(format!(" {:02}–{:02}", line_start + 1, line_end).into());
+            cells.push(ratatui::widgets::Cell::from("│"));
+            for slot in 0..STEP_ROW_SIZE {
+                if slot == STEP_BANK_SIZE {
+                    cells.push(ratatui::widgets::Cell::from("│"));
+                }
+                let step = line_start + slot;
+                if step >= length {
+                    cells.push(ratatui::widgets::Cell::from("   "));
+                    continue;
+                }
+                let mut style = Style::default();
+                if a.row == ti + 1 && a.step == step {
+                    style = style.reversed();
+                }
+                if a.playheads[ti] == Some(step) {
+                    style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                }
+                cells.push(
+                    ratatui::widgets::Cell::from(step_cell(track.steps[step].as_ref()))
+                        .style(style),
+                );
             }
-            if a.playhead == Some(si) {
-                style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            }
-            cells.push(ratatui::widgets::Cell::from(step_cell(s.as_ref())).style(style))
+            rows.push(Row::new(cells));
         }
-        Row::new(cells)
-    });
-    let mut widths = vec![Constraint::Length(1), Constraint::Length(10)];
-    widths.extend((0..16).map(|_| Constraint::Ratio(1, 16)));
-    let mut header_cells = vec![
-        ratatui::widgets::Cell::from(" "),
-        ratatui::widgets::Cell::from("Track / O"),
+    }
+    let mut widths = vec![
+        Constraint::Length(2),
+        Constraint::Length(12),
+        Constraint::Length(6),
+        Constraint::Length(1),
     ];
-    header_cells.extend((1..=16).map(|n| ratatui::widgets::Cell::from(format!("{n:02}"))));
+    widths.extend((0..STEP_BANK_SIZE).map(|_| Constraint::Length(3)));
+    widths.push(Constraint::Length(1));
+    widths.extend((0..STEP_BANK_SIZE).map(|_| Constraint::Length(3)));
+    let mut header_cells = vec![
+        ratatui::widgets::Cell::from("M"),
+        ratatui::widgets::Cell::from("Track / O"),
+        ratatui::widgets::Cell::from(" Range"),
+        ratatui::widgets::Cell::from("│"),
+    ];
+    header_cells.extend((1..=STEP_BANK_SIZE).map(|n| format!(" {n:02}").into()));
+    header_cells.push(ratatui::widgets::Cell::from("│"));
+    header_cells.extend(((STEP_BANK_SIZE + 1)..=STEP_ROW_SIZE).map(|n| format!(" {n:02}").into()));
+    let scroll_hint = match (first_track > 0, last_track < TRACK_COUNT) {
+        (true, true) => "  ↑↓ more tracks",
+        (true, false) => "  ↑ more tracks",
+        (false, true) => "  ↓ more tracks",
+        (false, false) => "",
+    };
     f.render_widget(
         Table::new(rows, widths)
             .column_spacing(0)
             .header(Row::new(header_cells))
             .block(
                 Block::bordered()
-                    .title("Pattern  [↑↓] track  [←→] step  [Enter] event  [Del] clear  [1-8] note  [t] tie  [[]/[]] octave")
+                    .title(format!(
+                        "Pattern  [↑↓] vertical  [←→] step  [Shift+←→] bank  [l] length  [Shift+D] double{scroll_hint}"
+                    ))
                     .title_bottom(". empty   x trigger   D:O note   D*O locked note   - tie   * lock"),
             ),
         chunks[2],
@@ -1738,6 +2020,10 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         status_lines.push(Line::from(
             "[↑/↓] adjust  [←/→] select another control  [Enter/Esc] finish",
         ));
+    } else if matches!(a.mode, Mode::TrackLengthInput(_)) {
+        status_lines.push(Line::from(
+            "Type 1–64 and press Enter; [↑/↓] ±1  [Shift+↑/↓] ±16  [Esc] finish",
+        ));
     }
     f.render_widget(Paragraph::new(status_lines), chunks[4]);
     if a.mode == Mode::Help {
@@ -1745,7 +2031,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nNavigation: arrows, Enter, Delete.\nTracks: p scope, v level, m mute, y delay, b reverb.\nDrums: t tone, d decay. Synth: 1-8 note, [ ] input octave, t tie, w waveform, c cutoff, R resonance, f envelope, a/d/s/r ADSR.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Enter, Delete.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nDrums: t tone, d decay. Synth: 1-8 note, [ ] input octave, t tie, w waveform, c cutoff, R resonance, f envelope, a/d/s/r ADSR.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -1763,6 +2049,17 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             "Tempo numeric input",
             &format!("Tempo: {input}_\nEnter confirms  Esc cancels  ↑/↓ adjusts current tempo"),
         ),
+        Mode::TrackLengthInput(input) => {
+            let current = a.editor.project.tracks[a.row - 1].steps.len();
+            popup(
+                f,
+                area,
+                "Track length",
+                &format!(
+                    "Current: {current}\nLength: {input}_\nEnter confirms  Esc finishes  ↑/↓ ±1  Shift+↑/↓ ±16"
+                ),
+            )
+        }
         Mode::FileInput(action, input) => {
             let title = if *action == FileAction::Open {
                 "Open project"
@@ -1889,7 +2186,7 @@ mod tests {
     #[test]
     fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
         let backend = TestBackend::new(120, 34);
-        let mut project = ProjectV1::new();
+        let mut project = ProjectV2::new();
         project.tracks[3].input_octave = Some(4);
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
@@ -1932,7 +2229,7 @@ mod tests {
 
     #[test]
     fn small_terminal_replaces_main_layout() {
-        let app = App::new(ProjectV1::new(), None);
+        let app = App::new(ProjectV2::new(), None);
         let screen = rendered(&app, 119, 34);
         assert!(screen.contains("terminal-groove needs 120x34"));
         assert!(screen.contains("Current: 119x34"));
@@ -1940,7 +2237,7 @@ mod tests {
 
     #[test]
     fn lock_scope_labels_explicit_and_inherited_values() {
-        let mut project = ProjectV1::new();
+        let mut project = ProjectV2::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -1960,18 +2257,17 @@ mod tests {
 
     #[test]
     fn active_parameter_gets_a_visible_fader_outline_and_physical_readout() {
-        let mut app = App::new(ProjectV1::new(), None);
+        let mut app = App::new(ProjectV2::new(), None);
         app.row = 4;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
-        assert!(screen.contains("╔"));
         assert!(screen.contains("║"));
         assert!(screen.contains("Hz · BASE"));
     }
 
     #[test]
     fn locked_badge_uses_a_distinct_color() {
-        let mut project = ProjectV1::new();
+        let mut project = ProjectV2::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -2000,7 +2296,7 @@ mod tests {
 
     #[test]
     fn global_cards_show_all_local_shortcuts() {
-        let app = App::new(ProjectV1::new(), None);
+        let app = App::new(ProjectV2::new(), None);
         let screen = rendered(&app, 120, 34);
         for key in ["[t]", "[y]", "[f]", "[r]", "[k]", "[s]"] {
             assert!(screen.contains(key), "missing {key}");
@@ -2057,6 +2353,10 @@ mod tests {
         );
         assert_eq!(mode_name(&Mode::Error("bad".into())), "Error dialog");
         assert_eq!(mode_name(&Mode::Help), "Help");
+        assert_eq!(
+            mode_name(&Mode::TrackLengthInput(String::new())),
+            "Track length input"
+        );
     }
 
     #[test]
@@ -2068,5 +2368,78 @@ mod tests {
         assert_eq!(global_shortcut('k'), Some(GlobalParameterId::Key));
         assert_eq!(global_shortcut('s'), Some(GlobalParameterId::Scale));
         assert_eq!(global_shortcut('v'), None);
+    }
+
+    #[test]
+    fn vertical_navigation_follows_physical_rows_without_track_cursors() {
+        let mut project = ProjectV2::new();
+        project.tracks[0].steps.resize(64, None);
+        project.tracks[1].steps.resize(20, None);
+        project.tracks[2].steps.resize(40, None);
+        let mut app = App::new(project, None);
+        app.row = 1;
+        app.step = 5;
+        app.scope = Scope::Lock;
+        move_step_vertical(&mut app, true);
+        assert_eq!((app.row, app.step, app.scope), (1, 37, Scope::Lock));
+        move_step_vertical(&mut app, false);
+        assert_eq!((app.row, app.step, app.scope), (1, 5, Scope::Lock));
+
+        move_step_vertical(&mut app, true);
+        move_step_vertical(&mut app, true);
+        assert_eq!((app.row, app.step, app.scope), (2, 5, Scope::Base));
+        app.step = 19;
+        move_step_vertical(&mut app, true);
+        assert_eq!((app.row, app.step), (3, 19));
+        move_step_vertical(&mut app, true);
+        assert_eq!((app.row, app.step), (3, 39));
+        move_step_vertical(&mut app, false);
+        assert_eq!((app.row, app.step), (3, 7));
+
+        app.row = 2;
+        app.step = 5;
+        move_step_vertical(&mut app, false);
+        assert_eq!((app.row, app.step), (1, 37));
+        app.row = 1;
+        app.step = 0;
+        move_step_vertical(&mut app, false);
+        assert_eq!(app.row, 0);
+        move_step_vertical(&mut app, true);
+        assert_eq!((app.row, app.step), (1, 0));
+
+        app.row = TRACK_COUNT;
+        app.step = app.editor.project.tracks[TRACK_COUNT - 1].steps.len() - 1;
+        move_step_vertical(&mut app, true);
+        assert_eq!((app.row, app.step), (TRACK_COUNT, 15));
+    }
+
+    #[test]
+    fn bank_navigation_handles_partial_banks() {
+        let mut project = ProjectV2::new();
+        project.tracks[0].steps.resize(20, None);
+        let mut app = App::new(project, None);
+        app.row = 1;
+        app.step = 9;
+        move_step_bank(&mut app, true);
+        assert_eq!(app.step, 19);
+        move_step_bank(&mut app, true);
+        assert_eq!(app.step, 3);
+    }
+
+    #[test]
+    fn sixty_four_step_track_renders_as_two_compact_rows_with_scroll_hint() {
+        let mut project = ProjectV2::new();
+        for track in &mut project.tracks {
+            track.steps.resize(64, None);
+        }
+        let mut app = App::new(project, None);
+        app.row = 1;
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("Kick"));
+        assert!(!screen.contains("LenRange"));
+        assert!(screen.contains("01–32"));
+        assert!(screen.contains("33–64"));
+        assert!(screen.contains("more tracks"));
+        assert!(screen.contains("Shift+D"));
     }
 }

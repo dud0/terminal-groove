@@ -2,7 +2,7 @@ use crate::{
     dsp::{Adsr, Biquad, DcBlock, Delay, PolyBlepOsc, Reverb, Smoother, Svf, exp_map, safety},
     engine::{GateAction, StepClock, synth_action},
     model::{
-        Globals, Instrument, ParameterLocks, Percent, ProjectV1, STEP_COUNT, StepEvent,
+        Globals, Instrument, MAX_STEP_COUNT, ParameterLocks, Percent, ProjectV2, StepEvent,
         TRACK_COUNT, Waveform,
     },
 };
@@ -25,7 +25,8 @@ struct AudioTrack {
     delay_send: Percent,
     reverb_send: Percent,
     instrument: Instrument,
-    steps: [Option<StepEvent>; STEP_COUNT],
+    steps: [Option<StepEvent>; MAX_STEP_COUNT],
+    step_count: u8,
     input_degree: u8,
     input_octave: u8,
 }
@@ -35,7 +36,7 @@ pub struct AudioProject {
     tracks: [AudioTrack; TRACK_COUNT],
 }
 impl AudioProject {
-    pub fn from_project(project: &ProjectV1) -> Self {
+    pub fn from_project(project: &ProjectV2) -> Self {
         Self {
             globals: project.globals,
             tracks: std::array::from_fn(|i| {
@@ -46,7 +47,8 @@ impl AudioProject {
                     delay_send: t.delay_send,
                     reverb_send: t.reverb_send,
                     instrument: t.instrument,
-                    steps: std::array::from_fn(|s| t.steps[s]),
+                    steps: std::array::from_fn(|s| t.steps.get(s).copied().flatten()),
+                    step_count: t.steps.len() as u8,
                     input_degree: t.input_degree.unwrap_or(1),
                     input_octave: t.input_octave.unwrap_or(3),
                 }
@@ -66,7 +68,7 @@ pub enum AudioCommand {
 pub struct AudioStatus {
     pub running: AtomicBool,
     pub paused: AtomicBool,
-    pub playhead: AtomicU8,
+    pub playheads: [AtomicU8; TRACK_COUNT],
     pub failed: AtomicBool,
     pub non_finite: AtomicBool,
 }
@@ -75,7 +77,7 @@ impl Default for AudioStatus {
         Self {
             running: AtomicBool::new(false),
             paused: AtomicBool::new(false),
-            playhead: AtomicU8::new(u8::MAX),
+            playheads: std::array::from_fn(|_| AtomicU8::new(u8::MAX)),
             failed: AtomicBool::new(false),
             non_finite: AtomicBool::new(false),
         }
@@ -99,7 +101,7 @@ impl Audio {
     pub fn available_commands(&self) -> usize {
         self.producer.slots()
     }
-    pub fn snapshot(project: &ProjectV1) -> AudioCommand {
+    pub fn snapshot(project: &ProjectV2) -> AudioCommand {
         AudioCommand::ReplaceProject(AudioProject::from_project(project))
     }
 }
@@ -148,7 +150,7 @@ fn choose_device(requested: Option<&str>) -> Result<Device> {
 }
 
 #[allow(deprecated)]
-pub fn open(requested: Option<&str>, project: &ProjectV1) -> Result<Audio> {
+pub fn open(requested: Option<&str>, project: &ProjectV2) -> Result<Audio> {
     let device = choose_device(requested)?;
     let name = device.name().unwrap_or_else(|_| "unknown".into());
     let supported = device
@@ -181,7 +183,9 @@ fn mark_failed(status: &AudioStatus) {
     status.failed.store(true, Ordering::Release);
     status.running.store(false, Ordering::Release);
     status.paused.store(false, Ordering::Release);
-    status.playhead.store(u8::MAX, Ordering::Release);
+    for playhead in &status.playheads {
+        playhead.store(u8::MAX, Ordering::Release);
+    }
 }
 
 struct SynthVoice {
@@ -348,6 +352,7 @@ impl SynthVoice {
 struct Renderer {
     project: AudioProject,
     clock: StepClock,
+    next_steps: [usize; TRACK_COUNT],
     playing: bool,
     sr: f32,
     status: Arc<AudioStatus>,
@@ -365,6 +370,7 @@ impl Renderer {
         let mut r = Self {
             project,
             clock: StepClock::new(sr, project.globals.tempo_bpm),
+            next_steps: [0; TRACK_COUNT],
             playing: false,
             sr: sr as f32,
             status,
@@ -425,6 +431,7 @@ impl Renderer {
             AudioCommand::Stop => {
                 self.playing = false;
                 self.clock.reset();
+                self.next_steps = [0; TRACK_COUNT];
                 for voice in self.drums.iter_mut().chain(self.preview_drums.iter_mut()) {
                     voice.envelope.value = DRUM_SILENCE;
                     voice.envelope.elapsed = voice.envelope.decay_samples;
@@ -438,10 +445,21 @@ impl Renderer {
                 self.reverb.clear();
                 self.status.running.store(false, Ordering::Release);
                 self.status.paused.store(false, Ordering::Release);
-                self.status.playhead.store(u8::MAX, Ordering::Release);
+                for playhead in &self.status.playheads {
+                    playhead.store(u8::MAX, Ordering::Release);
+                }
             }
             AudioCommand::ReplaceProject(project) => {
                 self.project = project;
+                for (track, next) in self.next_steps.iter_mut().enumerate() {
+                    if *next >= self.project.tracks[track].step_count as usize {
+                        *next = 0;
+                    }
+                    let playhead = &self.status.playheads[track];
+                    if playhead.load(Ordering::Acquire) >= self.project.tracks[track].step_count {
+                        playhead.store(u8::MAX, Ordering::Release);
+                    }
+                }
                 self.configure_effects();
                 self.update_mutes(false);
             }
@@ -593,7 +611,7 @@ impl Renderer {
         voice.active = true;
     }
     fn audition(&mut self, track: usize, step: usize) {
-        if track >= TRACK_COUNT || step >= STEP_COUNT {
+        if track >= TRACK_COUNT || step >= self.project.tracks[track].step_count as usize {
             return;
         }
         if track < 3 {
@@ -608,7 +626,9 @@ impl Renderer {
                 locks,
             }) => (degree, octave, locks),
             Some(StepEvent::Tie { locks }) => {
-                let Some(source) = crate::model::tie_source(&t.steps, step) else {
+                let Some(source) =
+                    crate::model::tie_source(&t.steps[..t.step_count as usize], step)
+                else {
                     return;
                 };
                 let Some(StepEvent::Note { degree, octave, .. }) = t.steps[source] else {
@@ -622,9 +642,10 @@ impl Renderer {
         Self::configure_synth_voice(&self.project, self.sr, track, degree, octave, locks, v);
         v.remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
     }
-    fn boundary(&mut self, step: usize) {
-        self.status.playhead.store(step as u8, Ordering::Release);
+    fn boundary(&mut self) {
         for track in 0..TRACK_COUNT {
+            let step = self.next_steps[track];
+            self.status.playheads[track].store(step as u8, Ordering::Release);
             let t = self.project.tracks[track];
             if track < 3 {
                 self.update_drum_mix(track, step);
@@ -633,7 +654,11 @@ impl Renderer {
                 }
             } else {
                 let vi = track - 3;
-                match synth_action(&t.steps, step, self.synth[vi].active) {
+                match synth_action(
+                    &t.steps[..t.step_count as usize],
+                    step,
+                    self.synth[vi].active,
+                ) {
                     GateAction::Trigger { degree, octave } => {
                         let locks = self.locks_at(track, step);
                         let v = &mut self.synth[vi];
@@ -672,6 +697,7 @@ impl Renderer {
                     GateAction::None => {}
                 }
             }
+            self.next_steps[track] = (step + 1) % t.step_count as usize;
         }
     }
     fn render_synth(v: &mut SynthVoice, sr: f32) -> (f32, f32, f32) {
@@ -727,10 +753,8 @@ impl Renderer {
         )
     }
     fn next(&mut self) -> (f32, f32) {
-        if self.playing {
-            if let Some(step) = self.clock.tick() {
-                self.boundary(step)
-            }
+        if self.playing && self.clock.tick().is_some() {
+            self.boundary()
         }
         let mut dry = 0.0;
         let mut delay_in = 0.0;
@@ -804,7 +828,7 @@ fn render<T: Copy, F: Fn(f32) -> T>(
 }
 
 /// Deterministic, device-independent rendering used by tests and diagnostics.
-pub fn render_offline(project: &ProjectV1, sample_rate: u32, frames: usize) -> Vec<(f32, f32)> {
+pub fn render_offline(project: &ProjectV2, sample_rate: u32, frames: usize) -> Vec<(f32, f32)> {
     let status = Arc::new(AudioStatus::default());
     let mut renderer = Renderer::new(AudioProject::from_project(project), sample_rate, status);
     renderer.command(AudioCommand::PlayPause);
@@ -834,16 +858,39 @@ mod tests {
     }
     #[test]
     fn snapshot_contains_all_steps_without_heap_backed_commands() {
-        let p = ProjectV1::new();
+        let mut p = ProjectV2::new();
+        p.tracks[0].steps.resize(MAX_STEP_COUNT, None);
         let AudioCommand::ReplaceProject(s) = Audio::snapshot(&p) else {
             panic!()
         };
         assert_eq!(s.globals.tempo_bpm, 120);
+        assert_eq!(s.tracks[0].step_count as usize, MAX_STEP_COUNT);
+        assert_eq!(s.tracks[1].step_count, 16);
         assert!(s.tracks[0].steps.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn renderer_reports_independent_track_playheads() {
+        let mut project = ProjectV2::new();
+        project.tracks[0].steps.resize(3, None);
+        project.tracks[1].steps.resize(5, None);
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer =
+            Renderer::new(AudioProject::from_project(&project), 8_000, status.clone());
+        for expected in [[0, 0], [1, 1], [2, 2], [0, 3], [1, 4], [2, 0]] {
+            renderer.boundary();
+            assert_eq!(
+                [
+                    status.playheads[0].load(Ordering::Acquire),
+                    status.playheads[1].load(Ordering::Acquire),
+                ],
+                expected
+            );
+        }
     }
     #[test]
     fn offline_render_is_deterministic_and_finite() {
-        let mut p = ProjectV1::new();
+        let mut p = ProjectV2::new();
         p.tracks[0].steps[0] = Some(StepEvent::Trigger {
             locks: Default::default(),
         });
@@ -858,7 +905,7 @@ mod tests {
     fn resume_triggers_the_next_step_immediately() {
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(
-            AudioProject::from_project(&ProjectV1::new()),
+            AudioProject::from_project(&ProjectV2::new()),
             48_000,
             status,
         );
@@ -877,7 +924,7 @@ mod tests {
 
     #[test]
     fn drum_mixer_lock_reverts_on_the_following_boundary() {
-        let mut project = ProjectV1::new();
+        let mut project = ProjectV2::new();
         project.tracks[0].steps[0] = Some(StepEvent::Trigger {
             locks: ParameterLocks {
                 level: Some(Percent::ZERO),
@@ -886,11 +933,11 @@ mod tests {
         });
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
-        renderer.boundary(0);
+        renderer.boundary();
         let locked = (0..40)
             .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr).0)
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-        renderer.boundary(1);
+        renderer.boundary();
         let restored = (0..40)
             .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr).0)
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
@@ -900,7 +947,7 @@ mod tests {
 
     #[test]
     fn synth_filter_mappings_match_the_specified_limits() {
-        let project = AudioProject::from_project(&ProjectV1::new());
+        let project = AudioProject::from_project(&ProjectV2::new());
         let mut voice = SynthVoice::new(48_000.0);
         let mut locks = ParameterLocks {
             cutoff: Percent::new(0),

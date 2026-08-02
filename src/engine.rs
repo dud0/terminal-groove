@@ -1,9 +1,9 @@
-use crate::model::{DelayDivision, ProjectV1, STEP_COUNT, StepEvent, TrackKind, tie_source};
+use crate::model::{DelayDivision, ProjectV2, StepEvent, TRACK_COUNT, TrackKind, tie_source};
 
 #[derive(Clone, Debug)]
 pub enum EngineCommand {
-    ReplaceProject(ProjectV1),
-    SetProject(ProjectV1),
+    ReplaceProject(ProjectV2),
+    SetProject(ProjectV2),
     PlayPause,
     Stop,
 }
@@ -46,7 +46,7 @@ impl StepClock {
         self.phase -= 1.0;
         if self.phase <= 0.0 {
             let s = self.next_step;
-            self.next_step = (s + 1) % STEP_COUNT;
+            self.next_step = s.wrapping_add(1);
             self.phase += self.step_samples();
             Some(s)
         } else {
@@ -81,7 +81,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
     }
 }
 
-pub fn effective_level(project: &ProjectV1, track: usize, step: usize) -> f32 {
+pub fn effective_level(project: &ProjectV2, track: usize, step: usize) -> f32 {
     let t = &project.tracks[track];
     if t.muted {
         return 0.0;
@@ -98,28 +98,40 @@ pub fn delay_samples(d: DelayDivision, bpm: u16, sr: u32) -> usize {
 }
 
 pub struct Engine {
-    pub project: ProjectV1,
+    pub project: ProjectV2,
     pub transport: Transport,
-    pub playhead: Option<usize>,
+    pub playheads: [Option<usize>; TRACK_COUNT],
     clock: StepClock,
-    voices: [bool; 6],
+    next_steps: [usize; TRACK_COUNT],
+    voices: [bool; TRACK_COUNT],
 }
 impl Engine {
-    pub fn new(project: ProjectV1, sr: u32) -> Self {
+    pub fn new(project: ProjectV2, sr: u32) -> Self {
         let bpm = project.globals.tempo_bpm;
         Self {
             project,
             transport: Transport::Stopped,
-            playhead: None,
+            playheads: [None; TRACK_COUNT],
             clock: StepClock::new(sr, bpm),
-            voices: [false; 6],
+            next_steps: [0; TRACK_COUNT],
+            voices: [false; TRACK_COUNT],
         }
     }
     pub fn command(&mut self, c: EngineCommand) {
         match c {
             EngineCommand::ReplaceProject(p) | EngineCommand::SetProject(p) => {
                 self.project = p;
-                self.clock.set_bpm(self.project.globals.tempo_bpm)
+                self.clock.set_bpm(self.project.globals.tempo_bpm);
+                for i in 0..TRACK_COUNT {
+                    if self.next_steps[i] >= self.project.tracks[i].steps.len() {
+                        self.next_steps[i] = 0;
+                    }
+                    if self.playheads[i]
+                        .is_some_and(|step| step >= self.project.tracks[i].steps.len())
+                    {
+                        self.playheads[i] = None;
+                    }
+                }
             }
             EngineCommand::PlayPause => match self.transport {
                 Transport::Stopped | Transport::Paused => {
@@ -128,25 +140,29 @@ impl Engine {
                 }
                 Transport::Playing => {
                     self.transport = Transport::Paused;
-                    self.voices = [false; 6]
+                    self.voices = [false; TRACK_COUNT]
                 }
             },
             EngineCommand::Stop => {
                 self.transport = Transport::Stopped;
-                self.playhead = None;
+                self.playheads = [None; TRACK_COUNT];
                 self.clock.reset();
-                self.voices = [false; 6]
+                self.next_steps = [0; TRACK_COUNT];
+                self.voices = [false; TRACK_COUNT]
             }
         }
     }
-    pub fn tick(&mut self) -> Option<usize> {
+    pub fn tick(&mut self) -> Option<[usize; TRACK_COUNT]> {
         if self.transport != Transport::Playing {
             return None;
         }
         self.clock.set_bpm(self.project.globals.tempo_bpm);
-        let step = self.clock.tick()?;
-        self.playhead = Some(step);
-        for i in 0..6 {
+        self.clock.tick()?;
+        let mut played = [0; TRACK_COUNT];
+        for (i, played_step) in played.iter_mut().enumerate() {
+            let step = self.next_steps[i];
+            *played_step = step;
+            self.playheads[i] = Some(step);
             if self.project.tracks[i].kind == TrackKind::Synth {
                 match synth_action(&self.project.tracks[i].steps, step, self.voices[i]) {
                     GateAction::Trigger { .. } | GateAction::Hold => self.voices[i] = true,
@@ -154,8 +170,9 @@ impl Engine {
                     GateAction::None => {}
                 }
             }
+            self.next_steps[i] = (step + 1) % self.project.tracks[i].steps.len();
         }
-        Some(step)
+        Some(played)
     }
 }
 
@@ -178,7 +195,7 @@ mod tests {
     }
     #[test]
     fn lock_restores() {
-        let mut p = ProjectV1::new();
+        let mut p = ProjectV2::new();
         p.tracks[0].steps[0] = Some(StepEvent::Trigger {
             locks: crate::model::ParameterLocks {
                 level: crate::model::Percent::new(20),
@@ -187,5 +204,29 @@ mod tests {
         });
         assert!((effective_level(&p, 0, 0) - 0.04).abs() < 0.001);
         assert!((effective_level(&p, 0, 1) - 0.64).abs() < 0.001)
+    }
+
+    #[test]
+    fn tracks_cycle_at_independent_lengths_and_live_resize_keeps_position() {
+        let mut project = ProjectV2::new();
+        project.globals.tempo_bpm = 60;
+        project.tracks[0].steps.resize(3, None);
+        project.tracks[1].steps.resize(5, None);
+        let mut engine = Engine::new(project, 4);
+        engine.command(EngineCommand::PlayPause);
+        assert_eq!(engine.tick().unwrap()[..2], [0, 0]);
+        assert_eq!(engine.tick().unwrap()[..2], [1, 1]);
+
+        let mut grown = engine.project.clone();
+        grown.tracks[0].steps.resize(6, None);
+        engine.command(EngineCommand::SetProject(grown));
+        assert_eq!(engine.tick().unwrap()[..2], [2, 2]);
+
+        let mut shrunk = engine.project.clone();
+        shrunk.tracks[0].steps.resize(2, None);
+        engine.command(EngineCommand::SetProject(shrunk));
+        assert_eq!(engine.tick().unwrap()[..2], [0, 3]);
+        assert_eq!(engine.tick().unwrap()[..2], [1, 4]);
+        assert_eq!(engine.tick().unwrap()[..2], [0, 0]);
     }
 }
