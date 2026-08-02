@@ -1,6 +1,6 @@
 use crate::{
     dsp::{
-        Adsr, Biquad, DcBlock, Delay, EnvelopeProfile, LadderFilter, Lfo, MasterLimiter,
+        Adsr, Biquad, DcBlock, Delay, EnvStage, EnvelopeProfile, LadderFilter, Lfo, MasterLimiter,
         PolyBlepOsc, Reverb, Smoother, StereoChorus, exp_map_f32,
     },
     engine::{GateAction, StepClock, synth_action},
@@ -1387,6 +1387,12 @@ impl Renderer {
         sr: f32,
         offsets: &[f32; ParameterId::ALL.len()],
     ) -> (f32, f32, f32) {
+        // Chord pools keep a spare group for released notes.  Once an
+        // envelope is idle there is no signal to render, so avoid running
+        // oscillators and filters for those voices on every callback sample.
+        if v.env.stage == EnvStage::Idle {
+            return (0.0, 0.0, 0.0);
+        }
         if v.remaining > 0 {
             v.remaining -= 1;
             if v.remaining == 0 {
@@ -1756,6 +1762,41 @@ mod tests {
         assert_eq!(a, b);
         assert!(a.iter().all(|(l, r)| l.is_finite() && r.is_finite()));
         assert!(a.iter().any(|(l, _)| l.abs() > 0.001));
+    }
+
+    #[test]
+    fn active_chord_and_lead_render_is_finite_at_44100_hz() {
+        let mut project = ProjectV6::new();
+        for track in &mut project.tracks[..3] {
+            track.muted = true;
+        }
+        for step in [0, 4, 8, 12] {
+            project.tracks[3].steps[step] = Some(StepEvent::BassNote {
+                degree: 1,
+                octave: 2,
+                accent: false,
+                slide: false,
+                locks: Default::default(),
+            });
+            project.tracks[4].steps[step] = Some(StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                locks: Default::default(),
+            });
+            project.tracks[5].steps[step] = Some(StepEvent::Note {
+                degree: 5,
+                octave: 4,
+                accent: false,
+                locks: Default::default(),
+            });
+        }
+        let rendered = render_offline(&project, 44_100, 44_100 * 2);
+        assert!(
+            rendered
+                .iter()
+                .all(|(left, right)| left.is_finite() && right.is_finite())
+        );
     }
 
     #[test]

@@ -491,9 +491,12 @@ impl StereoChorus {
 
     fn tap(&self, delay_samples: f32) -> f32 {
         let read = (self.pos as f32 - delay_samples).rem_euclid(self.buffer.len() as f32);
-        let first = read.floor() as usize;
+        // `rem_euclid` can round a tiny negative remainder up to the modulus
+        // in `f32`.  Keep the integer index wrapped as well, otherwise a
+        // read exactly at `buffer.len()` panics in the audio callback.
+        let first = (read.floor() as usize) % self.buffer.len();
         let second = (first + 1) % self.buffer.len();
-        let fraction = read - first as f32;
+        let fraction = read.fract();
         self.buffer[first] + (self.buffer[second] - self.buffer[first]) * fraction
     }
 
@@ -1097,6 +1100,27 @@ mod tests {
             first
                 .iter()
                 .any(|(left, right)| (left - right).abs() > 0.000_001)
+        );
+    }
+
+    #[test]
+    fn juno_chorus_handles_float_wrap_at_44100_hz() {
+        for mode in 1..=2 {
+            let mut chorus = StereoChorus::new(44_100);
+            chorus.configure(mode);
+            for sample in 0..200_000 {
+                let (left, right) = chorus.process(if sample % 127 == 0 { 1.0 } else { 0.0 });
+                assert!(left.is_finite() && right.is_finite());
+            }
+        }
+    }
+
+    #[test]
+    fn juno_chorus_tap_handles_a_near_zero_negative_read() {
+        let mut chorus = StereoChorus::new(44_100);
+        chorus.pos = 0;
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| chorus.tap(0.00001))).is_ok()
         );
     }
 }
