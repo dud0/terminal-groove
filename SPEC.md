@@ -322,14 +322,17 @@ Adding or replacing a trigger or note automatically auditions it only while tran
 
 ### 6.1 Layout
 
-At `100x24` or larger, the normal screen contains:
+At `120x34` or larger, the normal screen contains:
 
 1. Header: application name, project filename or `Untitled`, dirty marker, audio device/status, transport state, and tempo.
-2. Global row: the six global controls and their current values.
+2. Global row: the six global controls, current values, and their local shortcuts.
 3. Six fixed sequencer rows: track name, mute state, and 16 step cells.
-4. Parameter detail panel: selected track/global values, physical units, BASE/LOCK scope, and selected lock inheritance.
-5. Status line: last successful operation or actionable error.
-6. Persistent contextual shortcut legend.
+4. A selected-control panel: vertical parameter faders for the selected track, or six global detail cards when the global row is selected.
+5. Status line: current mode, last successful operation or actionable error, and active-editor guidance.
+
+Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The waveform parameter uses the same column geometry as a two-position switch. Mixer parameters (level, delay send, and reverb send) are grouped separately from instrument parameters; synth filter parameters and envelope parameters each have their own group. Each group uses a distinct fader/heading color. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values; the `LOCK` word uses a contrasting color. Physical units are shown in the active parameter readout.
+
+Shortcuts are displayed beside the controls they operate: global keys in the global row/cards, event and navigation keys in the pattern title, track keys in the selected-track title, and parameter keys below their faders. The help overlay remains available for the complete key map; there is no persistent bottom instruction panel.
 
 Step cells use these textual forms:
 
@@ -344,7 +347,7 @@ The selected cell and currently playing cell have independent styling. If both r
 
 Each synth row includes its current input octave in the track label (for example, `Synth 1 O3`).
 
-When the terminal is smaller than `100x24`, replace the main layout with the current size, required size, and quit/help keys. The project and audio engine remain active so resizing restores the normal view.
+When the terminal is smaller than `120x34`, replace the main layout with the current size, required size, and quit/help keys. The project and audio engine remain active so resizing restores the normal view.
 
 ### 6.2 Modes and overlays
 
@@ -594,8 +597,11 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 
 ### 12.3 TUI and reducer tests
 
-- Ratatui `TestBackend` rendering at `100x24` and larger
+- Ratatui `TestBackend` rendering at `120x34` and larger
 - Small-terminal resize screen
+- Ten-segment fader fill, waveform switch, active-parameter styling, and local shortcut labels
+- Effective `LOCK` values with explicit/inherited origin labels
+- Global detail cards and physical active-parameter readouts
 - Independent playhead and cursor styling
 - Non-color event and lock indicators
 - Every documented shortcut in its valid and invalid contexts
@@ -619,17 +625,18 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 
 ### 12.5 Manual acceptance scenarios
 
-1. Start an untitled project in a `100x24` terminal, move to each row, enter events, and see all state and shortcuts without opening help.
+1. Start an untitled project in a `120x34` terminal, move to each row, enter events, and see all state and local shortcuts without opening help.
 2. Build and hear a drum loop using Enter, edit tone/decay, mute tracks, and use both effect sends.
 3. Enter synth degrees and octave changes, create ordinary and loop-wrapped ties, and hear correct mono envelope behavior.
 4. Add base values and locks while stopped and playing; verify locks apply only on their step and live edits take effect on the next pass.
-5. Audition empty and occupied drum/synth steps with `o`, including while transport is running, without pattern changes.
-6. Change key and scale and verify existing degree data follows the new harmony on future triggers.
-7. Undo and redo compound tie cleanup and repeated parameter edits, including returning to the saved clean revision.
-8. Save, inspect, reopen, and compare a project with notes, ties, locks, effects, mute states, and input octaves.
-9. List audio devices, use the default device, and select a unique explicit device.
-10. Play for at least ten minutes at a supported 48 kHz low-latency configuration without stream errors, non-finite output, timing drift, or audible clicks from normal parameter edits.
-11. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored.
+5. Edit each track parameter and confirm its fader fills, shortcut, active highlight, exact percentage, and physical readout.
+6. Audition empty and occupied drum/synth steps with `o`, including while transport is running, without pattern changes.
+7. Change key and scale and verify existing degree data follows the new harmony on future triggers.
+8. Undo and redo compound tie cleanup and repeated parameter edits, including returning to the saved clean revision.
+9. Save, inspect, reopen, and compare a project with notes, ties, locks, effects, mute states, and input octaves.
+10. List audio devices, use the default device, and select a unique explicit device.
+11. Play for at least ten minutes at a supported 48 kHz low-latency configuration without stream errors, non-finite output, timing drift, or audible clicks from normal parameter edits.
+12. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored.
 
 ## 13. MVP completion criteria
 

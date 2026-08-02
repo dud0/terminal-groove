@@ -21,6 +21,6 @@ cargo test
 cargo build --release
 ```
 
-Run with `cargo run --release`, optionally passing a project path and `--audio-device <exact-name>`. Use `--list-audio-devices` to discover output names. The terminal must be at least 80 columns by 24 rows.
+Run with `cargo run --release`, optionally passing a project path and `--audio-device <exact-name>`. Use `--list-audio-devices` to discover output names. The terminal must be at least 120 columns by 34 rows for the full fader layout.
 
 Projects are strict, human-readable `.groove.json` files. A supplied name is never modified automatically.
