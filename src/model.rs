@@ -6,6 +6,8 @@ pub const MAX_STEP_COUNT: usize = 64;
 pub const STEP_BANK_SIZE: usize = 16;
 pub const STEP_ROW_SIZE: usize = 32;
 pub const TRACK_COUNT: usize = 6;
+pub const DEFAULT_NOTE_VELOCITY: Percent = Percent(70);
+pub const DEFAULT_DRUM_VELOCITY: Percent = Percent(100);
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ValidationError {
@@ -530,11 +532,13 @@ impl ParameterLocks {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StepEvent {
     Trigger {
+        velocity: Percent,
         locks: ParameterLocks,
     },
     Note {
         degree: u8,
         octave: u8,
+        velocity: Percent,
         locks: ParameterLocks,
     },
     Tie {
@@ -544,12 +548,26 @@ pub enum StepEvent {
 impl StepEvent {
     pub fn locks(&self) -> &ParameterLocks {
         match self {
-            Self::Trigger { locks } | Self::Note { locks, .. } | Self::Tie { locks } => locks,
+            Self::Trigger { locks, .. } | Self::Note { locks, .. } | Self::Tie { locks } => locks,
         }
     }
     pub fn locks_mut(&mut self) -> &mut ParameterLocks {
         match self {
-            Self::Trigger { locks } | Self::Note { locks, .. } | Self::Tie { locks } => locks,
+            Self::Trigger { locks, .. } | Self::Note { locks, .. } | Self::Tie { locks } => locks,
+        }
+    }
+
+    pub fn velocity(&self) -> Option<Percent> {
+        match self {
+            Self::Trigger { velocity, .. } | Self::Note { velocity, .. } => Some(*velocity),
+            Self::Tie { .. } => None,
+        }
+    }
+
+    pub fn velocity_mut(&mut self) -> Option<&mut Percent> {
+        match self {
+            Self::Trigger { velocity, .. } | Self::Note { velocity, .. } => Some(velocity),
+            Self::Tie { .. } => None,
         }
     }
 }
@@ -575,7 +593,7 @@ pub struct Track {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectV3 {
+pub struct ProjectV4 {
     pub format_version: u32,
     pub globals: Globals,
     pub tracks: Vec<Track>,
@@ -584,7 +602,7 @@ pub struct ProjectV3 {
 fn p(n: u8) -> Percent {
     Percent(n)
 }
-impl ProjectV3 {
+impl ProjectV4 {
     pub fn new() -> Self {
         let drum = |kind: TrackKind, name: &str, tone: u8, decay: u8| Track {
             kind,
@@ -625,7 +643,7 @@ impl ProjectV3 {
             input_octave: Some(3),
         };
         Self {
-            format_version: 3,
+            format_version: 4,
             globals: Globals::default(),
             tracks: vec![
                 drum(TrackKind::Kick, "Kick", 50, 35),
@@ -638,7 +656,7 @@ impl ProjectV3 {
         }
     }
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 3 {
+        if self.format_version != 4 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -724,7 +742,7 @@ impl ProjectV3 {
             .map(|m| 440.0 * 2.0_f32.powf((m as f32 - 69.0) / 12.0))
     }
 }
-impl Default for ProjectV3 {
+impl Default for ProjectV4 {
     fn default() -> Self {
         Self::new()
     }
@@ -899,11 +917,11 @@ mod tests {
     use super::*;
     #[test]
     fn default_valid() {
-        ProjectV3::new().validate().unwrap();
+        ProjectV4::new().validate().unwrap();
     }
     #[test]
     fn scale_and_frequency() {
-        let mut p = ProjectV3::new();
+        let mut p = ProjectV4::new();
         assert_eq!(p.note_midi(8, 3), Some(60));
         p.globals.key = PitchClass::A;
         assert!((p.note_frequency(1, 4).unwrap() - 440.0).abs() < 0.001);
@@ -921,6 +939,7 @@ mod tests {
         s[15] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
+            velocity: DEFAULT_NOTE_VELOCITY,
             locks: Default::default(),
         });
         s[0] = Some(StepEvent::Tie {
@@ -930,13 +949,14 @@ mod tests {
     }
     #[test]
     fn variable_step_counts_and_wrapped_ties_validate() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[0].steps = vec![None; 1];
         project.tracks[1].steps = vec![None; MAX_STEP_COUNT];
         project.tracks[3].steps = vec![None; 3];
         project.tracks[3].steps[2] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
+            velocity: DEFAULT_NOTE_VELOCITY,
             locks: Default::default(),
         });
         project.tracks[3].steps[0] = Some(StepEvent::Tie {
@@ -965,9 +985,42 @@ mod tests {
         assert!(serde_json::from_str::<Percent>("101").is_err());
     }
     #[test]
+    fn velocity_is_required_on_sound_starting_events_and_forbidden_on_ties() {
+        let trigger = StepEvent::Trigger {
+            velocity: DEFAULT_DRUM_VELOCITY,
+            locks: Default::default(),
+        };
+        let note = StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            velocity: DEFAULT_NOTE_VELOCITY,
+            locks: Default::default(),
+        };
+        assert_eq!(
+            serde_json::to_value(trigger).unwrap()["velocity"],
+            DEFAULT_DRUM_VELOCITY.get()
+        );
+        assert_eq!(
+            serde_json::to_value(note).unwrap()["velocity"],
+            DEFAULT_NOTE_VELOCITY.get()
+        );
+        assert!(serde_json::from_str::<StepEvent>(r#"{"type":"trigger","locks":{}}"#).is_err());
+        assert!(
+            serde_json::from_str::<StepEvent>(
+                r#"{"type":"note","degree":1,"octave":3,"velocity":101,"locks":{}}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<StepEvent>(r#"{"type":"tie","velocity":70,"locks":{}}"#)
+                .is_err()
+        );
+    }
+    #[test]
     fn lock_compatibility_matches_track_kind() {
-        let mut drum = ProjectV3::new();
+        let mut drum = ProjectV4::new();
         drum.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            velocity: DEFAULT_DRUM_VELOCITY,
             locks: ParameterLocks {
                 cutoff: Percent::new(50),
                 ..Default::default()
@@ -978,10 +1031,11 @@ mod tests {
             Err(ValidationError::Lock(0, 0, "cutoff"))
         ));
 
-        let mut synth = ProjectV3::new();
+        let mut synth = ProjectV4::new();
         synth.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
+            velocity: DEFAULT_NOTE_VELOCITY,
             locks: ParameterLocks {
                 tone: Percent::new(50),
                 ..Default::default()
@@ -996,7 +1050,7 @@ mod tests {
     fn all_keys_map_degrees() {
         for key in PitchClass::ALL {
             for scale in [Scale::Major, Scale::NaturalMinor] {
-                let mut p = ProjectV3::new();
+                let mut p = ProjectV4::new();
                 p.globals.key = key;
                 p.globals.scale = scale;
                 for degree in 1..=8 {
@@ -1037,7 +1091,7 @@ mod tests {
                 < 0.001
         );
 
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[0].lfos.cutoff = Some(LfoConfig::default());
         assert_eq!(project.validate(), Err(ValidationError::Lfo(0, "cutoff")));
         project.tracks[0].lfos.cutoff = None;

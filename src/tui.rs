@@ -2,7 +2,7 @@ use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
     model::{
         DelayDivision, GlobalParameterId, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
-        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, ProjectV3, STEP_BANK_SIZE,
+        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, ProjectV4, STEP_BANK_SIZE,
         STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind, Waveform,
     },
     persistence,
@@ -46,10 +46,11 @@ impl Drop for TerminalGuard {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Mode {
     Navigation,
     ParameterEdit(ParameterId),
+    VelocityEdit,
     LfoEdit {
         parameter: ParameterId,
         field: LfoField,
@@ -65,7 +66,7 @@ enum Mode {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LfoField {
     Enabled,
     Waveform,
@@ -83,7 +84,7 @@ impl LfoField {
         Self::Depth,
     ];
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileAction {
     SaveAs,
     Open,
@@ -131,7 +132,7 @@ impl FaderAnimation {
     }
 }
 impl App {
-    pub fn new(project: ProjectV3, path: Option<PathBuf>) -> Self {
+    pub fn new(project: ProjectV4, path: Option<PathBuf>) -> Self {
         Self {
             editor: Editor::new(project),
             row: 0,
@@ -211,7 +212,12 @@ impl App {
     }
 }
 
-pub fn run(project: ProjectV3, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
+pub fn run(
+    project: ProjectV4,
+    path: Option<PathBuf>,
+    migrated_from: Option<u32>,
+    audio: &mut Audio,
+) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
     let old_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -221,6 +227,9 @@ pub fn run(project: ProjectV3, path: Option<PathBuf>, audio: &mut Audio) -> Resu
     }));
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut app = App::new(project, path);
+    if let Some(version) = migrated_from {
+        app.status = format!("Migrated project format v{version} in memory; save to write v4");
+    }
     while !app.quit {
         refresh_audio_status(&mut app, audio);
         app.fader_animations
@@ -327,10 +336,21 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         }
         return Ok(());
     }
+    if matches!(
+        a.mode,
+        Mode::Navigation | Mode::ParameterEdit(_) | Mode::VelocityEdit
+    ) && let Some(track) = track_jump_index(k)
+    {
+        select_track(a, track);
+        return Ok(());
+    }
     if matches!(a.mode, Mode::LfoEdit { .. }) && handle_lfo_key(a, audio, k)? {
         return Ok(());
     }
     if matches!(a.mode, Mode::ParameterEdit(_)) && handle_parameter_key(a, audio, k)? {
+        return Ok(());
+    }
+    if a.mode == Mode::VelocityEdit && handle_velocity_key(a, audio, k)? {
         return Ok(());
     }
     if matches!(a.mode, Mode::GlobalEdit(_)) && handle_global_key(a, audio, k)? {
@@ -439,6 +459,7 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
             a.status = format!("Editing {} length", a.editor.project.tracks[a.row - 1].name);
         }
         KeyCode::Char('D') if a.row > 0 => duplicate_selected_track(a, audio),
+        KeyCode::Char('V') if a.row > 0 => enter_velocity_edit(a),
         KeyCode::Char(c) if a.row == 0 => {
             if let Some(id) = global_shortcut(c) {
                 a.global = id as usize;
@@ -497,6 +518,56 @@ fn move_step(a: &mut App, forward: bool) {
     } else {
         (a.step + length - 1) % length
     };
+}
+
+fn track_jump_index(k: KeyEvent) -> Option<usize> {
+    let KeyCode::Char(c) = k.code else {
+        return None;
+    };
+    let shifted_symbol = match c {
+        '!' => Some(0),
+        '@' => Some(1),
+        '#' => Some(2),
+        '$' => Some(3),
+        '%' => Some(4),
+        '^' => Some(5),
+        _ => None,
+    };
+    if shifted_symbol.is_some() {
+        return shifted_symbol;
+    }
+    if k.modifiers.contains(KeyModifiers::SHIFT) {
+        return c
+            .to_digit(10)
+            .filter(|&track| (1..=6).contains(&track))
+            .map(|track| track as usize - 1);
+    }
+    None
+}
+
+fn select_track(a: &mut App, track: usize) {
+    a.editor.end_coalescing();
+    a.row = track + 1;
+    a.step = a.step.min(a.editor.project.tracks[track].steps.len() - 1);
+
+    match a.mode {
+        Mode::ParameterEdit(parameter)
+            if !parameter.is_valid_for(a.editor.project.tracks[track].kind) =>
+        {
+            let replacement = parameter_descriptors(a.editor.project.tracks[track].kind)[0].id;
+            enter_parameter_edit(a, replacement);
+        }
+        Mode::VelocityEdit if a.editor.velocity_value(track, a.step).is_err() => {
+            a.mode = Mode::Navigation;
+            a.status = "Velocity editing unavailable on the selected step".into();
+        }
+        _ => {}
+    }
+}
+
+fn move_step_page(a: &mut App, forward: bool) {
+    a.editor.end_coalescing();
+    move_step(a, forward);
 }
 
 fn move_step_bank(a: &mut App, forward: bool) {
@@ -678,6 +749,10 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
         return Ok(true);
     }
     match k.code {
+        KeyCode::PageUp | KeyCode::PageDown => {
+            move_step_page(a, k.code == KeyCode::PageDown);
+            Ok(true)
+        }
         KeyCode::Left => {
             if k.modifiers.contains(KeyModifiers::SHIFT) {
                 move_step_bank(a, false);
@@ -788,10 +863,99 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
     }
 }
 
+fn enter_velocity_edit(a: &mut App) {
+    let track = a.row - 1;
+    match a.editor.velocity_value(track, a.step) {
+        Ok(velocity) => {
+            a.editor.end_coalescing();
+            a.mode = Mode::VelocityEdit;
+            a.status = format!("Editing velocity ({velocity})");
+        }
+        Err(error) => a.status = error.to_string(),
+    }
+}
+
+fn handle_velocity_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+    if a.row == 0 {
+        a.mode = Mode::Navigation;
+        return Ok(true);
+    }
+    match k.code {
+        KeyCode::PageUp | KeyCode::PageDown => {
+            move_step_page(a, k.code == KeyCode::PageDown);
+            Ok(true)
+        }
+        KeyCode::Up | KeyCode::Down => {
+            let delta = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                10
+            } else {
+                1
+            };
+            let delta = if k.code == KeyCode::Up { delta } else { -delta };
+            let track = a.row - 1;
+            let current = match a.editor.velocity_value(track, a.step) {
+                Ok(value) => value,
+                Err(error) => {
+                    a.status = error.to_string();
+                    return Ok(true);
+                }
+            };
+            set_selected_velocity(a, audio, current.saturating_add(delta), true);
+            Ok(true)
+        }
+        KeyCode::Char('?') => {
+            a.mode = Mode::Help;
+            Ok(true)
+        }
+        KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o') => Ok(false),
+        KeyCode::Char(c) if crate::reducer::percentage_key(c).is_some() => {
+            let velocity = crate::reducer::percentage_key(c).unwrap();
+            set_selected_velocity(a, audio, velocity, true);
+            Ok(true)
+        }
+        KeyCode::Enter | KeyCode::Esc | KeyCode::Char('V') => {
+            a.editor.end_coalescing();
+            a.mode = Mode::Navigation;
+            a.status = "Velocity editing finished".into();
+            Ok(true)
+        }
+        _ => Ok(true),
+    }
+}
+
+fn set_selected_velocity(
+    a: &mut App,
+    audio: &mut Audio,
+    velocity: Percent,
+    keep_editing: bool,
+) -> bool {
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; velocity edit rejected".into();
+        return false;
+    }
+    let track = a.row - 1;
+    let key = keep_editing.then_some(crate::reducer::CoalesceKey(track, a.step, u8::MAX - 1));
+    match a.editor.set_velocity(track, a.step, velocity, key) {
+        Ok(true) if sync_project(a, audio) => {
+            a.status = format!("Velocity set to {velocity}");
+            true
+        }
+        Ok(true) => false,
+        Ok(false) => {
+            a.status = "No change".into();
+            true
+        }
+        Err(error) => {
+            a.status = error.to_string();
+            false
+        }
+    }
+}
+
 fn parameter_edit_passthrough(key: KeyCode) -> bool {
     matches!(
         key,
-        KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o')
+        KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o') | KeyCode::Char('V')
     )
 }
 
@@ -1299,8 +1463,9 @@ fn handle_open_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()
     Ok(())
 }
 fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
-    match persistence::load(&path) {
-        Ok(project) => {
+    match persistence::load_with_info(&path) {
+        Ok(loaded) => {
+            let project = loaded.project;
             if audio.available_commands() < 2 {
                 a.mode = Mode::Error("Audio command queue full; project was not opened".into());
                 return;
@@ -1319,7 +1484,14 @@ fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
             a.playing = false;
             a.paused = false;
             a.playheads = [None; TRACK_COUNT];
-            a.status = format!("Opened {}", path.display());
+            a.status = if let Some(version) = loaded.migrated_from {
+                format!(
+                    "Opened {} and migrated format v{version} in memory; save to write v4",
+                    path.display()
+                )
+            } else {
+                format!("Opened {}", path.display())
+            };
             a.mode = Mode::Navigation;
         }
         Err(e) => a.mode = Mode::Error(e.to_string()),
@@ -1550,6 +1722,7 @@ fn mode_name(mode: &Mode) -> String {
         Mode::ParameterEdit(parameter) => {
             format!("Parameter edit ({})", parameter_name(*parameter))
         }
+        Mode::VelocityEdit => "Velocity edit".into(),
         Mode::LfoEdit { parameter, .. } => {
             format!("Track LFO edit ({})", parameter_name(*parameter))
         }
@@ -1575,18 +1748,41 @@ fn track_label(t: &crate::model::Track) -> String {
 fn step_cell(event: Option<&StepEvent>) -> String {
     match event {
         None => " . ".into(),
-        Some(StepEvent::Trigger { locks }) if locks.is_empty() => " x ".into(),
+        Some(StepEvent::Trigger { locks, .. }) if locks.is_empty() => " x ".into(),
         Some(StepEvent::Trigger { .. }) => "x* ".into(),
         Some(StepEvent::Note {
             degree,
             octave,
             locks,
+            ..
         }) => format!(
             "{degree}{}{octave}",
             if locks.is_empty() { ':' } else { '*' }
         ),
         Some(StepEvent::Tie { locks }) if locks.is_empty() => " - ".into(),
         Some(StepEvent::Tie { .. }) => "-* ".into(),
+    }
+}
+
+fn selected_velocity(a: &App, track: usize) -> Option<(Percent, Option<usize>)> {
+    let event = a.editor.project.tracks[track].steps[a.step].as_ref()?;
+    if let Some(velocity) = event.velocity() {
+        return Some((velocity, None));
+    }
+    let source = crate::model::tie_source(&a.editor.project.tracks[track].steps, a.step)?;
+    a.editor.project.tracks[track].steps[source]
+        .as_ref()?
+        .velocity()
+        .map(|velocity| (velocity, Some(source)))
+}
+
+fn velocity_title(a: &App, track: usize) -> String {
+    match selected_velocity(a, track) {
+        Some((velocity, None)) => format!("[Shift+V] Velocity {velocity}"),
+        Some((velocity, Some(source))) => {
+            format!("Velocity {velocity} from step {}", source + 1)
+        }
+        None => "Velocity —".into(),
     }
 }
 
@@ -1984,9 +2180,10 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
     let lock_editing = a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_));
     let title = if t.kind == TrackKind::Synth {
         format!(
-            "{} · Step {} · [p] {} · [m] Mute {} · [o] Audition{}",
+            "{} · Step {} · {} · [p] {} · [m] Mute {} · [o] Audition{}",
             track_label(t),
             a.step + 1,
+            velocity_title(a, track),
             scope_name(a.scope),
             if t.muted { "on" } else { "off" },
             if lock_editing {
@@ -1997,9 +2194,10 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
         )
     } else {
         format!(
-            "{} · Step {} · [p] {} · [m] Mute {} · [o] Audition{}",
+            "{} · Step {} · {} · [p] {} · [m] Mute {} · [o] Audition{}",
             t.name,
             a.step + 1,
+            velocity_title(a, track),
             scope_name(a.scope),
             if t.muted { "on" } else { "off" },
             if lock_editing {
@@ -2424,7 +2622,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             .block(
                 Block::bordered()
                     .title(format!(
-                        "Pattern  [↑↓] vertical  [←→] step  [Shift+←→] bank  [l] length  [Shift+D] double{scroll_hint}"
+                        "Pattern  [↑↓] vertical  [←→] step  [Shift+←→] bank  [Shift+1..6] track  [l] length  [Shift+D] double{scroll_hint}"
                     ))
                     .title_bottom(". empty   x trigger   D:O note   D*O locked note   - tie   * lock"),
             ),
@@ -2462,9 +2660,13 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     if let Mode::ParameterEdit(parameter) = a.mode {
         let track = a.row.saturating_sub(1);
         status_lines.push(Line::from(format!(
-            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [0-9] set percentage  [Shift+L] LFO  [Enter/Esc] finish  [Del] clear lock",
+            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..6] track  [0-9] set percentage  [Shift+L] LFO  [Enter/Esc] finish  [Del] clear lock",
             physical_parameter_readout(a, track, a.step, parameter)
         )));
+    } else if a.mode == Mode::VelocityEdit {
+        status_lines.push(Line::from(
+            "Event velocity · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..6] track  [`/1-0] set percentage  [Enter/Esc] finish",
+        ));
     } else if matches!(a.mode, Mode::LfoEdit { .. }) {
         status_lines.push(Line::from(
             "Track-level LFO · [←/→] field  [↑/↓] adjust  [0-9] set rate/depth  [Del] remove  [Enter/Esc] finish",
@@ -2484,7 +2686,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Enter, Delete.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nDrums: t tone, d decay. Synth: 1-8 note, [ ] input octave, t tie, w waveform, c cutoff, R resonance, f envelope, a/d/s/r ADSR.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter/velocity editing: PageUp/Down changes step, Shift+1..6 selects a track.\nTracks: l length, Shift+D double, Shift+V velocity, p scope, v level, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nDrums: t tone, d decay. Synth: 1-8 note, [ ] input octave, t tie, w waveform, c cutoff, R resonance, f envelope, a/d/s/r ADSR.\nGlobal: t tempo, y delay, f feedback, r reverb, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -2979,7 +3181,7 @@ mod tests {
 
     #[test]
     fn parameter_editor_arrows_cycle_visible_controls_and_wrap() {
-        let mut app = App::new(ProjectV3::new(), None);
+        let mut app = App::new(ProjectV4::new(), None);
         app.row = 1;
         app.step = 4;
         app.scope = Scope::Lock;
@@ -3001,6 +3203,73 @@ mod tests {
     }
 
     #[test]
+    fn page_step_navigation_moves_right_and_wraps_left() {
+        let mut app = App::new(ProjectV4::new(), None);
+        app.row = 1;
+        app.step = 0;
+        move_step_page(&mut app, false);
+        assert_eq!(app.step, 15);
+        move_step_page(&mut app, true);
+        assert_eq!(app.step, 0);
+        move_step_page(&mut app, true);
+        assert_eq!(app.step, 1);
+    }
+
+    #[test]
+    fn shifted_track_numbers_select_the_expected_track() {
+        for (key, track) in ('1'..='6').zip(0..TRACK_COUNT) {
+            assert_eq!(
+                track_jump_index(KeyEvent::new(KeyCode::Char(key), KeyModifiers::SHIFT)),
+                Some(track)
+            );
+        }
+        assert_eq!(
+            track_jump_index(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(
+            track_jump_index(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE)),
+            Some(0)
+        );
+        assert_eq!(
+            track_jump_index(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::SHIFT)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn track_jump_clamps_step_and_replaces_incompatible_parameter() {
+        let mut project = ProjectV4::new();
+        project.tracks[0].steps.resize(4, None);
+        let mut app = App::new(project, None);
+        app.row = 4;
+        app.step = 15;
+        app.scope = Scope::Lock;
+        app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
+
+        select_track(&mut app, 0);
+
+        assert_eq!((app.row, app.step, app.scope), (1, 3, Scope::Lock));
+        assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Level));
+    }
+
+    #[test]
+    fn track_jump_exits_velocity_edit_without_an_editable_event() {
+        let mut app = App::new(ProjectV4::new(), None);
+        app.row = 4;
+        app.mode = Mode::VelocityEdit;
+
+        select_track(&mut app, 0);
+
+        assert_eq!(app.row, 1);
+        assert_eq!(app.mode, Mode::Navigation);
+        assert_eq!(
+            app.status,
+            "Velocity editing unavailable on the selected step"
+        );
+    }
+
+    #[test]
     fn waveform_editor_switches_between_its_two_values() {
         assert_eq!(flipped_waveform(Waveform::Saw), Waveform::Square);
         assert_eq!(flipped_waveform(Waveform::Square), Waveform::Saw);
@@ -3009,6 +3278,43 @@ mod tests {
     #[test]
     fn parameter_editing_passes_audition_key_to_global_handler() {
         assert!(parameter_edit_passthrough(KeyCode::Char('o')));
+        assert!(parameter_edit_passthrough(KeyCode::Char('V')));
+    }
+
+    #[test]
+    fn velocity_editor_opens_only_for_sound_starting_events() {
+        let mut app = App::new(ProjectV4::new(), None);
+        app.row = 4;
+        app.editor.set_note(3, 0, 1).unwrap();
+        enter_velocity_edit(&mut app);
+        assert_eq!(app.mode, Mode::VelocityEdit);
+        app.mode = Mode::Navigation;
+        app.editor.toggle_tie(3, 1).unwrap();
+        app.step = 1;
+        enter_velocity_edit(&mut app);
+        assert_eq!(app.mode, Mode::Navigation);
+        assert_eq!(app.status, "velocity requires a trigger or note");
+    }
+
+    #[test]
+    fn velocity_readout_resolves_ties_to_their_source_note() {
+        let mut app = App::new(ProjectV4::new(), None);
+        app.row = 4;
+        app.editor.set_note(3, 0, 1).unwrap();
+        app.editor
+            .set_velocity(3, 0, Percent::new(43).unwrap(), None)
+            .unwrap();
+        app.editor.toggle_tie(3, 1).unwrap();
+        assert_eq!(
+            selected_velocity(&app, 3),
+            Some((Percent::new(43).unwrap(), None))
+        );
+        app.step = 1;
+        assert_eq!(
+            selected_velocity(&app, 3),
+            Some((Percent::new(43).unwrap(), Some(0)))
+        );
+        assert_eq!(velocity_title(&app, 3), "Velocity 43% from step 1");
     }
 
     #[test]
@@ -3051,16 +3357,18 @@ mod tests {
     #[test]
     fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
         let backend = TestBackend::new(120, 34);
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[3].input_octave = Some(4);
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
+            velocity: crate::model::DEFAULT_NOTE_VELOCITY,
             locks: Default::default(),
         });
         project.tracks[3].steps[1] = Some(StepEvent::Note {
             degree: 2,
             octave: 4,
+            velocity: crate::model::DEFAULT_NOTE_VELOCITY,
             locks: crate::model::ParameterLocks {
                 cutoff: Some(Percent::new(50).unwrap()),
                 ..Default::default()
@@ -3094,7 +3402,7 @@ mod tests {
 
     #[test]
     fn small_terminal_replaces_main_layout() {
-        let app = App::new(ProjectV3::new(), None);
+        let app = App::new(ProjectV4::new(), None);
         let screen = rendered(&app, 119, 34);
         assert!(screen.contains("terminal-groove needs 120x34"));
         assert!(screen.contains("Current: 119x34"));
@@ -3102,7 +3410,7 @@ mod tests {
 
     #[test]
     fn lfo_modal_and_fader_badge_render_at_minimum_size() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3133,7 +3441,7 @@ mod tests {
 
     #[test]
     fn lfo_control_bank_reports_synced_and_physical_free_rates() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3190,7 +3498,7 @@ mod tests {
 
     #[test]
     fn lfo_controls_are_laid_out_left_to_right() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3212,10 +3520,11 @@ mod tests {
 
     #[test]
     fn lock_scope_labels_explicit_and_inherited_values() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
+            velocity: crate::model::DEFAULT_NOTE_VELOCITY,
             locks: crate::model::ParameterLocks {
                 cutoff: Some(Percent::new(50).unwrap()),
                 ..Default::default()
@@ -3232,8 +3541,9 @@ mod tests {
 
     #[test]
     fn lock_values_remain_displayed_after_track_navigation() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            velocity: crate::model::DEFAULT_DRUM_VELOCITY,
             locks: crate::model::ParameterLocks {
                 level: Some(Percent::new(25).unwrap()),
                 ..Default::default()
@@ -3253,7 +3563,7 @@ mod tests {
 
     #[test]
     fn active_parameter_gets_a_visible_fader_outline_and_physical_readout() {
-        let mut app = App::new(ProjectV3::new(), None);
+        let mut app = App::new(ProjectV4::new(), None);
         app.row = 4;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
@@ -3263,7 +3573,7 @@ mod tests {
 
     #[test]
     fn lock_parameter_editing_has_a_prominent_banner() {
-        let mut app = App::new(ProjectV3::new(), None);
+        let mut app = App::new(ProjectV4::new(), None);
         app.row = 4;
         app.scope = Scope::Lock;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
@@ -3288,7 +3598,7 @@ mod tests {
 
     #[test]
     fn base_parameter_editing_does_not_show_lock_editing_banner() {
-        let mut app = App::new(ProjectV3::new(), None);
+        let mut app = App::new(ProjectV4::new(), None);
         app.row = 4;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
@@ -3297,10 +3607,11 @@ mod tests {
 
     #[test]
     fn locked_badge_uses_a_distinct_color() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
+            velocity: crate::model::DEFAULT_NOTE_VELOCITY,
             locks: crate::model::ParameterLocks {
                 cutoff: Some(Percent::new(50).unwrap()),
                 ..Default::default()
@@ -3326,7 +3637,7 @@ mod tests {
 
     #[test]
     fn global_cards_show_all_local_shortcuts() {
-        let app = App::new(ProjectV3::new(), None);
+        let app = App::new(ProjectV4::new(), None);
         let screen = rendered(&app, 120, 34);
         for key in ["[t]", "[y]", "[f]", "[r]", "[k]", "[s]"] {
             assert!(screen.contains(key), "missing {key}");
@@ -3340,6 +3651,7 @@ mod tests {
             step_cell(Some(&StepEvent::Note {
                 degree: 1,
                 octave: 3,
+                velocity: crate::model::DEFAULT_NOTE_VELOCITY,
                 locks: Default::default(),
             })),
             "1:3"
@@ -3348,6 +3660,7 @@ mod tests {
             step_cell(Some(&StepEvent::Note {
                 degree: 2,
                 octave: 4,
+                velocity: crate::model::DEFAULT_NOTE_VELOCITY,
                 locks: crate::model::ParameterLocks {
                     cutoff: Some(Percent::new(50).unwrap()),
                     ..Default::default()
@@ -3373,6 +3686,7 @@ mod tests {
     #[test]
     fn every_overlay_mode_has_a_visible_name() {
         assert_eq!(mode_name(&Mode::Navigation), "Navigation");
+        assert_eq!(mode_name(&Mode::VelocityEdit), "Velocity edit");
         assert_eq!(
             mode_name(&Mode::TempoInput(String::new())),
             "Tempo numeric input"
@@ -3409,7 +3723,7 @@ mod tests {
 
     #[test]
     fn vertical_navigation_follows_physical_rows_without_track_cursors() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[0].steps.resize(64, None);
         project.tracks[1].steps.resize(20, None);
         project.tracks[2].steps.resize(40, None);
@@ -3452,7 +3766,7 @@ mod tests {
 
     #[test]
     fn bank_navigation_handles_partial_banks() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[0].steps.resize(20, None);
         let mut app = App::new(project, None);
         app.row = 1;
@@ -3465,7 +3779,7 @@ mod tests {
 
     #[test]
     fn sixty_four_step_track_renders_as_two_compact_rows_with_scroll_hint() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         for track in &mut project.tracks {
             track.steps.resize(64, None);
         }

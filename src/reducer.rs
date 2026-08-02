@@ -1,6 +1,7 @@
 use crate::model::{
-    LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterLocks, ParameterValue,
-    Percent, ProjectV3, StepEvent, TrackKind, Waveform, tie_source,
+    DEFAULT_DRUM_VELOCITY, DEFAULT_NOTE_VELOCITY, LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT,
+    ParameterId, ParameterLocks, ParameterValue, Percent, ProjectV4, StepEvent, TrackKind,
+    Waveform, tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -23,6 +24,7 @@ pub enum EditError {
     InvalidTie,
     InvalidLength,
     CannotDouble,
+    NoVelocity,
 }
 impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -39,6 +41,7 @@ impl std::fmt::Display for EditError {
                 Self::InvalidTie => "tie requires a preceding note",
                 Self::InvalidLength => "track length must be between 1 and 64 steps",
                 Self::CannotDouble => "track is longer than 32 steps and cannot be doubled",
+                Self::NoVelocity => "velocity requires a trigger or note",
             }
         )
     }
@@ -46,8 +49,8 @@ impl std::fmt::Display for EditError {
 
 #[derive(Clone)]
 struct Revision {
-    before: ProjectV3,
-    after: ProjectV3,
+    before: ProjectV4,
+    after: ProjectV4,
     coalesce: Option<CoalesceKey>,
     at: Instant,
 }
@@ -55,13 +58,13 @@ struct Revision {
 pub struct CoalesceKey(pub usize, pub usize, pub u8);
 
 pub struct Editor {
-    pub project: ProjectV3,
-    saved: ProjectV3,
+    pub project: ProjectV4,
+    saved: ProjectV4,
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
 }
 impl Editor {
-    pub fn new(project: ProjectV3) -> Self {
+    pub fn new(project: ProjectV4) -> Self {
         Self {
             saved: project.clone(),
             project,
@@ -80,7 +83,7 @@ impl Editor {
             revision.coalesce = None;
         }
     }
-    pub fn replace_loaded(&mut self, p: ProjectV3) {
+    pub fn replace_loaded(&mut self, p: ProjectV4) {
         self.project = p.clone();
         self.saved = p;
         self.undo.clear();
@@ -88,7 +91,7 @@ impl Editor {
     }
     pub fn edit<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
     where
-        F: FnOnce(&mut ProjectV3) -> Result<(), EditError>,
+        F: FnOnce(&mut ProjectV4) -> Result<(), EditError>,
     {
         let before = self.project.clone();
         f(&mut self.project)?;
@@ -150,10 +153,12 @@ impl Editor {
                 StepEvent::Note {
                     degree: t.input_degree.unwrap(),
                     octave: t.input_octave.unwrap(),
+                    velocity: DEFAULT_NOTE_VELOCITY,
                     locks: Default::default(),
                 }
             } else {
                 StepEvent::Trigger {
+                    velocity: DEFAULT_DRUM_VELOCITY,
                     locks: Default::default(),
                 }
             });
@@ -169,15 +174,19 @@ impl Editor {
             if step >= t.steps.len() || !(1..=8).contains(&degree) {
                 return Err(EditError::InvalidStep);
             }
-            let locks = match t.steps[step].take() {
-                Some(e) => *e.locks(),
-                None => Default::default(),
+            let (locks, velocity) = match t.steps[step].take() {
+                Some(StepEvent::Note {
+                    velocity, locks, ..
+                }) => (locks, velocity),
+                Some(event) => (*event.locks(), DEFAULT_NOTE_VELOCITY),
+                None => (Default::default(), DEFAULT_NOTE_VELOCITY),
             };
             let octave = t.input_octave.unwrap();
             t.input_degree = Some(degree);
             t.steps[step] = Some(StepEvent::Note {
                 degree,
                 octave,
+                velocity,
                 locks,
             });
             cleanup_invalid_ties(t);
@@ -265,6 +274,41 @@ impl Editor {
             ParameterValue::Percent(value),
             key,
         )
+    }
+
+    pub fn velocity_value(&self, track: usize, step: usize) -> Result<Percent, EditError> {
+        self.project
+            .tracks
+            .get(track)
+            .ok_or(EditError::InvalidTrack)?
+            .steps
+            .get(step)
+            .ok_or(EditError::InvalidStep)?
+            .as_ref()
+            .and_then(StepEvent::velocity)
+            .ok_or(EditError::NoVelocity)
+    }
+
+    pub fn set_velocity(
+        &mut self,
+        track: usize,
+        step: usize,
+        velocity: Percent,
+        key: Option<CoalesceKey>,
+    ) -> Result<bool, EditError> {
+        self.edit(key, move |project| {
+            let event = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?
+                .steps
+                .get_mut(step)
+                .ok_or(EditError::InvalidStep)?
+                .as_mut()
+                .ok_or(EditError::NoVelocity)?;
+            *event.velocity_mut().ok_or(EditError::NoVelocity)? = velocity;
+            Ok(())
+        })
     }
 
     pub fn set_parameter(
@@ -588,7 +632,7 @@ mod tests {
     use super::*;
     #[test]
     fn undo_dirty_redo() {
-        let mut e = Editor::new(ProjectV3::new());
+        let mut e = Editor::new(ProjectV4::new());
         e.toggle_event(0, 0).unwrap();
         assert!(e.is_dirty());
         assert!(e.undo());
@@ -598,7 +642,7 @@ mod tests {
     }
     #[test]
     fn edit_invalidates_redo() {
-        let mut e = Editor::new(ProjectV3::new());
+        let mut e = Editor::new(ProjectV4::new());
         e.toggle_event(0, 0).unwrap();
         e.undo();
         e.toggle_event(0, 1).unwrap();
@@ -606,7 +650,7 @@ mod tests {
     }
     #[test]
     fn tie_cleanup_is_atomic() {
-        let mut e = Editor::new(ProjectV3::new());
+        let mut e = Editor::new(ProjectV4::new());
         e.set_note(3, 0, 1).unwrap();
         e.toggle_tie(3, 1).unwrap();
         e.toggle_tie(3, 2).unwrap();
@@ -625,8 +669,69 @@ mod tests {
     }
 
     #[test]
+    fn new_events_use_distinct_velocity_defaults() {
+        let mut editor = Editor::new(ProjectV4::new());
+        editor.toggle_event(0, 0).unwrap();
+        editor.toggle_event(3, 0).unwrap();
+        assert_eq!(
+            editor.project.tracks[0].steps[0]
+                .as_ref()
+                .unwrap()
+                .velocity(),
+            Some(DEFAULT_DRUM_VELOCITY)
+        );
+        assert_eq!(
+            editor.project.tracks[3].steps[0]
+                .as_ref()
+                .unwrap()
+                .velocity(),
+            Some(DEFAULT_NOTE_VELOCITY)
+        );
+    }
+
+    #[test]
+    fn note_replacement_preserves_velocity_but_tie_to_note_uses_the_default() {
+        let mut editor = Editor::new(ProjectV4::new());
+        editor.set_note(3, 0, 1).unwrap();
+        editor
+            .set_velocity(3, 0, Percent::new(42).unwrap(), None)
+            .unwrap();
+        editor.set_note(3, 0, 5).unwrap();
+        assert_eq!(editor.velocity_value(3, 0).unwrap().get(), 42);
+
+        editor.toggle_tie(3, 1).unwrap();
+        editor.set_note(3, 1, 2).unwrap();
+        assert_eq!(editor.velocity_value(3, 1), Ok(DEFAULT_NOTE_VELOCITY));
+    }
+
+    #[test]
+    fn velocity_edits_are_event_local_undoable_and_rejected_on_ties_or_empty_steps() {
+        let mut editor = Editor::new(ProjectV4::new());
+        assert_eq!(
+            editor.set_velocity(0, 0, Percent::new(20).unwrap(), None),
+            Err(EditError::NoVelocity)
+        );
+        editor.set_note(3, 0, 1).unwrap();
+        editor.toggle_tie(3, 1).unwrap();
+        assert_eq!(
+            editor.set_velocity(3, 1, Percent::new(20).unwrap(), None),
+            Err(EditError::NoVelocity)
+        );
+        editor.mark_saved();
+        editor
+            .set_velocity(3, 0, Percent::new(35).unwrap(), None)
+            .unwrap();
+        assert!(editor.is_dirty());
+        assert!(editor.undo());
+        assert_eq!(editor.velocity_value(3, 0), Ok(DEFAULT_NOTE_VELOCITY));
+        assert!(!editor.is_dirty());
+        assert!(editor.redo());
+        assert_eq!(editor.velocity_value(3, 0).unwrap().get(), 35);
+    }
+
+    #[test]
     fn edits_all_track_parameter_kinds() {
-        let mut e = Editor::new(ProjectV3::new());
+        let mut e = Editor::new(ProjectV4::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
 
         e.set_parameter(0, 0, Scope::Base, ParameterId::Level, p(61), None)
@@ -678,7 +783,7 @@ mod tests {
 
     #[test]
     fn lock_edits_inherit_and_clear_one_parameter() {
-        let mut e = Editor::new(ProjectV3::new());
+        let mut e = Editor::new(ProjectV4::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
         e.toggle_event(0, 0).unwrap();
         assert_eq!(
@@ -720,7 +825,7 @@ mod tests {
 
     #[test]
     fn incompatible_and_empty_locks_are_rejected() {
-        let mut e = Editor::new(ProjectV3::new());
+        let mut e = Editor::new(ProjectV4::new());
         let value = ParameterValue::Percent(Percent::new(10).unwrap());
         assert_eq!(
             e.set_parameter(0, 0, Scope::Lock, ParameterId::Cutoff, value, None),
@@ -739,7 +844,7 @@ mod tests {
 
     #[test]
     fn resize_cleans_wrapped_ties_and_undo_restores_them() {
-        let mut e = Editor::new(ProjectV3::new());
+        let mut e = Editor::new(ProjectV4::new());
         e.set_track_length(3, 4, None).unwrap();
         e.set_note(3, 3, 1).unwrap();
         e.toggle_tie(3, 0).unwrap();
@@ -760,7 +865,7 @@ mod tests {
 
     #[test]
     fn duplicate_track_copies_events_locks_and_is_one_undo_step() {
-        let mut e = Editor::new(ProjectV3::new());
+        let mut e = Editor::new(ProjectV4::new());
         e.set_track_length(3, 4, None).unwrap();
         e.set_note(3, 3, 2).unwrap();
         e.set_parameter(
@@ -784,7 +889,7 @@ mod tests {
 
     #[test]
     fn duplicate_rejects_lengths_above_32_without_state_change() {
-        let mut e = Editor::new(ProjectV3::new());
+        let mut e = Editor::new(ProjectV4::new());
         e.set_track_length(0, 33, None).unwrap();
         e.mark_saved();
         assert_eq!(e.duplicate_track(0), Err(EditError::CannotDouble));
@@ -794,7 +899,7 @@ mod tests {
 
     #[test]
     fn lfo_assignment_is_validated_and_undoable() {
-        let mut editor = Editor::new(ProjectV3::new());
+        let mut editor = Editor::new(ProjectV4::new());
         let config = LfoConfig::default();
         editor
             .set_lfo(3, ParameterId::Cutoff, Some(config), None)

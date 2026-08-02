@@ -4,8 +4,9 @@ use crate::{
     },
     engine::{GateAction, StepClock, synth_action},
     model::{
-        Globals, Instrument, LfoAssignments, MAX_STEP_COUNT, ParameterId, ParameterLocks, Percent,
-        ProjectV3, StepEvent, TRACK_COUNT, Waveform,
+        DEFAULT_DRUM_VELOCITY, DEFAULT_NOTE_VELOCITY, Globals, Instrument, LfoAssignments,
+        MAX_STEP_COUNT, ParameterId, ParameterLocks, Percent, ProjectV4, StepEvent, TRACK_COUNT,
+        Waveform,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -54,7 +55,7 @@ impl ParameterSmoothing {
     }
 }
 impl AudioProject {
-    pub fn from_project(project: &ProjectV3) -> Self {
+    pub fn from_project(project: &ProjectV4) -> Self {
         Self {
             globals: project.globals,
             tracks: std::array::from_fn(|i| {
@@ -126,11 +127,11 @@ impl Audio {
     pub fn available_commands(&self) -> usize {
         self.producer.slots()
     }
-    pub fn snapshot(project: &ProjectV3) -> AudioCommand {
+    pub fn snapshot(project: &ProjectV4) -> AudioCommand {
         Self::snapshot_with_smoothing(project, ParameterSmoothing::Default)
     }
     pub fn snapshot_with_smoothing(
-        project: &ProjectV3,
+        project: &ProjectV4,
         smoothing: ParameterSmoothing,
     ) -> AudioCommand {
         AudioCommand::ReplaceProject {
@@ -184,7 +185,7 @@ fn choose_device(requested: Option<&str>) -> Result<Device> {
 }
 
 #[allow(deprecated)]
-pub fn open(requested: Option<&str>, project: &ProjectV3) -> Result<Audio> {
+pub fn open(requested: Option<&str>, project: &ProjectV4) -> Result<Audio> {
     let device = choose_device(requested)?;
     let name = device.name().unwrap_or_else(|_| "unknown".into());
     let supported = device
@@ -274,9 +275,17 @@ struct SynthVoice {
     locks: ParameterLocks,
     active: bool,
     remaining: u32,
+    velocity: Smoother,
     level: Smoother,
     delay_send: Smoother,
     reverb_send: Smoother,
+}
+
+#[derive(Clone, Copy)]
+struct SynthTrigger {
+    degree: u8,
+    octave: u8,
+    velocity: Percent,
 }
 
 const DRUM_SILENCE: f32 = 0.0001;
@@ -378,6 +387,7 @@ struct DrumVoice {
     filter: Biquad,
     noise: u32,
     tone: f32,
+    velocity: Smoother,
     level: Smoother,
     delay_send: Smoother,
     reverb_send: Smoother,
@@ -392,6 +402,7 @@ impl DrumVoice {
             filter: Biquad::new(),
             noise: seed,
             tone: 0.5,
+            velocity: Smoother::new(0.0),
             level: Smoother::new(0.0),
             delay_send: Smoother::new(0.0),
             reverb_send: Smoother::new(0.0),
@@ -421,6 +432,7 @@ impl SynthVoice {
             locks: ParameterLocks::default(),
             active: false,
             remaining: 0,
+            velocity: Smoother::new(0.0),
             level: Smoother::new(0.0),
             delay_send: Smoother::new(0.0),
             reverb_send: Smoother::new(0.0),
@@ -682,7 +694,7 @@ impl Renderer {
         }
         locks
     }
-    fn trigger_drum(&mut self, track: usize, locks: ParameterLocks) {
+    fn trigger_drum(&mut self, track: usize, velocity: Percent, locks: ParameterLocks) {
         let t = self.project.tracks[track];
         let Instrument::Drum(p) = t.instrument else {
             return;
@@ -695,9 +707,16 @@ impl Renderer {
             locks.decay.unwrap_or(p.decay).get() as f32,
             self.lfo_offsets[track][ParameterId::Decay as usize],
         ) / 100.0;
-        Self::start_drum_voice(&mut self.drums[track], track, tone, decay, self.sr);
+        Self::start_drum_voice(
+            &mut self.drums[track],
+            track,
+            tone,
+            decay,
+            velocity,
+            self.sr,
+        );
     }
-    fn trigger_preview_drum(&mut self, track: usize, locks: ParameterLocks) {
+    fn trigger_preview_drum(&mut self, track: usize, velocity: Percent, locks: ParameterLocks) {
         let t = self.project.tracks[track];
         let Instrument::Drum(p) = t.instrument else {
             return;
@@ -710,7 +729,14 @@ impl Renderer {
             locks.decay.unwrap_or(p.decay).get() as f32,
             self.preview_lfo_offsets[track][ParameterId::Decay as usize],
         ) / 100.0;
-        Self::start_drum_voice(&mut self.preview_drums[track], track, tone, decay, self.sr);
+        Self::start_drum_voice(
+            &mut self.preview_drums[track],
+            track,
+            tone,
+            decay,
+            velocity,
+            self.sr,
+        );
         let voice = &mut self.preview_drums[track];
         voice
             .level
@@ -728,6 +754,7 @@ impl Renderer {
         track: usize,
         tone: f32,
         decay_control: f32,
+        velocity: Percent,
         sr: f32,
     ) {
         let decay = match track {
@@ -741,6 +768,10 @@ impl Renderer {
             _ => (0.001, 0.55),
         };
         voice.tone = tone;
+        voice.velocity.set(
+            velocity.normalized(),
+            ParameterSmoothing::Default.samples(sr),
+        );
         voice.envelope.trigger(peak, attack, decay, sr);
         match track {
             0 => voice.kick_pitch.trigger(tone, decay, sr),
@@ -823,15 +854,18 @@ impl Renderer {
         project: &AudioProject,
         sr: f32,
         track: usize,
-        degree: u8,
-        octave: u8,
+        trigger: SynthTrigger,
         locks: ParameterLocks,
         voice: &mut SynthVoice,
     ) {
-        let midi = 12 * (octave as i32 + 1)
+        let midi = 12 * (trigger.octave as i32 + 1)
             + project.globals.key.semitone()
-            + project.globals.scale.offsets()[degree as usize - 1];
+            + project.globals.scale.offsets()[trigger.degree as usize - 1];
         voice.freq = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
+        voice.velocity.set(
+            trigger.velocity.normalized(),
+            ParameterSmoothing::Default.samples(sr),
+        );
         Self::apply_synth_params(
             project,
             sr,
@@ -895,31 +929,58 @@ impl Renderer {
         }
         self.reset_preview_lfos(track);
         if track < 3 {
-            self.trigger_preview_drum(track, self.locks_at(track, step));
+            let velocity = match self.project.tracks[track].steps[step] {
+                Some(StepEvent::Trigger { velocity, .. }) => velocity,
+                _ => DEFAULT_DRUM_VELOCITY,
+            };
+            self.trigger_preview_drum(track, velocity, self.locks_at(track, step));
             return;
         }
         let t = self.project.tracks[track];
-        let (degree, octave, locks) = match t.steps[step] {
+        let (degree, octave, velocity, locks) = match t.steps[step] {
             Some(StepEvent::Note {
                 degree,
                 octave,
+                velocity,
                 locks,
-            }) => (degree, octave, locks),
+            }) => (degree, octave, velocity, locks),
             Some(StepEvent::Tie { .. }) => {
                 let Some(source) =
                     crate::model::tie_source(&t.steps[..t.step_count as usize], step)
                 else {
                     return;
                 };
-                let Some(StepEvent::Note { degree, octave, .. }) = t.steps[source] else {
+                let Some(StepEvent::Note {
+                    degree,
+                    octave,
+                    velocity,
+                    ..
+                }) = t.steps[source]
+                else {
                     return;
                 };
-                (degree, octave, self.locks_at(track, step))
+                (degree, octave, velocity, self.locks_at(track, step))
             }
-            _ => (t.input_degree, t.input_octave, ParameterLocks::default()),
+            _ => (
+                t.input_degree,
+                t.input_octave,
+                DEFAULT_NOTE_VELOCITY,
+                ParameterLocks::default(),
+            ),
         };
         let v = &mut self.preview[track - 3];
-        Self::configure_synth_voice(&self.project, self.sr, track, degree, octave, locks, v);
+        Self::configure_synth_voice(
+            &self.project,
+            self.sr,
+            track,
+            SynthTrigger {
+                degree,
+                octave,
+                velocity,
+            },
+            locks,
+            v,
+        );
         v.remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
     }
     fn boundary(&mut self) {
@@ -929,8 +990,8 @@ impl Renderer {
             let t = self.project.tracks[track];
             if track < 3 {
                 self.update_drum_mix(track, step, ParameterSmoothing::Default.samples(self.sr));
-                if let Some(StepEvent::Trigger { locks }) = t.steps[step] {
-                    self.trigger_drum(track, locks);
+                if let Some(StepEvent::Trigger { velocity, locks }) = t.steps[step] {
+                    self.trigger_drum(track, velocity, locks);
                 }
             } else {
                 let vi = track - 3;
@@ -939,15 +1000,22 @@ impl Renderer {
                     step,
                     self.synth[vi].active,
                 ) {
-                    GateAction::Trigger { degree, octave } => {
+                    GateAction::Trigger {
+                        degree,
+                        octave,
+                        velocity,
+                    } => {
                         let locks = self.locks_at(track, step);
                         let v = &mut self.synth[vi];
                         Self::configure_synth_voice(
                             &self.project,
                             self.sr,
                             track,
-                            degree,
-                            octave,
+                            SynthTrigger {
+                                degree,
+                                octave,
+                                velocity,
+                            },
                             locks,
                             v,
                         );
@@ -1024,10 +1092,11 @@ impl Renderer {
         let level_percent =
             modulated_percent(v.level.next_value(), offsets[ParameterId::Level as usize]);
         let level = (level_percent / 100.0).powi(2);
+        let velocity = v.velocity.next_value();
         let delay_send = v.delay_send.next_value();
         let reverb_send = v.reverb_send.next_value();
         (
-            v.filter.lowpass(osc, cutoff, resonance, sr) * env * level * 0.22,
+            v.filter.lowpass(osc, cutoff, resonance, sr) * env * velocity * level * 0.22,
             delay_send,
             reverb_send,
         )
@@ -1058,7 +1127,8 @@ impl Renderer {
             }
         };
         let level = modulated_percent(voice.level.next_value(), level_offset) / 100.0;
-        let sample = raw * voice.envelope.next_value() * level.powi(2) * 0.42;
+        let velocity = voice.velocity.next_value();
+        let sample = raw * voice.envelope.next_value() * velocity * level.powi(2) * 0.42;
         (
             sample,
             voice.delay_send.next_value(),
@@ -1164,7 +1234,7 @@ fn modulated_percent(center: f32, offset: f32) -> f32 {
 }
 
 /// Deterministic, device-independent rendering used by tests and diagnostics.
-pub fn render_offline(project: &ProjectV3, sample_rate: u32, frames: usize) -> Vec<(f32, f32)> {
+pub fn render_offline(project: &ProjectV4, sample_rate: u32, frames: usize) -> Vec<(f32, f32)> {
     let status = Arc::new(AudioStatus::default());
     let mut renderer = Renderer::new(AudioProject::from_project(project), sample_rate, status);
     renderer.command(AudioCommand::PlayPause);
@@ -1194,7 +1264,7 @@ mod tests {
     }
     #[test]
     fn snapshot_contains_all_steps_without_heap_backed_commands() {
-        let mut p = ProjectV3::new();
+        let mut p = ProjectV4::new();
         p.tracks[0].steps.resize(MAX_STEP_COUNT, None);
         let AudioCommand::ReplaceProject {
             project: s,
@@ -1212,7 +1282,7 @@ mod tests {
 
     #[test]
     fn renderer_reports_independent_track_playheads() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[0].steps.resize(3, None);
         project.tracks[1].steps.resize(5, None);
         let status = Arc::new(AudioStatus::default());
@@ -1231,8 +1301,9 @@ mod tests {
     }
     #[test]
     fn offline_render_is_deterministic_and_finite() {
-        let mut p = ProjectV3::new();
+        let mut p = ProjectV4::new();
         p.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            velocity: DEFAULT_DRUM_VELOCITY,
             locks: Default::default(),
         });
         let a = render_offline(&p, 8_000, 2_000);
@@ -1240,6 +1311,80 @@ mod tests {
         assert_eq!(a, b);
         assert!(a.iter().all(|(l, r)| l.is_finite() && r.is_finite()));
         assert!(a.iter().any(|(l, _)| l.abs() > 0.001));
+    }
+
+    #[test]
+    fn velocity_scales_drum_and_synth_voices_linearly_and_zero_is_silent() {
+        fn drum_peak(velocity: u8) -> f32 {
+            let mut project = ProjectV4::new();
+            project.tracks[0].steps[0] = Some(StepEvent::Trigger {
+                velocity: Percent::new(velocity).unwrap(),
+                locks: Default::default(),
+            });
+            let status = Arc::new(AudioStatus::default());
+            let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+            renderer.boundary();
+            (0..400)
+                .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0).0)
+                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
+        }
+
+        fn synth_peak(velocity: u8) -> f32 {
+            let mut project = ProjectV4::new();
+            project.tracks[3].steps[0] = Some(StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                velocity: Percent::new(velocity).unwrap(),
+                locks: Default::default(),
+            });
+            let status = Arc::new(AudioStatus::default());
+            let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+            renderer.boundary();
+            (0..400)
+                .map(|_| Renderer::render_synth(&mut renderer.synth[0], renderer.sr, &[0.0; 12]).0)
+                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
+        }
+
+        let drum_full = drum_peak(100);
+        let synth_full = synth_peak(100);
+        assert!((drum_peak(50) / drum_full - 0.5).abs() < 0.0001);
+        assert!((synth_peak(50) / synth_full - 0.5).abs() < 0.0001);
+        assert_eq!(drum_peak(0), 0.0);
+        assert_eq!(synth_peak(0), 0.0);
+    }
+
+    #[test]
+    fn active_synth_keeps_latched_velocity_through_ties_and_project_edits() {
+        let mut project = ProjectV4::new();
+        project.tracks[3].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            velocity: Percent::new(30).unwrap(),
+            locks: Default::default(),
+        });
+        project.tracks[3].steps[1] = Some(StepEvent::Tie {
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.boundary();
+        for _ in 0..40 {
+            renderer.synth[0].velocity.next_value();
+        }
+        assert!((renderer.synth[0].velocity.next_value() - 0.3).abs() < 0.0001);
+
+        renderer.boundary();
+        project.tracks[3].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            velocity: Percent::new(90).unwrap(),
+            locks: Default::default(),
+        });
+        renderer.command(Audio::snapshot(&project));
+        for _ in 0..40 {
+            renderer.synth[0].velocity.next_value();
+        }
+        assert!((renderer.synth[0].velocity.next_value() - 0.3).abs() < 0.0001);
     }
 
     #[test]
@@ -1253,8 +1398,9 @@ mod tests {
                 .sqrt()
         }
 
-        let mut dry_project = ProjectV3::new();
+        let mut dry_project = ProjectV4::new();
         dry_project.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            velocity: DEFAULT_DRUM_VELOCITY,
             locks: Default::default(),
         });
         let mut wet_project = dry_project.clone();
@@ -1276,7 +1422,7 @@ mod tests {
     fn resume_triggers_the_next_step_immediately() {
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(
-            AudioProject::from_project(&ProjectV3::new()),
+            AudioProject::from_project(&ProjectV4::new()),
             48_000,
             status,
         );
@@ -1295,8 +1441,9 @@ mod tests {
 
     #[test]
     fn drum_mixer_lock_reverts_on_the_following_boundary() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            velocity: DEFAULT_DRUM_VELOCITY,
             locks: ParameterLocks {
                 level: Some(Percent::ZERO),
                 ..Default::default()
@@ -1318,10 +1465,11 @@ mod tests {
 
     #[test]
     fn synth_tie_locks_inherit_source_note_and_allow_tie_overrides() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
+            velocity: DEFAULT_NOTE_VELOCITY,
             locks: ParameterLocks {
                 level: Percent::new(30),
                 cutoff: Percent::new(20),
@@ -1358,7 +1506,7 @@ mod tests {
 
     #[test]
     fn wrapped_synth_tie_locks_inherit_from_wrapped_source_note() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[3].steps.resize(3, None);
         project.tracks[3].steps[0] = Some(StepEvent::Tie {
             locks: Default::default(),
@@ -1366,6 +1514,7 @@ mod tests {
         project.tracks[3].steps[2] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
+            velocity: DEFAULT_NOTE_VELOCITY,
             locks: ParameterLocks {
                 cutoff: Percent::new(25),
                 ..Default::default()
@@ -1379,7 +1528,7 @@ mod tests {
 
     #[test]
     fn fader_snapshot_ramps_an_active_drum_mixer_value_over_thirty_ms() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[0].level = Percent::new(100).unwrap();
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
@@ -1403,7 +1552,7 @@ mod tests {
 
     #[test]
     fn synth_filter_mappings_match_the_specified_limits() {
-        let project = AudioProject::from_project(&ProjectV3::new());
+        let project = AudioProject::from_project(&ProjectV4::new());
         let mut voice = SynthVoice::new(48_000.0);
         let mut locks = ParameterLocks {
             cutoff: Percent::new(0),
@@ -1441,7 +1590,7 @@ mod tests {
 
     #[test]
     fn sequence_lfo_freezes_on_pause_and_resets_on_stop() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.tracks[0].lfos.level = Some(crate::model::LfoConfig {
             rate: crate::model::LfoRate::Free {
                 rate_percent: Percent::new(100).unwrap(),

@@ -1,9 +1,11 @@
-use crate::model::{DelayDivision, ProjectV3, StepEvent, TRACK_COUNT, TrackKind, tie_source};
+use crate::model::{
+    DelayDivision, Percent, ProjectV4, StepEvent, TRACK_COUNT, TrackKind, tie_source,
+};
 
 #[derive(Clone, Debug)]
 pub enum EngineCommand {
-    ReplaceProject(ProjectV3),
-    SetProject(ProjectV3),
+    ReplaceProject(ProjectV4),
+    SetProject(ProjectV4),
     PlayPause,
     Stop,
 }
@@ -58,22 +60,39 @@ impl StepClock {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GateAction {
     None,
-    Trigger { degree: u8, octave: u8 },
+    Trigger {
+        degree: u8,
+        octave: u8,
+        velocity: Percent,
+    },
     Hold,
     Release,
 }
 pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: bool) -> GateAction {
     match &steps[step] {
-        Some(StepEvent::Note { degree, octave, .. }) => GateAction::Trigger {
+        Some(StepEvent::Note {
+            degree,
+            octave,
+            velocity,
+            ..
+        }) => GateAction::Trigger {
             degree: *degree,
             octave: *octave,
+            velocity: *velocity,
         },
         Some(StepEvent::Tie { .. }) if voice_active => GateAction::Hold,
         Some(StepEvent::Tie { .. }) => tie_source(steps, step)
             .and_then(|i| match steps[i] {
-                Some(StepEvent::Note { degree, octave, .. }) => {
-                    Some(GateAction::Trigger { degree, octave })
-                }
+                Some(StepEvent::Note {
+                    degree,
+                    octave,
+                    velocity,
+                    ..
+                }) => Some(GateAction::Trigger {
+                    degree,
+                    octave,
+                    velocity,
+                }),
                 _ => None,
             })
             .unwrap_or(GateAction::Release),
@@ -81,7 +100,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
     }
 }
 
-pub fn effective_level(project: &ProjectV3, track: usize, step: usize) -> f32 {
+pub fn effective_level(project: &ProjectV4, track: usize, step: usize) -> f32 {
     let t = &project.tracks[track];
     if t.muted {
         return 0.0;
@@ -98,7 +117,7 @@ pub fn delay_samples(d: DelayDivision, bpm: u16, sr: u32) -> usize {
 }
 
 pub struct Engine {
-    pub project: ProjectV3,
+    pub project: ProjectV4,
     pub transport: Transport,
     pub playheads: [Option<usize>; TRACK_COUNT],
     clock: StepClock,
@@ -106,7 +125,7 @@ pub struct Engine {
     voices: [bool; TRACK_COUNT],
 }
 impl Engine {
-    pub fn new(project: ProjectV3, sr: u32) -> Self {
+    pub fn new(project: ProjectV4, sr: u32) -> Self {
         let bpm = project.globals.tempo_bpm;
         Self {
             project,
@@ -195,8 +214,9 @@ mod tests {
     }
     #[test]
     fn lock_restores() {
-        let mut p = ProjectV3::new();
+        let mut p = ProjectV4::new();
         p.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            velocity: crate::model::DEFAULT_DRUM_VELOCITY,
             locks: crate::model::ParameterLocks {
                 level: crate::model::Percent::new(20),
                 ..Default::default()
@@ -207,8 +227,32 @@ mod tests {
     }
 
     #[test]
+    fn cold_tie_trigger_carries_the_source_note_velocity() {
+        let steps = vec![
+            Some(StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                velocity: Percent::new(37).unwrap(),
+                locks: Default::default(),
+            }),
+            Some(StepEvent::Tie {
+                locks: Default::default(),
+            }),
+        ];
+        assert_eq!(
+            synth_action(&steps, 1, false),
+            GateAction::Trigger {
+                degree: 1,
+                octave: 3,
+                velocity: Percent::new(37).unwrap(),
+            }
+        );
+        assert_eq!(synth_action(&steps, 1, true), GateAction::Hold);
+    }
+
+    #[test]
     fn tracks_cycle_at_independent_lengths_and_live_resize_keeps_position() {
-        let mut project = ProjectV3::new();
+        let mut project = ProjectV4::new();
         project.globals.tempo_bpm = 60;
         project.tracks[0].steps.resize(3, None);
         project.tracks[1].steps.resize(5, None);
