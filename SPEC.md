@@ -30,6 +30,7 @@ All sound is synthesized in real time. The application contains no audio samples
 - Add independent LFO modulation to eligible instrument parameters and track level.
 - Configure tempo, delay time and feedback, reverb time, musical key, and major or natural-minor scale.
 - Audition sounds without modifying the pattern.
+- Edit and navigate up to 100 independent patterns.
 - Undo and redo project edits within the current session.
 - Save and load versioned, human-readable JSON projects.
 - Select the system default audio output or an explicit output device from the command line.
@@ -39,7 +40,7 @@ All sound is synthesized in real time. The application contains no audio samples
 - Samples, sample import, or sample playback
 - MIDI input, output, or clock sync
 - WAV or other audio export
-- Multiple patterns, pattern chaining, or song mode
+- Pattern chaining or song mode
 - Time-signature changes
 - Swing, microtiming, probability, or continuously variable event velocity
 - Polyphonic note entry outside the fixed Chord shape mapping, or oscillator detune
@@ -65,13 +66,20 @@ All sound is synthesized in real time. The application contains no audio samples
 - Growing a track appends empty steps. Shrinking truncates removed steps immediately and clears ties made invalid by the new cyclic boundary. The complete resize and tie cleanup are one undoable edit.
 - Doubling a track of 1 through 32 steps appends an exact copy of all existing steps, including events and locks. Tracks longer than 32 steps cannot be doubled because the result would exceed 64.
 
-### 2.2 Drum events
+### 2.2 Patterns
+
+- A project contains 100 pattern slots, numbered P1 through P100. Each pattern owns the six track sequences; instrument, mixer, global, and effect settings are shared.
+- `Ctrl+PageUp` and `Ctrl+PageDown` select the previous or next pattern and wrap at the ends of the bank. `Home` selects P1. `End` selects the highest-numbered pattern containing an event or a non-default sequence length, falling back to P1 when all patterns are empty.
+- Pattern selection while stopped is immediate. While playing, the selected pattern is queued for the next bar.
+- Existing version-7 projects with fewer than 100 patterns are extended with empty pattern slots when loaded. Version 6 projects are migrated to version 7 as before.
+
+### 2.3 Drum events
 
 A drum step is either empty or contains one trigger with a required Boolean `accent`. New triggers are unaccented. Pressing `Enter` on an occupied drum step clears the trigger, its accent, and all locks.
 
 Each drum track is a single retriggerable synthesized voice. Accent has a fixed engine-specific response: it raises level and also strengthens the kick transient, snare excitation, or hi-hat brightness. Instrument parameters are captured when the hit starts and remain part of that hit's tail. Mixer level and sends continue to follow each sequencer step.
 
-### 2.3 Synth events
+### 2.4 Synth events
 
 A synth step is exactly one of:
 
@@ -95,7 +103,7 @@ Bass and Lead are monophonic. Chord interprets the stored degree as the root of 
 
 Pressing a degree key replaces any existing event on the selected step with that note and preserves compatible locks, articulations, and the Chord shape of an existing Chord note. New notes are unaccented and new Bass notes have slide disabled. Pressing `Enter` on an empty pitched step inserts the track's last-entered degree and octave; empty Chord steps also use the track's last-entered Chord shape. Pressing `Enter` on a note or tie clears it and its locks.
 
-### 2.4 Tie invariants
+### 2.5 Tie invariants
 
 - A tie is valid only when its immediately preceding step, considered cyclically, is a note or another valid tie that resolves to a note.
 - Step 1 may tie cyclically from the track's final step.
@@ -107,7 +115,7 @@ Pressing a degree key replaces any existing event on the selected step with that
 - When playback or audition begins on a tie without an already-active voice, the engine resolves the source note cyclically and retriggers it at that boundary to establish the held voice. Continuous playback across the loop does not retrigger a valid wrapped tie.
 - Ties do not store accent. They inherit the accent captured from their resolved source note, including across a wrapped tie chain.
 
-### 2.5 Parameter locks
+### 2.6 Parameter locks
 
 Every track has base parameter values. A step may contain a sparse set of parameter locks that overlay those values for that step only.
 
@@ -285,6 +293,9 @@ The application uses ordinary portable terminal press events. It must not requir
 | --- | --- | --- |
 | Anywhere | `Space` | Play/pause |
 | Anywhere | `.` | Stop, reset, and clear effect tails |
+| Anywhere | `Ctrl+PageUp` / `Ctrl+PageDown` | Select the previous/next pattern, wrapping across the 100-pattern bank |
+| Anywhere | `Home` | Select Pattern 1 |
+| Anywhere | `End` | Select the highest-numbered pattern containing events or a non-default length |
 | Anywhere | `o` | Audition selected track/step without editing |
 | Anywhere | `Ctrl+S` | Save, prompting if no current path exists |
 | Anywhere | `Ctrl+Shift+S` | Save as |
@@ -429,7 +440,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`, but the application does not silently alter a user-supplied filename.
-- Version 5 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, step counts outside 1 through 64, incompatible events/locks/LFOs, and invalid tie graphs. Versions 1 through 4 and unknown future versions are rejected without migration.
+- Version 7 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, pattern counts other than 100, step counts outside 1 through 64, incompatible events/locks/LFOs, and invalid tie graphs. Version 6 is migrated; versions 1 through 5 and unknown future versions are rejected.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -439,9 +450,11 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 6,
+  "format_version": 7,
   "globals": {},
-  "tracks": []
+  "tracks": [],
+  "patterns": [],
+  "song": []
 }
 ```
 

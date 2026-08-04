@@ -6,7 +6,7 @@ pub const MAX_STEP_COUNT: usize = 64;
 pub const STEP_BANK_SIZE: usize = 16;
 pub const STEP_ROW_SIZE: usize = 32;
 pub const TRACK_COUNT: usize = 6;
-pub const PATTERN_COUNT: usize = 10;
+pub const PATTERN_COUNT: usize = 100;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ValidationError {
@@ -1089,6 +1089,21 @@ impl ProjectV6 {
         }
         true
     }
+
+    /// Returns the highest-numbered pattern containing events or a non-default
+    /// sequence length. Pattern 1 is the fallback when all patterns are empty.
+    pub fn last_used_pattern(&self) -> usize {
+        self.patterns
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, pattern)| {
+                pattern.tracks.iter().any(|track| {
+                    track.steps.len() != STEP_BANK_SIZE || track.steps.iter().any(Option::is_some)
+                })
+            })
+            .map_or(0, |(pattern, _)| pattern)
+    }
     pub fn validate(&self) -> Result<(), ValidationError> {
         if self.format_version != 7 {
             return Err(ValidationError::Version(self.format_version));
@@ -1649,7 +1664,35 @@ mod tests {
     use super::*;
     #[test]
     fn default_valid() {
-        ProjectV6::new().validate().unwrap();
+        let project = ProjectV6::new();
+        assert_eq!(project.patterns.len(), PATTERN_COUNT);
+        project.validate().unwrap();
+    }
+    #[test]
+    fn last_used_pattern_finds_highest_nonempty_or_resized_slot() {
+        let mut project = ProjectV6::new();
+        assert_eq!(project.last_used_pattern(), 0);
+
+        project.patterns[36].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            locks: ParameterLocks::default(),
+        });
+        assert_eq!(project.last_used_pattern(), 36);
+
+        project.patterns[99].tracks[2].steps.resize(17, None);
+        assert_eq!(project.last_used_pattern(), 99);
+
+        project.patterns[99].tracks[2].steps = vec![None; STEP_BANK_SIZE];
+        assert_eq!(project.last_used_pattern(), 36);
+    }
+    #[test]
+    fn song_entries_accept_pattern_100_and_reject_pattern_101() {
+        let mut project = ProjectV6::new();
+        project.song[0].pattern = 100;
+        project.validate().unwrap();
+
+        project.song[0].pattern = 101;
+        assert!(project.validate().is_err());
     }
     #[test]
     fn reverb_globals_validate_boundaries() {

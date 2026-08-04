@@ -61,7 +61,6 @@ pub fn load(path: &Path) -> Result<ProjectV6, ProjectIoError> {
         })?;
     if project.format_version == 6 {
         project.format_version = 7;
-        project.seed_patterns();
         if project.song.is_empty() {
             project.song.push(crate::model::SongEntry {
                 pattern: 1,
@@ -69,6 +68,9 @@ pub fn load(path: &Path) -> Result<ProjectV6, ProjectIoError> {
             });
         }
     }
+    // Version 7 projects created before the 100-pattern bank may contain only
+    // the older ten slots. Extend them with empty patterns before validation.
+    project.seed_patterns();
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
@@ -153,6 +155,10 @@ mod tests {
         assert_eq!(value["tracks"][5]["name"], "Lead");
         assert_eq!(value["tracks"][0]["lfos"], serde_json::json!({}));
         assert!(value["tracks"][0].get("input_degree").is_none());
+        assert_eq!(
+            value["patterns"].as_array().unwrap().len(),
+            crate::model::PATTERN_COUNT
+        );
     }
 
     #[test]
@@ -196,6 +202,25 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn older_version_seven_projects_are_extended_to_the_full_pattern_bank() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("old-pattern-bank.groove.json");
+        let mut value = serde_json::to_value(ProjectV6::new()).unwrap();
+        let patterns = value["patterns"].as_array().unwrap();
+        value["patterns"] = serde_json::Value::Array(patterns[..10].to_vec());
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.patterns.len(), crate::model::PATTERN_COUNT);
+        assert!(loaded.patterns[10..].iter().all(|pattern| {
+            pattern
+                .tracks
+                .iter()
+                .all(|track| track.steps == vec![None; crate::model::STEP_BANK_SIZE])
+        }));
     }
 
     #[test]

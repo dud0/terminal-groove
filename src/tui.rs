@@ -285,18 +285,25 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         }
         return Ok(());
     }
+    match k.code {
+        KeyCode::Home => {
+            select_pattern(a, audio, 0);
+            return Ok(());
+        }
+        KeyCode::End => {
+            select_pattern(a, audio, a.editor.project.last_used_pattern());
+            return Ok(());
+        }
+        _ => {}
+    }
     if k.modifiers.contains(KeyModifiers::CONTROL) {
         match k.code {
-            KeyCode::Char(c @ '1'..='9') => {
-                select_pattern(a, audio, c.to_digit(10).unwrap() as usize - 1)
+            KeyCode::PageDown => {
+                select_pattern(a, audio, adjacent_pattern(a.editor.pattern(), true))
             }
-            KeyCode::Char('0') => select_pattern(a, audio, PATTERN_COUNT - 1),
-            KeyCode::PageDown => select_pattern(a, audio, (a.editor.pattern() + 1) % PATTERN_COUNT),
-            KeyCode::PageUp => select_pattern(
-                a,
-                audio,
-                (a.editor.pattern() + PATTERN_COUNT - 1) % PATTERN_COUNT,
-            ),
+            KeyCode::PageUp => {
+                select_pattern(a, audio, adjacent_pattern(a.editor.pattern(), false))
+            }
             KeyCode::Char('q' | 'Q') => {
                 if a.editor.is_dirty() {
                     a.mode = Mode::QuitConfirm
@@ -604,6 +611,14 @@ fn select_pattern(a: &mut App, audio: &mut Audio, pattern: usize) {
     } else {
         format!("Pattern {} selected", pattern + 1)
     };
+}
+
+fn adjacent_pattern(pattern: usize, forward: bool) -> usize {
+    if forward {
+        (pattern + 1) % PATTERN_COUNT
+    } else {
+        (pattern + PATTERN_COUNT - 1) % PATTERN_COUNT
+    }
 }
 
 fn move_step_page(a: &mut App, forward: bool) {
@@ -2731,6 +2746,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
                 " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
                 device_name, a.editor.project.globals.tempo_bpm
             )),
+            Span::raw("  [Ctrl+PgUp/PgDn] Pattern  [Home] First  [End] Last used"),
             Span::raw("  [Ctrl+S] Save [Ctrl+O] Open"),
         ]),
         Line::from("[Space] Play/Pause  [.] Stop  [Ctrl+Z/Y] Undo/Redo  [Ctrl+Q] Quit  [?] Help"),
@@ -2929,7 +2945,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus, C shape.\nGlobal: t tempo, y delay, f feedback, r reverb time, b tone, p pre-delay, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nPatterns: Ctrl+PageUp/Down previous/next, Home first, End last used.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus, C shape.\nGlobal: t tempo, y delay, f feedback, r reverb time, b tone, p pre-delay, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3492,6 +3508,14 @@ mod tests {
         assert_eq!(app.step, 0);
         move_step_page(&mut app, true);
         assert_eq!(app.step, 1);
+    }
+
+    #[test]
+    fn pattern_navigation_wraps_across_the_full_bank() {
+        assert_eq!(adjacent_pattern(0, false), PATTERN_COUNT - 1);
+        assert_eq!(adjacent_pattern(PATTERN_COUNT - 1, true), 0);
+        assert_eq!(adjacent_pattern(3, false), 2);
+        assert_eq!(adjacent_pattern(3, true), 4);
     }
 
     #[test]

@@ -42,11 +42,11 @@ struct AudioSequence {
 struct AudioPattern {
     tracks: [AudioSequence; TRACK_COUNT],
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct AudioProject {
     globals: Globals,
     tracks: [AudioTrack; TRACK_COUNT],
-    patterns: [AudioPattern; PATTERN_COUNT],
+    patterns: Box<[AudioPattern]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,28 +81,30 @@ impl AudioProject {
                     input_chord_shape: t.input_chord_shape.unwrap_or_default(),
                 }
             }),
-            patterns: std::array::from_fn(|pattern| AudioPattern {
-                tracks: std::array::from_fn(|track| {
-                    // `tracks` is the editor's current-pattern workspace. Keeping
-                    // pattern 1 sourced from it also preserves the public model
-                    // construction style used by callers of older releases.
-                    let steps = if pattern == 0 {
-                        &project.tracks[track].steps
-                    } else {
-                        &project.patterns[pattern].tracks[track].steps
-                    };
-                    AudioSequence {
-                        steps: std::array::from_fn(|s| steps.get(s).copied().flatten()),
-                        step_count: steps.len() as u8,
-                    }
-                }),
-            }),
+            patterns: (0..PATTERN_COUNT)
+                .map(|pattern| AudioPattern {
+                    tracks: std::array::from_fn(|track| {
+                        // `tracks` is the editor's current-pattern workspace. Keeping
+                        // pattern 1 sourced from it also preserves the public model
+                        // construction style used by callers of older releases.
+                        let steps = if pattern == 0 {
+                            &project.tracks[track].steps
+                        } else {
+                            &project.patterns[pattern].tracks[track].steps
+                        };
+                        AudioSequence {
+                            steps: std::array::from_fn(|s| steps.get(s).copied().flatten()),
+                            step_count: steps.len() as u8,
+                        }
+                    }),
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
         }
     }
 }
 
-#[allow(clippy::large_enum_variant)] // fixed inline snapshot keeps callback messages allocation-free
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum AudioCommand {
     PlayPause,
     Stop,
@@ -110,7 +112,7 @@ pub enum AudioCommand {
         pattern: u8,
     },
     ReplaceProject {
-        project: AudioProject,
+        project: Box<AudioProject>,
         smoothing: ParameterSmoothing,
     },
     Audition {
@@ -166,7 +168,7 @@ impl Audio {
         smoothing: ParameterSmoothing,
     ) -> AudioCommand {
         AudioCommand::ReplaceProject {
-            project: AudioProject::from_project(project),
+            project: Box::new(AudioProject::from_project(project)),
             smoothing,
         }
     }
@@ -523,9 +525,11 @@ struct Renderer {
 }
 impl Renderer {
     fn new(project: AudioProject, sr: u32, status: Arc<AudioStatus>) -> Self {
+        let tempo_bpm = project.globals.tempo_bpm;
+        let muted: [bool; TRACK_COUNT] = std::array::from_fn(|i| project.tracks[i].muted);
         let mut r = Self {
             project,
-            clock: StepClock::new(sr, project.globals.tempo_bpm),
+            clock: StepClock::new(sr, tempo_bpm),
             next_steps: [0; TRACK_COUNT],
             active_pattern: 0,
             queued_pattern: None,
@@ -546,7 +550,7 @@ impl Renderer {
             reverb: Reverb::new(sr),
             dc: Default::default(),
             limiter: MasterLimiter::new(sr),
-            mute: std::array::from_fn(|i| Smoother::new((!project.tracks[i].muted) as u8 as f32)),
+            mute: std::array::from_fn(|i| Smoother::new((!muted[i]) as u8 as f32)),
             lfos: std::array::from_fn(|track| {
                 std::array::from_fn(|parameter| {
                     Lfo::new(0x51f0_0001 ^ ((track as u32) << 12) ^ parameter as u32)
@@ -660,7 +664,7 @@ impl Renderer {
             AudioCommand::SelectPattern { .. } => {}
             AudioCommand::ReplaceProject { project, smoothing } => {
                 self.reconcile_lfos(&project);
-                self.project = project;
+                self.project = *project;
                 let smoothing_samples = smoothing.samples(self.sr);
                 for (track, next) in self.next_steps.iter_mut().enumerate() {
                     if *next
