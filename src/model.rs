@@ -6,6 +6,7 @@ pub const MAX_STEP_COUNT: usize = 64;
 pub const STEP_BANK_SIZE: usize = 16;
 pub const STEP_ROW_SIZE: usize = 32;
 pub const TRACK_COUNT: usize = 6;
+pub const PATTERN_COUNT: usize = 10;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ValidationError {
@@ -891,12 +892,38 @@ pub struct Track {
     pub input_chord_shape: Option<ChordShape>,
 }
 
+/// A pattern owns only its six sequences. Instrument and mixer settings live
+/// on the project tracks and are consequently shared by every pattern.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pattern {
+    pub tracks: Vec<PatternTrack>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PatternTrack {
+    pub steps: Vec<Step>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SongEntry {
+    /// One-based, matching the pattern labels shown in the UI.
+    pub pattern: u8,
+    pub bars: u8,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectV6 {
     pub format_version: u32,
     pub globals: Globals,
     pub tracks: Vec<Track>,
+    #[serde(default)]
+    pub patterns: Vec<Pattern>,
+    #[serde(default)]
+    pub song: Vec<SongEntry>,
 }
 
 fn p(n: u8) -> Percent {
@@ -932,8 +959,8 @@ impl ProjectV6 {
             input_octave: Some(3),
             input_chord_shape: (kind == TrackKind::Chord).then_some(ChordShape::default()),
         };
-        Self {
-            format_version: 6,
+        let mut project = Self {
+            format_version: 7,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1007,10 +1034,63 @@ impl ProjectV6 {
                     }),
                 ),
             ],
+            patterns: Vec::new(),
+            song: vec![SongEntry {
+                pattern: 1,
+                bars: 1,
+            }],
+        };
+        project.seed_patterns();
+        project
+    }
+    pub fn seed_patterns(&mut self) {
+        if self.patterns.is_empty() {
+            self.patterns.push(Pattern {
+                tracks: self
+                    .tracks
+                    .iter()
+                    .map(|track| PatternTrack {
+                        steps: track.steps.clone(),
+                    })
+                    .collect(),
+            });
+        }
+        while self.patterns.len() < PATTERN_COUNT {
+            self.patterns.push(Pattern {
+                tracks: (0..TRACK_COUNT)
+                    .map(|_| PatternTrack {
+                        steps: vec![None; STEP_BANK_SIZE],
+                    })
+                    .collect(),
+            });
         }
     }
+    pub fn activate_pattern(&mut self, pattern: usize) -> bool {
+        let Some(source) = self.patterns.get(pattern) else {
+            return false;
+        };
+        if source.tracks.len() != TRACK_COUNT {
+            return false;
+        }
+        for (track, sequence) in self.tracks.iter_mut().zip(&source.tracks) {
+            track.steps = sequence.steps.clone();
+        }
+        true
+    }
+    pub fn store_active_pattern(&mut self, pattern: usize) -> bool {
+        let Some(destination) = self.patterns.get_mut(pattern) else {
+            return false;
+        };
+        if destination.tracks.len() != TRACK_COUNT {
+            return false;
+        }
+        for (sequence, track) in destination.tracks.iter_mut().zip(&self.tracks) {
+            sequence.steps = track.steps.clone();
+        }
+        true
+    }
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 6 {
+        if self.format_version != 7 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -1032,6 +1112,16 @@ impl ProjectV6 {
             || self.globals.reverb_pre_delay_ms > 200
         {
             return Err(ValidationError::TrackOrder(0, "valid globals"));
+        }
+        if self.patterns.len() != PATTERN_COUNT || self.song.is_empty() || self.song.len() > 256 {
+            return Err(ValidationError::TrackCount);
+        }
+        for entry in &self.song {
+            if !(1..=PATTERN_COUNT as u8).contains(&entry.pattern)
+                || !(1..=64).contains(&entry.bars)
+            {
+                return Err(ValidationError::TrackOrder(0, "valid song"));
+            }
         }
         for (ti, t) in self.tracks.iter().enumerate() {
             if t.kind != expected[ti].0 || t.name != expected[ti].1 {
@@ -1100,6 +1190,29 @@ impl ProjectV6 {
             }
             if pitched {
                 validate_ties(ti, &t.steps)?;
+            }
+        }
+        for pattern in &self.patterns {
+            if pattern.tracks.len() != TRACK_COUNT {
+                return Err(ValidationError::TrackCount);
+            }
+            for (ti, sequence) in pattern.tracks.iter().enumerate() {
+                let mut track = self.tracks[ti].clone();
+                track.steps = sequence.steps.clone();
+                if !(MIN_STEP_COUNT..=MAX_STEP_COUNT).contains(&track.steps.len()) {
+                    return Err(ValidationError::StepCount(ti, track.steps.len()));
+                }
+                for (si, event) in track.steps.iter().enumerate() {
+                    if let Some(event) = event {
+                        validate_locks(ti, si, track.kind, event.locks())?;
+                    }
+                }
+                if matches!(
+                    track.kind,
+                    TrackKind::Bass | TrackKind::Chord | TrackKind::Lead
+                ) {
+                    validate_ties(ti, &track.steps)?;
+                }
             }
         }
         Ok(())

@@ -45,7 +45,7 @@ pub fn load(path: &Path) -> Result<ProjectV6, ProjectIoError> {
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
     match version {
-        Some(6) => {}
+        Some(6 | 7) => {}
         Some(version) => {
             return Err(ProjectIoError::Validation {
                 path: path.into(),
@@ -54,11 +54,21 @@ pub fn load(path: &Path) -> Result<ProjectV6, ProjectIoError> {
         }
         None => {}
     }
-    let project: ProjectV6 =
+    let mut project: ProjectV6 =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
         })?;
+    if project.format_version == 6 {
+        project.format_version = 7;
+        project.seed_patterns();
+        if project.song.is_empty() {
+            project.song.push(crate::model::SongEntry {
+                pattern: 1,
+                bars: 1,
+            });
+        }
+    }
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
@@ -129,7 +139,7 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(ProjectV6::new()).unwrap();
-        assert_eq!(value["format_version"], 6);
+        assert_eq!(value["format_version"], 7);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 50);
@@ -213,8 +223,9 @@ mod tests {
             include_str!("../test1"),
             include_str!("../test2"),
         ] {
-            let project: ProjectV6 = serde_json::from_str(json).unwrap();
-            project.validate().unwrap();
+            let path = tempfile::NamedTempFile::new().unwrap();
+            fs::write(path.path(), json).unwrap();
+            load(path.path()).unwrap();
         }
     }
 

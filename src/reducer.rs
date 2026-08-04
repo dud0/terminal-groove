@@ -62,6 +62,7 @@ pub struct CoalesceKey(pub usize, pub usize, pub u8);
 
 pub struct Editor {
     pub project: ProjectV6,
+    pattern: usize,
     saved: ProjectV6,
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
@@ -71,6 +72,7 @@ impl Editor {
         Self {
             saved: project.clone(),
             project,
+            pattern: 0,
             undo: VecDeque::new(),
             redo: Vec::new(),
         }
@@ -91,6 +93,37 @@ impl Editor {
         self.saved = p;
         self.undo.clear();
         self.redo.clear();
+        self.pattern = 0;
+    }
+    pub fn pattern(&self) -> usize {
+        self.pattern
+    }
+    pub fn select_pattern(&mut self, pattern: usize) -> bool {
+        if pattern >= crate::model::PATTERN_COUNT || !self.project.activate_pattern(pattern) {
+            return false;
+        }
+        self.pattern = pattern;
+        true
+    }
+    pub fn duplicate_pattern(&mut self, destination: usize) -> Result<bool, EditError> {
+        let source = self.pattern;
+        if destination >= crate::model::PATTERN_COUNT || destination == source {
+            return Ok(false);
+        }
+        self.edit(None, move |p| {
+            p.patterns[destination] = p.patterns[source].clone();
+            Ok(())
+        })
+    }
+    pub fn clear_pattern(&mut self) -> Result<bool, EditError> {
+        let pattern = self.pattern;
+        self.edit(None, move |p| {
+            for track in &mut p.patterns[pattern].tracks {
+                track.steps = vec![None; crate::model::STEP_BANK_SIZE];
+            }
+            p.activate_pattern(pattern);
+            Ok(())
+        })
     }
     pub fn edit<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
     where
@@ -98,6 +131,7 @@ impl Editor {
     {
         let before = self.project.clone();
         f(&mut self.project)?;
+        self.project.store_active_pattern(self.pattern);
         if before == self.project {
             return Ok(false);
         }

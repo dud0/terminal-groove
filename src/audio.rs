@@ -5,8 +5,8 @@ use crate::{
     },
     engine::{GateAction, StepClock, synth_action},
     model::{
-        ChordShape, ChorusMode, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT, ParameterId,
-        ParameterLocks, Percent, ProjectV6, StepEvent, TRACK_COUNT, Waveform,
+        ChordShape, ChorusMode, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT, PATTERN_COUNT,
+        ParameterId, ParameterLocks, Percent, ProjectV6, StepEvent, TRACK_COUNT, Waveform,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -29,16 +29,24 @@ struct AudioTrack {
     reverb_send: Percent,
     instrument: Instrument,
     lfos: LfoAssignments,
-    steps: [Option<StepEvent>; MAX_STEP_COUNT],
-    step_count: u8,
     input_degree: u8,
     input_octave: u8,
     input_chord_shape: ChordShape,
 }
 #[derive(Clone, Copy, Debug)]
+struct AudioSequence {
+    steps: [Option<StepEvent>; MAX_STEP_COUNT],
+    step_count: u8,
+}
+#[derive(Clone, Copy, Debug)]
+struct AudioPattern {
+    tracks: [AudioSequence; TRACK_COUNT],
+}
+#[derive(Clone, Copy, Debug)]
 pub struct AudioProject {
     globals: Globals,
     tracks: [AudioTrack; TRACK_COUNT],
+    patterns: [AudioPattern; PATTERN_COUNT],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,12 +76,26 @@ impl AudioProject {
                     reverb_send: t.reverb_send,
                     instrument: t.instrument,
                     lfos: t.lfos,
-                    steps: std::array::from_fn(|s| t.steps.get(s).copied().flatten()),
-                    step_count: t.steps.len() as u8,
                     input_degree: t.input_degree.unwrap_or(1),
                     input_octave: t.input_octave.unwrap_or(3),
                     input_chord_shape: t.input_chord_shape.unwrap_or_default(),
                 }
+            }),
+            patterns: std::array::from_fn(|pattern| AudioPattern {
+                tracks: std::array::from_fn(|track| {
+                    // `tracks` is the editor's current-pattern workspace. Keeping
+                    // pattern 1 sourced from it also preserves the public model
+                    // construction style used by callers of older releases.
+                    let steps = if pattern == 0 {
+                        &project.tracks[track].steps
+                    } else {
+                        &project.patterns[pattern].tracks[track].steps
+                    };
+                    AudioSequence {
+                        steps: std::array::from_fn(|s| steps.get(s).copied().flatten()),
+                        step_count: steps.len() as u8,
+                    }
+                }),
             }),
         }
     }
@@ -84,6 +106,9 @@ impl AudioProject {
 pub enum AudioCommand {
     PlayPause,
     Stop,
+    SelectPattern {
+        pattern: u8,
+    },
     ReplaceProject {
         project: AudioProject,
         smoothing: ParameterSmoothing,
@@ -99,6 +124,8 @@ pub struct AudioStatus {
     pub playheads: [AtomicU8; TRACK_COUNT],
     pub failed: AtomicBool,
     pub non_finite: AtomicBool,
+    pub active_pattern: AtomicU8,
+    pub queued_pattern: AtomicU8,
 }
 impl Default for AudioStatus {
     fn default() -> Self {
@@ -108,6 +135,8 @@ impl Default for AudioStatus {
             playheads: std::array::from_fn(|_| AtomicU8::new(u8::MAX)),
             failed: AtomicBool::new(false),
             non_finite: AtomicBool::new(false),
+            active_pattern: AtomicU8::new(0),
+            queued_pattern: AtomicU8::new(u8::MAX),
         }
     }
 }
@@ -471,6 +500,8 @@ struct Renderer {
     project: AudioProject,
     clock: StepClock,
     next_steps: [usize; TRACK_COUNT],
+    active_pattern: usize,
+    queued_pattern: Option<usize>,
     playing: bool,
     sr: f32,
     status: Arc<AudioStatus>,
@@ -496,6 +527,8 @@ impl Renderer {
             project,
             clock: StepClock::new(sr, project.globals.tempo_bpm),
             next_steps: [0; TRACK_COUNT],
+            active_pattern: 0,
+            queued_pattern: None,
             playing: false,
             sr: sr as f32,
             status,
@@ -611,17 +644,35 @@ impl Renderer {
                 for playhead in &self.status.playheads {
                     playhead.store(u8::MAX, Ordering::Release);
                 }
+                self.active_pattern = 0;
+                self.queued_pattern = None;
+                self.status.active_pattern.store(0, Ordering::Release);
+                self.status.queued_pattern.store(u8::MAX, Ordering::Release);
             }
+            AudioCommand::SelectPattern { pattern } if (pattern as usize) < PATTERN_COUNT => {
+                if self.playing {
+                    self.queued_pattern = Some(pattern as usize);
+                    self.status.queued_pattern.store(pattern, Ordering::Release);
+                } else {
+                    self.activate_pattern(pattern as usize);
+                }
+            }
+            AudioCommand::SelectPattern { .. } => {}
             AudioCommand::ReplaceProject { project, smoothing } => {
                 self.reconcile_lfos(&project);
                 self.project = project;
                 let smoothing_samples = smoothing.samples(self.sr);
                 for (track, next) in self.next_steps.iter_mut().enumerate() {
-                    if *next >= self.project.tracks[track].step_count as usize {
+                    if *next
+                        >= self.project.patterns[self.active_pattern].tracks[track].step_count
+                            as usize
+                    {
                         *next = 0;
                     }
                     let playhead = &self.status.playheads[track];
-                    if playhead.load(Ordering::Acquire) >= self.project.tracks[track].step_count {
+                    if playhead.load(Ordering::Acquire)
+                        >= self.project.patterns[self.active_pattern].tracks[track].step_count
+                    {
                         playhead.store(u8::MAX, Ordering::Release);
                     }
                 }
@@ -631,6 +682,16 @@ impl Renderer {
             }
             AudioCommand::Audition { track, step } => self.audition(track as usize, step as usize),
         }
+    }
+
+    fn activate_pattern(&mut self, pattern: usize) {
+        self.active_pattern = pattern;
+        self.queued_pattern = None;
+        self.next_steps = [0; TRACK_COUNT];
+        self.status
+            .active_pattern
+            .store(pattern as u8, Ordering::Release);
+        self.status.queued_pattern.store(u8::MAX, Ordering::Release);
     }
 
     fn reset_lfos(&mut self) {
@@ -722,7 +783,7 @@ impl Renderer {
         );
     }
     fn locks_at(&self, track: usize, step: usize) -> ParameterLocks {
-        let t = self.project.tracks[track];
+        let t = self.project.patterns[self.active_pattern].tracks[track];
         let Some(event) = t.steps[step] else {
             return ParameterLocks::default();
         };
@@ -1218,19 +1279,22 @@ impl Renderer {
         }
     }
     fn audition(&mut self, track: usize, step: usize) {
-        if track >= TRACK_COUNT || step >= self.project.tracks[track].step_count as usize {
+        if track >= TRACK_COUNT
+            || step >= self.project.patterns[self.active_pattern].tracks[track].step_count as usize
+        {
             return;
         }
         self.reset_preview_lfos(track);
         if track < 3 {
-            let accent = match self.project.tracks[track].steps[step] {
+            let accent = match self.project.patterns[self.active_pattern].tracks[track].steps[step]
+            {
                 Some(StepEvent::Trigger { accent, .. }) => accent,
                 _ => false,
             };
             self.trigger_preview_drum(track, accent, self.locks_at(track, step));
             return;
         }
-        let t = self.project.tracks[track];
+        let t = self.project.patterns[self.active_pattern].tracks[track];
         let (degree, octave, accent, slide, chord_shape, locks) = match t.steps[step] {
             Some(StepEvent::BassNote {
                 degree,
@@ -1285,11 +1349,11 @@ impl Renderer {
                 }
             }
             _ => (
-                t.input_degree,
-                t.input_octave,
+                self.project.tracks[track].input_degree,
+                self.project.tracks[track].input_octave,
                 false,
                 false,
-                (track == 4).then_some(t.input_chord_shape),
+                (track == 4).then_some(self.project.tracks[track].input_chord_shape),
                 ParameterLocks::default(),
             ),
         };
@@ -1321,13 +1385,24 @@ impl Renderer {
         v.remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
     }
     fn boundary(&mut self) {
+        if self.clock.next_step % 16 == 0
+            && let Some(pattern) = self.queued_pattern
+        {
+            self.activate_pattern(pattern);
+            for voice in &mut self.synth {
+                voice.env.gate_off();
+                voice.active = false;
+            }
+            Self::release_chord(&mut self.chord);
+        }
         for track in 0..TRACK_COUNT {
             let step = self.next_steps[track];
             self.status.playheads[track].store(step as u8, Ordering::Release);
             let t = self.project.tracks[track];
+            let sequence = self.project.patterns[self.active_pattern].tracks[track];
             if track < 3 {
                 self.update_drum_mix(track, step, ParameterSmoothing::Default.samples(self.sr));
-                if let Some(StepEvent::Trigger { accent, locks }) = t.steps[step] {
+                if let Some(StepEvent::Trigger { accent, locks }) = sequence.steps[step] {
                     self.trigger_drum(track, accent, locks);
                 }
             } else {
@@ -1337,7 +1412,11 @@ impl Renderer {
                 } else {
                     self.synth[vi].active
                 };
-                match synth_action(&t.steps[..t.step_count as usize], step, active) {
+                match synth_action(
+                    &sequence.steps[..sequence.step_count as usize],
+                    step,
+                    active,
+                ) {
                     GateAction::Trigger {
                         degree,
                         octave,
@@ -1373,7 +1452,7 @@ impl Renderer {
                         }
                     }
                     GateAction::Hold => {
-                        if matches!(t.steps[step], Some(StepEvent::Tie { .. })) {
+                        if matches!(sequence.steps[step], Some(StepEvent::Tie { .. })) {
                             let locks = self.locks_at(track, step);
                             if track == 4 {
                                 for voice in &mut self.chord.voices[self.chord.group
@@ -1439,7 +1518,7 @@ impl Renderer {
                     GateAction::None => {}
                 }
             }
-            self.next_steps[track] = (step + 1) % t.step_count as usize;
+            self.next_steps[track] = (step + 1) % sequence.step_count as usize;
         }
     }
     fn render_synth(
@@ -1786,9 +1865,9 @@ mod tests {
         };
         assert_eq!(smoothing, ParameterSmoothing::Default);
         assert_eq!(s.globals.tempo_bpm, 120);
-        assert_eq!(s.tracks[0].step_count as usize, MAX_STEP_COUNT);
-        assert_eq!(s.tracks[1].step_count, 16);
-        assert!(s.tracks[0].steps.iter().all(Option::is_none));
+        assert_eq!(s.patterns[0].tracks[0].step_count as usize, MAX_STEP_COUNT);
+        assert_eq!(s.patterns[0].tracks[1].step_count, 16);
+        assert!(s.patterns[0].tracks[0].steps.iter().all(Option::is_none));
     }
 
     #[test]

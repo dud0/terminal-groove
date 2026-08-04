@@ -2,8 +2,9 @@ use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
     model::{
         ChordShape, ChorusMode, DelayDivision, GlobalParameterId, LfoConfig, LfoDivision, LfoRate,
-        LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, ProjectV6,
-        STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind, Waveform,
+        LfoWaveform, MAX_STEP_COUNT, PATTERN_COUNT, ParameterId, ParameterValue, Percent,
+        ProjectV6, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
+        Waveform,
     },
     persistence,
     reducer::{Editor, Scope},
@@ -286,6 +287,16 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     }
     if k.modifiers.contains(KeyModifiers::CONTROL) {
         match k.code {
+            KeyCode::Char(c @ '1'..='9') => {
+                select_pattern(a, audio, c.to_digit(10).unwrap() as usize - 1)
+            }
+            KeyCode::Char('0') => select_pattern(a, audio, PATTERN_COUNT - 1),
+            KeyCode::PageDown => select_pattern(a, audio, (a.editor.pattern() + 1) % PATTERN_COUNT),
+            KeyCode::PageUp => select_pattern(
+                a,
+                audio,
+                (a.editor.pattern() + PATTERN_COUNT - 1) % PATTERN_COUNT,
+            ),
             KeyCode::Char('q' | 'Q') => {
                 if a.editor.is_dirty() {
                     a.mode = Mode::QuitConfirm
@@ -563,6 +574,36 @@ fn select_track(a: &mut App, track: usize) {
         }
         _ => {}
     }
+}
+
+fn select_pattern(a: &mut App, audio: &mut Audio, pattern: usize) {
+    if pattern == a.editor.pattern() {
+        return;
+    }
+    if audio.available_commands() < 2 {
+        a.status = "Audio command queue full; pattern switch rejected".into();
+        return;
+    }
+    if !a.editor.select_pattern(pattern) {
+        return;
+    }
+    let _ = audio.send(Audio::snapshot(&a.editor.project));
+    if audio
+        .send(AudioCommand::SelectPattern {
+            pattern: pattern as u8,
+        })
+        .is_err()
+    {
+        a.status = "Audio command queue full; pattern switch rejected".into();
+        return;
+    }
+    a.step = 0;
+    a.playheads = [None; TRACK_COUNT];
+    a.status = if a.playing {
+        format!("Pattern {} queued for next bar", pattern + 1)
+    } else {
+        format!("Pattern {} selected", pattern + 1)
+    };
 }
 
 fn move_step_page(a: &mut App, forward: bool) {
@@ -2676,6 +2717,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     } else {
         "STOP"
     };
+    let pattern_state = format!("P{}", a.editor.pattern() + 1);
     let header = vec![
         Line::from(vec![
             Span::styled(
@@ -2686,7 +2728,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(
-                " {file}{dirty} | audio: {} | {transport} | {} BPM",
+                " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
                 device_name, a.editor.project.globals.tempo_bpm
             )),
             Span::raw("  [Ctrl+S] Save [Ctrl+O] Open"),
