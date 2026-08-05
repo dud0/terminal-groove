@@ -3660,9 +3660,9 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         )
     }
     if a.mode == Mode::QuitConfirm {
-        popup(
+        popup_at(
             f,
-            area,
+            quit_popup_rect(area),
             "Unsaved changes",
             "Save [S]  Discard [D]  Cancel [Esc]",
         )
@@ -4374,7 +4374,10 @@ fn lfo_inactive_style(active_style: Style) -> Style {
 }
 
 fn popup(f: &mut ratatui::Frame, area: Rect, title: &str, text: &str) {
-    let r = popup_rect(area);
+    popup_at(f, popup_rect(area), title, text);
+}
+
+fn popup_at(f: &mut ratatui::Frame, r: Rect, title: &str, text: &str) {
     f.render_widget(Clear, r);
     f.render_widget(
         Paragraph::new(text)
@@ -4382,6 +4385,19 @@ fn popup(f: &mut ratatui::Frame, area: Rect, title: &str, text: &str) {
             .block(Block::default().borders(Borders::ALL).title(title)),
         r,
     )
+}
+
+fn quit_popup_rect(area: Rect) -> Rect {
+    const WIDTH: u16 = 37;
+    const HEIGHT: u16 = 3;
+    let width = WIDTH.min(area.width);
+    let height = HEIGHT.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
 }
 
 fn lfo_popup_rect(area: Rect) -> Rect {
@@ -4933,6 +4949,14 @@ mod tests {
         assert_eq!(
             lfo_popup_rect(Rect::new(0, 0, 200, 50)),
             Rect::new(54, 25, 92, 20)
+        );
+    }
+
+    #[test]
+    fn quit_popup_fits_confirmation_prompt() {
+        assert_eq!(
+            quit_popup_rect(Rect::new(0, 0, 120, 34)),
+            Rect::new(41, 15, 37, 3)
         );
     }
 
