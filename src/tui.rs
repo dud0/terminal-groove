@@ -2409,7 +2409,6 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 15] = [
     CHORD_PARAMETERS[4],
     CHORD_PARAMETERS[5],
     CHORD_PARAMETERS[6],
-    CHORD_PARAMETERS[16],
     CHORD_PARAMETERS[9],
     CHORD_PARAMETERS[10],
     CHORD_PARAMETERS[11],
@@ -2417,6 +2416,7 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 15] = [
     CHORD_PARAMETERS[13],
     CHORD_PARAMETERS[14],
     CHORD_PARAMETERS[15],
+    CHORD_PARAMETERS[16],
 ];
 
 fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescriptor] {
@@ -4061,6 +4061,32 @@ mod tests {
         assert_eq!(synth[10].group, ParameterGroup::Filter);
         assert_eq!(synth[11].shortcut, "R");
         assert_eq!(synth[13].group, ParameterGroup::Envelope);
+        let lead = parameter_descriptors(TrackKind::Lead);
+        assert_eq!(
+            lead.iter()
+                .map(|descriptor| descriptor.id)
+                .collect::<Vec<_>>(),
+            vec![
+                ParameterId::Level,
+                ParameterId::DelaySend,
+                ParameterId::ReverbSend,
+                ParameterId::Pan,
+                ParameterId::OscillatorMix,
+                ParameterId::PulseWidth,
+                ParameterId::SubOscillator,
+                ParameterId::Pitch,
+                ParameterId::Cutoff,
+                ParameterId::Resonance,
+                ParameterId::FilterEnvelope,
+                ParameterId::Attack,
+                ParameterId::Decay,
+                ParameterId::Sustain,
+                ParameterId::Release,
+            ]
+        );
+        assert_eq!(lead[7].group, ParameterGroup::Instrument);
+        assert_eq!(lead[8].group, ParameterGroup::Filter);
+        assert_eq!(lead[11].group, ParameterGroup::Envelope);
         assert_ne!(
             ParameterGroup::Mixer.color(),
             ParameterGroup::Filter.color()
