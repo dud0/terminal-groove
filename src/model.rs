@@ -1109,21 +1109,25 @@ pub struct Project {
 
 impl PartialEq for Project {
     fn eq(&self, other: &Self) -> bool {
-        let mut left = self.clone();
-        let mut right = other.clone();
-        let _ = left.store_active_pattern(0);
-        let _ = right.store_active_pattern(0);
-        for track in &mut left.tracks {
-            track.steps.clear();
-        }
-        for track in &mut right.tracks {
-            track.steps.clear();
-        }
-        left.format_version == right.format_version
-            && left.globals == right.globals
-            && left.tracks == right.tracks
-            && left.patterns == right.patterns
-            && left.song == right.song
+        self.format_version == other.format_version
+            && self.globals == other.globals
+            && self.tracks.len() == other.tracks.len()
+            && self.tracks.iter().zip(&other.tracks).all(|(left, right)| {
+                left.kind == right.kind
+                    && left.name == right.name
+                    && left.level == right.level
+                    && left.pan == right.pan
+                    && left.muted == right.muted
+                    && left.delay_send == right.delay_send
+                    && left.reverb_send == right.reverb_send
+                    && left.instrument == right.instrument
+                    && left.lfos == right.lfos
+                    && left.input_degree == right.input_degree
+                    && left.input_octave == right.input_octave
+                    && left.input_chord_shape == right.input_chord_shape
+            })
+            && self.patterns == other.patterns
+            && self.song == other.song
     }
 }
 
@@ -1310,20 +1314,6 @@ impl Project {
     pub fn validate(&self) -> Result<(), ValidationError> {
         if self.format_version != 10 {
             return Err(ValidationError::Version(self.format_version));
-        }
-        // Preserve validation semantics for programmatic users of the former
-        // editable-track API; persisted v10 projects always have an empty or
-        // synchronized cache, so canonical pattern data remains authoritative.
-        if self.patterns.first().is_some_and(|pattern| {
-            pattern
-                .tracks
-                .iter()
-                .zip(&self.tracks)
-                .any(|(sequence, track)| !track.steps.is_empty() && sequence.steps != track.steps)
-        }) {
-            let mut synchronized = self.clone();
-            let _ = synchronized.store_active_pattern(0);
-            return synchronized.validate();
         }
         if self.tracks.len() != TRACK_COUNT {
             return Err(ValidationError::TrackCount);
@@ -1924,6 +1914,26 @@ mod tests {
         project.validate().unwrap();
     }
     #[test]
+    fn project_equality_ignores_transient_step_caches() {
+        let mut left = Project::new();
+        let mut right = left.clone();
+        left.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            locks: Default::default(),
+        });
+        right.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: true,
+            locks: Default::default(),
+        });
+        assert_eq!(left, right);
+
+        right.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: true,
+            locks: Default::default(),
+        });
+        assert_ne!(left, right);
+    }
+    #[test]
     fn song_entries_accept_pattern_100_and_reject_pattern_101() {
         let mut project = Project::new();
         project.patterns.resize_with(100, || Pattern {
@@ -2014,25 +2024,25 @@ mod tests {
     #[test]
     fn variable_step_counts_and_wrapped_ties_validate() {
         let mut project = Project::new();
-        project.tracks[0].steps = vec![None; 1];
-        project.tracks[1].steps = vec![None; MAX_STEP_COUNT];
-        project.tracks[3].steps = vec![None; 3];
-        project.tracks[3].steps[2] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[0].steps = vec![None; 1];
+        project.patterns[0].tracks[1].steps = vec![None; MAX_STEP_COUNT];
+        project.patterns[0].tracks[3].steps = vec![None; 3];
+        project.patterns[0].tracks[3].steps[2] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: false,
             slide: false,
             locks: Default::default(),
         });
-        project.tracks[3].steps[0] = Some(StepEvent::Tie {
+        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Tie {
             locks: Default::default(),
         });
-        assert_eq!(tie_source(&project.tracks[3].steps, 0), Some(2));
+        assert_eq!(tie_source(&project.patterns[0].tracks[3].steps, 0), Some(2));
         project.validate().unwrap();
 
-        project.tracks[0].steps.clear();
+        project.patterns[0].tracks[0].steps.clear();
         assert_eq!(project.validate(), Err(ValidationError::StepCount(0, 0)));
-        project.tracks[0].steps = vec![None; MAX_STEP_COUNT + 1];
+        project.patterns[0].tracks[0].steps = vec![None; MAX_STEP_COUNT + 1];
         assert_eq!(
             project.validate(),
             Err(ValidationError::StepCount(0, MAX_STEP_COUNT + 1))
@@ -2079,7 +2089,7 @@ mod tests {
     #[test]
     fn lock_compatibility_matches_track_kind() {
         let mut drum = Project::new();
-        drum.tracks[0].steps[0] = Some(StepEvent::Trigger {
+        drum.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             locks: ParameterLocks {
                 cutoff: Percent::new(50),
@@ -2092,7 +2102,7 @@ mod tests {
         ));
 
         let mut synth = Project::new();
-        synth.tracks[4].steps[0] = Some(StepEvent::Note {
+        synth.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -2287,7 +2297,7 @@ mod tests {
         assert_eq!(locks.arpeggio_rate, Some(ArpeggioRate::ThirtySecond));
 
         let mut project = Project::new();
-        project.tracks[0].steps[0] = Some(StepEvent::Trigger {
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             locks,
         });

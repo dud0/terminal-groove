@@ -4162,7 +4162,7 @@ mod tests {
     #[test]
     fn track_jump_clamps_step_and_replaces_incompatible_parameter() {
         let mut project = Project::new();
-        project.tracks[0].steps.resize(4, None);
+        project.patterns[0].tracks[0].steps.resize(4, None);
         let mut app = App::new(project, None);
         app.row = 4;
         app.step = 15;
@@ -4291,14 +4291,14 @@ mod tests {
         let backend = TestBackend::new(120, 34);
         let mut project = Project::new();
         project.tracks[3].input_octave = Some(4);
-        project.tracks[3].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
             chord_shape: None,
             locks: Default::default(),
         });
-        project.tracks[3].steps[1] = Some(StepEvent::Note {
+        project.patterns[0].tracks[3].steps[1] = Some(StepEvent::Note {
             degree: 2,
             octave: 4,
             accent: false,
@@ -4408,7 +4408,7 @@ mod tests {
     #[test]
     fn chord_shape_modal_and_title_render_at_minimum_size() {
         let mut project = Project::new();
-        project.tracks[4].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -4431,14 +4431,14 @@ mod tests {
     #[test]
     fn chord_shape_editor_page_navigation_follows_each_step() {
         let mut project = Project::new();
-        project.tracks[4].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
             chord_shape: None,
             locks: Default::default(),
         });
-        project.tracks[4].steps[1] = Some(StepEvent::Note {
+        project.patterns[0].tracks[4].steps[1] = Some(StepEvent::Note {
             degree: 2,
             octave: 3,
             accent: false,
@@ -4583,7 +4583,7 @@ mod tests {
     #[test]
     fn lock_scope_labels_explicit_and_inherited_values() {
         let mut project = Project::new();
-        project.tracks[3].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -4605,7 +4605,7 @@ mod tests {
     #[test]
     fn lock_values_remain_displayed_after_track_navigation() {
         let mut project = Project::new();
-        project.tracks[0].steps[0] = Some(StepEvent::Trigger {
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             locks: crate::model::ParameterLocks {
                 level: Some(Percent::new(25).unwrap()),
@@ -4671,7 +4671,7 @@ mod tests {
     #[test]
     fn locked_badge_uses_a_distinct_color() {
         let mut project = Project::new();
-        project.tracks[3].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -4794,9 +4794,9 @@ mod tests {
     #[test]
     fn vertical_navigation_follows_physical_rows_without_track_cursors() {
         let mut project = Project::new();
-        project.tracks[0].steps.resize(64, None);
-        project.tracks[1].steps.resize(20, None);
-        project.tracks[2].steps.resize(40, None);
+        project.patterns[0].tracks[0].steps.resize(64, None);
+        project.patterns[0].tracks[1].steps.resize(20, None);
+        project.patterns[0].tracks[2].steps.resize(40, None);
         let mut app = App::new(project, None);
         app.row = 1;
         app.step = 5;
@@ -4837,7 +4837,7 @@ mod tests {
     #[test]
     fn bank_navigation_handles_partial_banks() {
         let mut project = Project::new();
-        project.tracks[0].steps.resize(20, None);
+        project.patterns[0].tracks[0].steps.resize(20, None);
         let mut app = App::new(project, None);
         app.row = 1;
         app.step = 9;
@@ -4850,7 +4850,7 @@ mod tests {
     #[test]
     fn sixty_four_step_track_renders_as_two_compact_rows_with_scroll_hint() {
         let mut project = Project::new();
-        for track in &mut project.tracks {
+        for track in &mut project.patterns[0].tracks {
             track.steps.resize(64, None);
         }
         let mut app = App::new(project, None);

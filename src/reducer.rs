@@ -84,15 +84,6 @@ pub struct Editor {
 }
 impl Editor {
     pub fn new(mut project: Project) -> Self {
-        if project.patterns.first().is_some_and(|pattern| {
-            pattern
-                .tracks
-                .iter()
-                .zip(&project.tracks)
-                .any(|(canonical, cached)| canonical.steps != cached.steps)
-        }) {
-            let _ = project.store_active_pattern(0);
-        }
         project.activate_pattern(0);
         Self {
             saved: project.clone(),
@@ -1269,6 +1260,38 @@ mod tests {
         assert!(!e.is_dirty());
         assert!(e.redo());
         assert!(e.is_dirty());
+    }
+
+    #[test]
+    fn editing_pattern_zero_after_saving_pattern_one_stays_dirty() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        let mut editor = Editor::new(project);
+        editor.select_pattern(1);
+        editor.toggle_event(0, 0).unwrap();
+        editor.mark_saved();
+
+        editor.select_pattern(0);
+        editor.toggle_event(0, 1).unwrap();
+        editor.select_pattern(1);
+
+        assert!(editor.is_dirty());
+    }
+
+    #[test]
+    fn editor_initialization_does_not_copy_nonzero_cache_into_pattern_zero() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: true,
+            locks: Default::default(),
+        });
+        project.activate_pattern(1);
+
+        let editor = Editor::new(project);
+
+        assert!(editor.project.patterns[0].tracks[0].steps[0].is_none());
+        assert!(editor.project.patterns[1].tracks[0].steps[0].is_some());
     }
 
     #[test]

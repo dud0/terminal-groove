@@ -50,27 +50,29 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
         });
     }
-    let mut project: Project =
+    let project: Project =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
         })?;
-    let _ = project.activate_pattern(0);
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
             path: path.into(),
             source,
         })?;
+    let mut project = project;
+    if !project.activate_pattern(0) {
+        return Err(ProjectIoError::Validation {
+            path: path.into(),
+            source: crate::model::ValidationError::TrackCount,
+        });
+    }
     Ok(project)
 }
 
 pub fn save_atomic(path: &Path, project: &Project) -> Result<(), ProjectIoError> {
-    // A caller editing outside `Editor` may still have a transient selected
-    // cache. Serialize a canonical copy, never top-level track steps.
-    let mut canonical = project.clone();
-    let _ = canonical.store_active_pattern(0);
-    canonical
+    project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
             path: path.into(),
@@ -85,7 +87,7 @@ pub fn save_atomic(path: &Path, project: &Project) -> Result<(), ProjectIoError>
     let result = (|| -> io::Result<()> {
         let file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         let mut out = BufWriter::new(file);
-        serde_json::to_writer_pretty(&mut out, &canonical).map_err(io::Error::other)?;
+        serde_json::to_writer_pretty(&mut out, project).map_err(io::Error::other)?;
         out.write_all(b"\n")?;
         out.flush()?;
         out.get_ref().sync_all()?;
@@ -145,6 +147,48 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[test]
+    fn saving_selected_nonzero_pattern_preserves_every_canonical_pattern() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("selected-pattern.groove.json");
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        project.patterns[0].tracks[0].steps[0] = Some(crate::model::StepEvent::Trigger {
+            accent: false,
+            locks: Default::default(),
+        });
+        project.patterns[1].tracks[0].steps[1] = Some(crate::model::StepEvent::Trigger {
+            accent: true,
+            locks: Default::default(),
+        });
+        project.activate_pattern(1);
+
+        save_atomic(&path, &project).unwrap();
+        let loaded = load(&path).unwrap();
+
+        assert!(loaded.patterns[0].tracks[0].steps[0].is_some());
+        assert!(loaded.patterns[1].tracks[0].steps[1].is_some());
+        assert!(loaded.patterns[0].tracks[0].steps[1].is_none());
+    }
+
+    #[test]
+    fn malformed_pattern_tracks_are_rejected_without_recursive_validation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("malformed-pattern.groove.json");
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["patterns"][0]["tracks"][0]["steps"] = serde_json::json!([null]);
+        value["patterns"][0]["tracks"].as_array_mut().unwrap().pop();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        assert!(matches!(
+            load(&path),
+            Err(ProjectIoError::Validation {
+                source: crate::model::ValidationError::TrackCount,
+                ..
+            })
+        ));
     }
     #[test]
     fn reject_unknown() {
@@ -355,7 +399,7 @@ mod tests {
         let path = directory.path().join("chords.groove.json");
         let mut project = Project::new();
         project.tracks[4].input_chord_shape = Some(crate::model::ChordShape::SeventhRoot);
-        project.tracks[4].steps[0] = Some(crate::model::StepEvent::Note {
+        project.patterns[0].tracks[4].steps[0] = Some(crate::model::StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -391,7 +435,7 @@ mod tests {
             parameters.arpeggio_type = crate::model::ArpeggioType::Random;
             parameters.arpeggio_rate = crate::model::ArpeggioRate::QuarterTriplet;
         }
-        project.tracks[4].steps[0] = Some(crate::model::StepEvent::Note {
+        project.patterns[0].tracks[4].steps[0] = Some(crate::model::StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
