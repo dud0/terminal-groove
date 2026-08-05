@@ -1015,7 +1015,8 @@ mod tests {
 
     #[test]
     fn global_cards_show_all_local_shortcuts() {
-        let app = App::new(Project::new(), None);
+        let mut app = App::new(Project::new(), None);
+        app.mode = Mode::GlobalEdit(GlobalParameterId::Tempo);
         let screen = rendered(&app, 120, 34);
         for key in ["[t]", "[y]", "[f]", "[r]", "[b]", "[p]", "[k]", "[s]"] {
             assert!(screen.contains(key), "missing {key}");
@@ -1044,6 +1045,25 @@ mod tests {
                     index / 120 >= 14 && cell.modifier.contains(Modifier::REVERSED)
                 })
         );
+    }
+
+    #[test]
+    fn global_navigation_row_omits_local_shortcuts() {
+        let text = global_control_text(&Project::new().globals);
+        assert!(text.iter().all(|control| !control.starts_with('[')));
+        assert!(text.iter().all(|control| !control.contains("] ")));
+    }
+
+    #[test]
+    fn global_shortcuts_enter_editing_for_every_control() {
+        let mut app = App::new(Project::new(), None);
+        for id in GLOBAL_IDS {
+            enter_global_edit(&mut app, id);
+            match id {
+                GlobalParameterId::Tempo => assert_eq!(app.mode, Mode::TempoInput(String::new())),
+                _ => assert_eq!(app.mode, Mode::GlobalEdit(id)),
+            }
+        }
     }
 
     #[test]

@@ -784,14 +784,7 @@ fn global_selector_data(
 pub(super) fn global_control_text(g: &crate::model::Globals) -> Vec<String> {
     GLOBAL_IDS
         .iter()
-        .map(|id| {
-            format!(
-                "[{}] {} {}",
-                global_shortcut_text(*id),
-                global_display_name(*id),
-                global_value_text(g, *id)
-            )
-        })
+        .map(|id| format!("{} {}", global_display_name(*id), global_value_text(g, *id)))
         .collect()
 }
 
@@ -812,7 +805,8 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
             width: next_x.saturating_sub(x),
             height: inner.height,
         };
-        let active = a.row == 0 && a.global == index;
+        let active = matches!(&a.mode, Mode::GlobalEdit(active_id) if *active_id == *id)
+            || matches!(&a.mode, Mode::TempoInput(_) if *id == GlobalParameterId::Tempo);
         let block = if active {
             Block::bordered()
                 .border_type(BorderType::Double)

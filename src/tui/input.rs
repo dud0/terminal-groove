@@ -1,9 +1,8 @@
 use super::{
     controller::{
-        change_octave, edit_global, enter_global_edit, global_id, global_shortcut,
-        handle_file_input, handle_global_key, handle_new_confirm, handle_open_confirm,
-        handle_tempo_input, new_project, request_new_project, save, sync_project,
-        sync_project_with_smoothing,
+        change_octave, enter_global_edit, global_id, global_shortcut, handle_file_input,
+        handle_global_key, handle_new_confirm, handle_open_confirm, handle_tempo_input,
+        new_project, request_new_project, save, sync_project, sync_project_with_smoothing,
     },
     render::{GLOBAL_IDS, parameter_descriptors, scope_name, selected_chord_shape},
     state::{App, ChordField, FileAction, GeneratorDialog, LfoField, Mode, TriggerField},
@@ -12,10 +11,9 @@ use crate::{
     audio::{Audio, AudioCommand},
     generator::{Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
-        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, GlobalParameterId, LfoConfig,
-        LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent,
-        STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition,
-        Waveform,
+        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, LfoConfig, LfoDivision, LfoRate,
+        LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE,
+        STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
     },
     reducer::{Editor, Scope},
 };
@@ -306,18 +304,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         KeyCode::Char(c) if a.row == 0 => {
             if let Some(id) = global_shortcut(c) {
                 a.global = id as usize;
-                if id == GlobalParameterId::Scale {
-                    edit_global(a, audio, id, |g| {
-                        g.scale = if g.scale == Scale::Major {
-                            Scale::NaturalMinor
-                        } else {
-                            Scale::Major
-                        }
-                    });
-                    a.mode = Mode::Navigation;
-                } else {
-                    enter_global_edit(a, id)
-                }
+                enter_global_edit(a, id)
             }
         }
         KeyCode::Char('[') if a.row > 3 => change_octave(a, audio, -1),
