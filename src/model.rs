@@ -536,6 +536,21 @@ pub enum ArpeggioRate {
     Quarter,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArpeggioConfig {
+    pub enabled: bool,
+    #[serde(rename = "type")]
+    pub r#type: ArpeggioType,
+    pub rate: ArpeggioRate,
+}
+
+impl ArpeggioConfig {
+    pub fn is_default(&self) -> bool {
+        !self.enabled && self.r#type == ArpeggioType::Up && self.rate == ArpeggioRate::Sixteenth
+    }
+}
+
 impl ArpeggioRate {
     pub const ALL: [Self; 7] = [
         Self::ThirtySecond,
@@ -679,9 +694,6 @@ pub struct ChordParameters {
     pub decay: Percent,
     pub sustain: Percent,
     pub release: Percent,
-    pub arpeggio_enabled: bool,
-    pub arpeggio_type: ArpeggioType,
-    pub arpeggio_rate: ArpeggioRate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -749,14 +761,6 @@ pub struct ParameterLocks {
     pub chorus: Option<ChorusMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spread: Option<ChordSpread>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chord_shape: Option<ChordShape>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arpeggio_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arpeggio_type: Option<ArpeggioType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arpeggio_rate: Option<ArpeggioRate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -962,18 +966,6 @@ impl ParameterLocks {
                 debug_assert!(set);
             }
         }
-        if overlay.chord_shape.is_some() {
-            self.chord_shape = overlay.chord_shape;
-        }
-        if overlay.arpeggio_enabled.is_some() {
-            self.arpeggio_enabled = overlay.arpeggio_enabled;
-        }
-        if overlay.arpeggio_type.is_some() {
-            self.arpeggio_type = overlay.arpeggio_type;
-        }
-        if overlay.arpeggio_rate.is_some() {
-            self.arpeggio_rate = overlay.arpeggio_rate;
-        }
     }
 }
 
@@ -995,8 +987,10 @@ pub enum StepEvent {
         degree: u8,
         octave: u8,
         accent: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "chord_shape_is_default")]
         chord_shape: Option<ChordShape>,
+        #[serde(default, skip_serializing_if = "ArpeggioConfig::is_default")]
+        arpeggio: ArpeggioConfig,
         locks: ParameterLocks,
     },
     Tie {
@@ -1062,15 +1056,17 @@ pub struct Track {
     pub instrument: Instrument,
     pub lfos: LfoAssignments,
     /// Transient editor cache for the selected pattern.  It is deliberately
-    /// excluded from v10 JSON; canonical sequence data is `patterns`.
+    /// excluded from v11 JSON; canonical sequence data is `patterns`.
     #[serde(skip, default = "default_step_cache")]
     pub steps: Vec<Step>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_degree: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_octave: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "chord_shape_is_default")]
     pub input_chord_shape: Option<ChordShape>,
+    #[serde(default, skip_serializing_if = "arpeggio_is_default")]
+    pub input_chord_arpeggio: Option<ArpeggioConfig>,
 }
 
 /// A pattern owns only its six sequences. Instrument and mixer settings live
@@ -1125,6 +1121,7 @@ impl PartialEq for Project {
                     && left.input_degree == right.input_degree
                     && left.input_octave == right.input_octave
                     && left.input_chord_shape == right.input_chord_shape
+                    && left.input_chord_arpeggio == right.input_chord_arpeggio
             })
             && self.patterns == other.patterns
             && self.song == other.song
@@ -1139,6 +1136,12 @@ fn default_pan() -> Percent {
 }
 fn default_step_cache() -> Vec<Step> {
     vec![None; STEP_BANK_SIZE]
+}
+fn chord_shape_is_default(value: &Option<ChordShape>) -> bool {
+    value.is_none() || value == &Some(ChordShape::default())
+}
+fn arpeggio_is_default(value: &Option<ArpeggioConfig>) -> bool {
+    value.is_none() || value.is_some_and(|config| config.is_default())
 }
 impl Project {
     pub fn new() -> Self {
@@ -1156,6 +1159,7 @@ impl Project {
             input_degree: None,
             input_octave: None,
             input_chord_shape: None,
+            input_chord_arpeggio: None,
         };
         let synth = |kind: TrackKind, name: &str, instrument: Instrument| Track {
             kind,
@@ -1173,10 +1177,11 @@ impl Project {
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: Some(1),
             input_octave: Some(3),
-            input_chord_shape: (kind == TrackKind::Chord).then_some(ChordShape::default()),
+            input_chord_shape: None,
+            input_chord_arpeggio: None,
         };
         Self {
-            format_version: 10,
+            format_version: 11,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1232,9 +1237,6 @@ impl Project {
                         decay: p(45),
                         sustain: p(75),
                         release: p(65),
-                        arpeggio_enabled: false,
-                        arpeggio_type: ArpeggioType::default(),
-                        arpeggio_rate: ArpeggioRate::default(),
                     }),
                 ),
                 synth(
@@ -1312,7 +1314,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 10 {
+        if self.format_version != 11 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -1365,7 +1367,8 @@ impl Project {
             if !instrument_ok
                 || pitched != t.input_degree.is_some()
                 || pitched != t.input_octave.is_some()
-                || (t.kind != TrackKind::Chord && t.input_chord_shape.is_some())
+                || (t.kind != TrackKind::Chord
+                    && (t.input_chord_shape.is_some() || t.input_chord_arpeggio.is_some()))
             {
                 return Err(ValidationError::TrackOrder(ti, expected[ti].1));
             }
@@ -1405,8 +1408,15 @@ impl Project {
                         if !event_ok {
                             return Err(ValidationError::EventKind(ti, si));
                         }
-                        if let StepEvent::Note { chord_shape, .. } = event {
-                            if track.kind == TrackKind::Lead && chord_shape.is_some() {
+                        if let StepEvent::Note {
+                            chord_shape,
+                            arpeggio,
+                            ..
+                        } = event
+                        {
+                            if track.kind == TrackKind::Lead
+                                && (chord_shape.is_some() || !arpeggio.is_default())
+                            {
                                 return Err(ValidationError::EventKind(ti, si));
                             }
                         }
@@ -1490,23 +1500,6 @@ fn validate_locks(
     kind: TrackKind,
     l: &ParameterLocks,
 ) -> Result<(), ValidationError> {
-    if kind != TrackKind::Chord
-        && (l.chord_shape.is_some()
-            || l.arpeggio_enabled.is_some()
-            || l.arpeggio_type.is_some()
-            || l.arpeggio_rate.is_some())
-    {
-        let name = if l.chord_shape.is_some() {
-            "chord_shape"
-        } else if l.arpeggio_enabled.is_some() {
-            "arpeggio_enabled"
-        } else if l.arpeggio_type.is_some() {
-            "arpeggio_type"
-        } else {
-            "arpeggio_rate"
-        };
-        return Err(ValidationError::Lock(ti, si, name));
-    }
     let bad = ParameterId::ALL.into_iter().find_map(|parameter| {
         (l.get(parameter).is_some() && !parameter.is_valid_for(kind)).then_some(parameter.name())
     });
@@ -2014,6 +2007,7 @@ mod tests {
             octave: 3,
             accent: false,
             chord_shape: None,
+            arpeggio: ArpeggioConfig::default(),
             locks: Default::default(),
         });
         s[0] = Some(StepEvent::Tie {
@@ -2070,6 +2064,7 @@ mod tests {
             octave: 3,
             accent: false,
             chord_shape: None,
+            arpeggio: ArpeggioConfig::default(),
             locks: Default::default(),
         };
         assert_eq!(serde_json::to_value(trigger).unwrap()["accent"], false);
@@ -2107,6 +2102,7 @@ mod tests {
             octave: 3,
             accent: false,
             chord_shape: None,
+            arpeggio: ArpeggioConfig::default(),
             locks: ParameterLocks {
                 tone: Percent::new(50),
                 ..Default::default()
@@ -2261,13 +2257,10 @@ mod tests {
 
     #[test]
     fn arpeggio_defaults_and_json_names_are_stable() {
-        let project = Project::new();
-        let Instrument::Chord(parameters) = project.tracks[4].instrument else {
-            panic!("default Chord instrument missing");
-        };
-        assert!(!parameters.arpeggio_enabled);
-        assert_eq!(parameters.arpeggio_type, ArpeggioType::Up);
-        assert_eq!(parameters.arpeggio_rate, ArpeggioRate::Sixteenth);
+        let config = ArpeggioConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.r#type, ArpeggioType::Up);
+        assert_eq!(config.rate, ArpeggioRate::Sixteenth);
         assert_eq!(
             serde_json::to_string(&ArpeggioType::UpDown).unwrap(),
             "\"up_down\""
@@ -2279,22 +2272,17 @@ mod tests {
     }
 
     #[test]
-    fn chord_arpeggio_locks_overlay_and_reject_on_other_tracks() {
+    fn ordinary_locks_overlay_and_chord_articulation_is_not_a_lock() {
         let mut locks = ParameterLocks {
-            chord_shape: Some(ChordShape::TriadFirstInversion),
-            arpeggio_enabled: Some(true),
-            arpeggio_type: Some(ArpeggioType::Random),
-            arpeggio_rate: Some(ArpeggioRate::QuarterTriplet),
+            cutoff: Some(Percent::new(20).unwrap()),
             ..Default::default()
         };
         let overlay = ParameterLocks {
-            chord_shape: Some(ChordShape::TriadRoot),
-            arpeggio_rate: Some(ArpeggioRate::ThirtySecond),
+            cutoff: Some(Percent::new(30).unwrap()),
             ..Default::default()
         };
         locks.overlay(overlay);
-        assert_eq!(locks.chord_shape, Some(ChordShape::TriadRoot));
-        assert_eq!(locks.arpeggio_rate, Some(ArpeggioRate::ThirtySecond));
+        assert_eq!(locks.cutoff, Some(Percent::new(30).unwrap()));
 
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
@@ -2303,7 +2291,7 @@ mod tests {
         });
         assert_eq!(
             project.validate(),
-            Err(ValidationError::Lock(0, 0, "chord_shape"))
+            Err(ValidationError::Lock(0, 0, "cutoff"))
         );
     }
 }

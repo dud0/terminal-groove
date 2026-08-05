@@ -1,4 +1,4 @@
-use crate::model::{ChordShape, StepEvent, tie_source};
+use crate::model::{ArpeggioConfig, ChordShape, StepEvent, tie_source};
 
 pub struct StepClock {
     sample_rate: f64,
@@ -50,6 +50,7 @@ pub enum GateAction {
         accent: bool,
         slide: bool,
         chord_shape: Option<ChordShape>,
+        arpeggio: ArpeggioConfig,
     },
     Hold,
     Release,
@@ -61,6 +62,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
             octave,
             accent,
             chord_shape,
+            arpeggio,
             ..
         }) => GateAction::Trigger {
             degree: *degree,
@@ -68,6 +70,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
             accent: *accent,
             slide: false,
             chord_shape: *chord_shape,
+            arpeggio: *arpeggio,
         },
         Some(StepEvent::BassNote {
             degree,
@@ -81,6 +84,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
             accent: *accent,
             slide: *slide,
             chord_shape: None,
+            arpeggio: ArpeggioConfig::default(),
         },
         Some(StepEvent::Tie { .. }) if voice_active => GateAction::Hold,
         Some(StepEvent::Tie { .. }) => tie_source(steps, step)
@@ -90,6 +94,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
                     octave,
                     accent,
                     chord_shape,
+                    arpeggio,
                     ..
                 }) => Some(GateAction::Trigger {
                     degree,
@@ -97,6 +102,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
                     accent,
                     slide: false,
                     chord_shape,
+                    arpeggio,
                 }),
                 Some(StepEvent::BassNote {
                     degree,
@@ -110,6 +116,7 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
                     accent,
                     slide,
                     chord_shape: None,
+                    arpeggio: ArpeggioConfig::default(),
                 }),
                 _ => None,
             })
@@ -144,6 +151,7 @@ mod tests {
                 accent: false,
                 locks: Default::default(),
                 chord_shape: None,
+                arpeggio: ArpeggioConfig::default(),
             }),
             Some(StepEvent::Tie {
                 locks: Default::default(),
@@ -157,6 +165,7 @@ mod tests {
                 accent: false,
                 slide: false,
                 chord_shape: None,
+                arpeggio: ArpeggioConfig::default(),
             }
         );
         assert_eq!(synth_action(&steps, 1, true), GateAction::Hold);

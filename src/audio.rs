@@ -5,9 +5,9 @@ use crate::{
     },
     engine::{GateAction, StepClock, synth_action},
     model::{
-        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, Globals, Instrument, LfoAssignments,
-        MAX_STEP_COUNT, ParameterId, ParameterLocks, Percent, Project, StepEvent, TRACK_COUNT,
-        Waveform,
+        ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, Globals, Instrument,
+        LfoAssignments, MAX_STEP_COUNT, ParameterId, ParameterLocks, Percent, Project, StepEvent,
+        TRACK_COUNT, Waveform,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -83,6 +83,7 @@ struct AudioTrack {
     input_degree: u8,
     input_octave: u8,
     input_chord_shape: ChordShape,
+    input_chord_arpeggio: ArpeggioConfig,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AudioSequence {
@@ -131,6 +132,7 @@ impl AudioProject {
                     input_degree: t.input_degree.unwrap_or(1),
                     input_octave: t.input_octave.unwrap_or(3),
                     input_chord_shape: t.input_chord_shape.unwrap_or_default(),
+                    input_chord_arpeggio: t.input_chord_arpeggio.unwrap_or_default(),
                 }
             }),
             patterns: project
@@ -372,6 +374,7 @@ struct SynthTrigger {
     accent: bool,
     slide: bool,
     chord_shape: Option<ChordShape>,
+    arpeggio: ArpeggioConfig,
 }
 
 const CHORD_GROUP_SIZE: usize = 4;
@@ -477,23 +480,6 @@ impl ArpeggioState {
         self.order[self.position as usize] as usize
     }
 
-    fn update_without_restart(
-        &mut self,
-        shape: ChordShape,
-        kind: ArpeggioType,
-        rate: ArpeggioRate,
-    ) {
-        let rebuild = self.shape != shape || self.kind != kind;
-        self.shape = shape;
-        self.kind = kind;
-        self.rate = rate;
-        let old = self.position;
-        if rebuild {
-            self.rebuild_order();
-            self.position = old.min(self.order_len.saturating_sub(1));
-        }
-    }
-
     fn tick(&mut self, sr: f32, bpm: u16) -> bool {
         if !self.enabled {
             return false;
@@ -544,6 +530,7 @@ impl ChordVoicePool {
                 accent: false,
                 slide: false,
                 chord_shape: None,
+                arpeggio: ArpeggioConfig::default(),
             },
             arpeggio_locks: ParameterLocks::default(),
             preview_remaining: 0,
@@ -1478,23 +1465,17 @@ impl Renderer {
         locks: ParameterLocks,
         pool: &mut ChordVoicePool,
     ) {
-        let Instrument::Chord(parameters) = project.tracks[4].instrument else {
+        let Instrument::Chord(_) = project.tracks[4].instrument else {
             return;
         };
-        let shape = locks
-            .chord_shape
-            .unwrap_or(trigger.chord_shape.unwrap_or_default());
-        let arpeggio_enabled = locks
-            .arpeggio_enabled
-            .unwrap_or(parameters.arpeggio_enabled);
-        let arpeggio_type = locks.arpeggio_type.unwrap_or(parameters.arpeggio_type);
-        let arpeggio_rate = locks.arpeggio_rate.unwrap_or(parameters.arpeggio_rate);
+        let shape = trigger.chord_shape.unwrap_or_default();
+        let arpeggio = trigger.arpeggio;
         pool.arpeggio_trigger = SynthTrigger {
             chord_shape: Some(shape),
             ..trigger
         };
         pool.arpeggio_locks = locks;
-        if arpeggio_enabled {
+        if arpeggio.enabled {
             Self::release_chord(pool);
             pool.group = 1 - pool.group;
             pool.arpeggiated = true;
@@ -1505,8 +1486,8 @@ impl Renderer {
             pool.arpeggio_locks = locks;
             pool.arpeggio.reset(
                 shape,
-                arpeggio_type,
-                arpeggio_rate,
+                arpeggio.r#type,
+                arpeggio.rate,
                 sr,
                 project.globals.tempo_bpm,
             );
@@ -1565,60 +1546,6 @@ impl Renderer {
         }
         Self::configure_chorus(&mut pool.chorus, project.tracks[4], locks);
         pool.active = true;
-    }
-
-    /// Apply the effective arpeggiator state at a chord tie without touching
-    /// envelope gates. This is shared by ordinary and wrapped ties because
-    /// callers resolve inherited locks before invoking it.
-    fn apply_chord_tie(
-        project: &AudioProject,
-        sr: f32,
-        track: AudioTrack,
-        locks: ParameterLocks,
-        pool: &mut ChordVoicePool,
-    ) {
-        let Instrument::Chord(parameters) = track.instrument else {
-            return;
-        };
-        let shape = locks.chord_shape.unwrap_or_else(|| {
-            pool.arpeggio_trigger
-                .chord_shape
-                .unwrap_or(pool.arpeggio.shape)
-        });
-        let enabled = locks
-            .arpeggio_enabled
-            .unwrap_or(parameters.arpeggio_enabled);
-        let kind = locks.arpeggio_type.unwrap_or(parameters.arpeggio_type);
-        let rate = locks.arpeggio_rate.unwrap_or(parameters.arpeggio_rate);
-        pool.arpeggio_locks = locks;
-        if pool.arpeggiated {
-            if enabled {
-                pool.arpeggio.update_without_restart(shape, kind, rate);
-            } else {
-                // Keep the currently sounding tone alive; only future ticks stop.
-                pool.arpeggiated = false;
-                pool.arpeggio.enabled = false;
-            }
-        } else if enabled {
-            // Enter at the tie boundary without retriggering the held chord.
-            pool.arpeggiated = true;
-            pool.arpeggio
-                .reset(shape, kind, rate, sr, project.globals.tempo_bpm);
-            pool.arpeggio_trigger.chord_shape = Some(shape);
-        }
-        for voice in &mut pool.voices
-            [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
-        {
-            Self::apply_synth_params(
-                project,
-                sr,
-                4,
-                locks,
-                voice,
-                ParameterSmoothing::Default.samples(sr),
-            );
-        }
-        Self::configure_chorus(&mut pool.chorus, track, locks);
     }
 
     fn trigger_arpeggio_tone(project: &AudioProject, sr: f32, pool: &mut ChordVoicePool) {
@@ -1759,19 +1686,28 @@ impl Renderer {
             return;
         }
         let t = self.project.patterns[self.active_pattern].tracks[track];
-        let (degree, octave, accent, slide, chord_shape, locks) = match t.steps[step] {
+        let (degree, octave, accent, slide, chord_shape, arpeggio, locks) = match t.steps[step] {
             Some(StepEvent::BassNote {
                 degree,
                 octave,
                 accent,
                 slide,
                 locks,
-            }) => (degree, octave, accent, slide, None, locks),
+            }) => (
+                degree,
+                octave,
+                accent,
+                slide,
+                None,
+                ArpeggioConfig::default(),
+                locks,
+            ),
             Some(StepEvent::Note {
                 degree,
                 octave,
                 accent,
                 chord_shape,
+                arpeggio,
                 locks: _,
             }) => (
                 degree,
@@ -1779,6 +1715,7 @@ impl Renderer {
                 accent,
                 false,
                 chord_shape,
+                arpeggio,
                 self.locks_at(track, step),
             ),
             Some(StepEvent::Tie { .. }) => {
@@ -1800,6 +1737,7 @@ impl Renderer {
                         accent,
                         slide,
                         None,
+                        ArpeggioConfig::default(),
                         self.locks_at(track, step),
                     ),
                     Some(StepEvent::Note {
@@ -1807,6 +1745,7 @@ impl Renderer {
                         octave,
                         accent,
                         chord_shape,
+                        arpeggio,
                         ..
                     }) => (
                         degree,
@@ -1814,6 +1753,7 @@ impl Renderer {
                         accent,
                         false,
                         chord_shape,
+                        arpeggio,
                         self.locks_at(track, step),
                     ),
                     _ => return,
@@ -1825,6 +1765,11 @@ impl Renderer {
                 false,
                 false,
                 (track == 4).then_some(self.project.tracks[track].input_chord_shape),
+                if track == 4 {
+                    self.project.tracks[track].input_chord_arpeggio
+                } else {
+                    ArpeggioConfig::default()
+                },
                 ParameterLocks::default(),
             ),
         };
@@ -1834,6 +1779,7 @@ impl Renderer {
             accent,
             slide,
             chord_shape,
+            arpeggio,
         };
         if track == 4 {
             Self::trigger_chord(
@@ -1900,6 +1846,7 @@ impl Renderer {
                         accent,
                         slide,
                         chord_shape,
+                        arpeggio,
                     } => {
                         let locks = self.locks_at(track, step);
                         let trigger = SynthTrigger {
@@ -1908,6 +1855,7 @@ impl Renderer {
                             accent,
                             slide,
                             chord_shape,
+                            arpeggio,
                         };
                         if track == 4 {
                             Self::trigger_chord(
@@ -1932,13 +1880,20 @@ impl Renderer {
                         if matches!(sequence.steps[step], Some(StepEvent::Tie { .. })) {
                             let locks = self.locks_at(track, step);
                             if track == 4 {
-                                Self::apply_chord_tie(
-                                    &self.project,
-                                    self.sr,
-                                    t,
-                                    locks,
-                                    &mut self.chord,
-                                );
+                                for voice in &mut self.chord.voices[self.chord.group
+                                    * CHORD_GROUP_SIZE
+                                    ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
+                                {
+                                    Self::apply_synth_params(
+                                        &self.project,
+                                        self.sr,
+                                        track,
+                                        locks,
+                                        voice,
+                                        ParameterSmoothing::Default.samples(self.sr),
+                                    );
+                                }
+                                Self::configure_chorus(&mut self.chord.chorus, t, locks);
                             } else {
                                 Self::apply_synth_params(
                                     &self.project,
@@ -2526,6 +2481,7 @@ mod tests {
                 octave: 3,
                 accent: false,
                 chord_shape: None,
+                arpeggio: ArpeggioConfig::default(),
                 locks: Default::default(),
             });
             project.patterns[0].tracks[5].steps[step] = Some(StepEvent::Note {
@@ -2533,6 +2489,7 @@ mod tests {
                 octave: 4,
                 accent: false,
                 chord_shape: None,
+                arpeggio: ArpeggioConfig::default(),
                 locks: Default::default(),
             });
         }
@@ -2968,6 +2925,7 @@ mod tests {
             octave: 3,
             accent: false,
             chord_shape: None,
+            arpeggio: ArpeggioConfig::default(),
             locks: ParameterLocks {
                 cutoff: Percent::new(20),
                 ..Default::default()
@@ -2984,6 +2942,7 @@ mod tests {
             octave: 3,
             accent: true,
             chord_shape: None,
+            arpeggio: ArpeggioConfig::default(),
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -3039,6 +2998,7 @@ mod tests {
             octave: 3,
             accent: false,
             chord_shape: Some(ChordShape::SeventhRoot),
+            arpeggio: ArpeggioConfig::default(),
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -3076,6 +3036,7 @@ mod tests {
             octave: 3,
             accent: false,
             chord_shape: None,
+            arpeggio: ArpeggioConfig::default(),
             locks: Default::default(),
         });
         let mut wet_project = dry_project.clone();
@@ -3183,16 +3144,16 @@ mod tests {
         for (index, track) in project.tracks.iter_mut().enumerate() {
             track.muted = index != 4;
         }
-        if let Instrument::Chord(parameters) = &mut project.tracks[4].instrument {
-            parameters.arpeggio_enabled = true;
-            parameters.arpeggio_type = ArpeggioType::UpDown;
-            parameters.arpeggio_rate = ArpeggioRate::ThirtySecond;
-        }
         project.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
             chord_shape: None,
+            arpeggio: ArpeggioConfig {
+                enabled: true,
+                r#type: ArpeggioType::UpDown,
+                rate: ArpeggioRate::ThirtySecond,
+            },
             locks: Default::default(),
         });
         project.patterns[0].tracks[4].steps[1] = None;

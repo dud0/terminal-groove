@@ -44,7 +44,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if version != Some(10) {
+    if version != Some(11) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 10);
+        assert_eq!(value["format_version"], 11);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -299,7 +299,7 @@ mod tests {
     fn older_project_versions_are_rejected_without_migration() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("legacy.groove.json");
-        for version in 1..=8 {
+        for version in 1..=10 {
             let mut value = serde_json::to_value(Project::new()).unwrap();
             value["format_version"] = version.into();
             fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
@@ -323,7 +323,7 @@ mod tests {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
             let project = load(path.path()).unwrap();
-            assert_eq!(project.format_version, 10);
+            assert_eq!(project.format_version, 11);
             assert!(
                 (crate::model::MIN_PATTERN_COUNT..=crate::model::MAX_PATTERN_COUNT)
                     .contains(&project.patterns.len())
@@ -404,6 +404,7 @@ mod tests {
             octave: 3,
             accent: false,
             chord_shape: Some(crate::model::ChordShape::SeventhFirstInversion),
+            arpeggio: crate::model::ArpeggioConfig::default(),
             locks: Default::default(),
         });
         save_atomic(&path, &project).unwrap();
@@ -426,33 +427,28 @@ mod tests {
     }
 
     #[test]
-    fn arpeggio_schema_round_trips_base_values_and_explicit_default_locks() {
+    fn arpeggio_schema_round_trips_note_values_and_omits_defaults() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("arpeggio.groove.json");
         let mut project = Project::new();
-        if let crate::model::Instrument::Chord(parameters) = &mut project.tracks[4].instrument {
-            parameters.arpeggio_enabled = true;
-            parameters.arpeggio_type = crate::model::ArpeggioType::Random;
-            parameters.arpeggio_rate = crate::model::ArpeggioRate::QuarterTriplet;
-        }
         project.patterns[0].tracks[4].steps[0] = Some(crate::model::StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
             chord_shape: None,
-            locks: crate::model::ParameterLocks {
-                chord_shape: Some(crate::model::ChordShape::default()),
-                arpeggio_enabled: Some(false),
-                arpeggio_type: Some(crate::model::ArpeggioType::DownUp),
-                arpeggio_rate: Some(crate::model::ArpeggioRate::ThirtySecond),
-                ..Default::default()
+            arpeggio: crate::model::ArpeggioConfig {
+                enabled: false,
+                r#type: crate::model::ArpeggioType::DownUp,
+                rate: crate::model::ArpeggioRate::ThirtySecond,
             },
+            locks: Default::default(),
         });
         save_atomic(&path, &project).unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded, project);
         let json = fs::read_to_string(path).unwrap();
-        assert!(json.contains("arpeggio_enabled"));
-        assert!(json.contains("chord_shape"));
+        assert!(json.contains("\"arpeggio\""));
+        assert!(json.contains("down_up"));
+        assert!(!json.contains("arpeggio_enabled"));
     }
 }
