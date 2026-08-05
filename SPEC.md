@@ -303,6 +303,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `Space` | Play/pause |
 | Anywhere | `.` | Stop, reset, and clear effect tails |
 | Anywhere | `Ctrl+P` | Open the dynamic pattern dialog |
+| Anywhere | `Ctrl+N` | Create a new untitled project, with dirty confirmation |
 | Pattern dialog | Left/right, `Home`, `End` | Move the pattern cursor |
 | Pattern dialog | `Enter` | Select or queue the cursor pattern and close |
 | Pattern dialog | `N` / `D` | Insert an empty pattern / duplicate the cursor pattern |
@@ -440,6 +441,8 @@ The current mode is always named on screen. Modes are:
 File prompts accept literal absolute paths or paths relative to the directory from which the process was launched. The MVP does not expand `~`, environment variables, or globs. The resolved path is shown before confirmation.
 
 Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice. Save failure leaves the confirmation open and never discards data. Opening a project stops and resets playback, clears effects, loads the new engine state, resets undo/redo history, selects the global row, and marks the project clean.
+
+`Ctrl+N` creates a new untitled project without restarting. When the current project is clean, it happens immediately. When it is dirty, the application shows `Save`, `Discard`, and `Cancel`; `Save` uses the current path or opens Save As for an untitled project. Creating a new project stops and resets playback, clears effects, loads the default project, resets undo/redo history, selects the global row, clears the project path, and marks the project clean.
 
 ## 7. Undo, redo, and dirty state
 

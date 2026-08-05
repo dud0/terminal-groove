@@ -69,6 +69,7 @@ enum Mode {
     TrackLengthInput(String),
     FileInput(FileAction, String),
     OpenConfirm(PathBuf),
+    NewConfirm,
     Error(String),
     Help,
     QuitConfirm,
@@ -142,6 +143,7 @@ pub struct App {
     status: String,
     path: Option<PathBuf>,
     pending_open: Option<PathBuf>,
+    pending_new: bool,
     pending_quit: bool,
     quit: bool,
     playheads: [Option<usize>; TRACK_COUNT],
@@ -190,6 +192,7 @@ impl App {
             status: "Ready".into(),
             path,
             pending_open: None,
+            pending_new: false,
             pending_quit: false,
             quit: false,
             playheads: [None; TRACK_COUNT],
@@ -307,6 +310,9 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     if matches!(a.mode, Mode::OpenConfirm(_)) {
         return handle_open_confirm(a, audio, k);
     }
+    if a.mode == Mode::NewConfirm {
+        return handle_new_confirm(a, audio, k);
+    }
     if a.mode == Mode::PatternDialog {
         return handle_pattern_dialog(a, audio, k);
     }
@@ -346,6 +352,11 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
                     a.mode = Mode::QuitConfirm
                 } else {
                     a.quit = true
+                }
+            }
+            KeyCode::Char('n' | 'N') => {
+                if request_new_project(a) {
+                    new_project(a, audio)
                 }
             }
             KeyCode::Char('s' | 'S') if k.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -1858,6 +1869,7 @@ fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> 
     match k.code {
         KeyCode::Esc => {
             a.pending_open = None;
+            a.pending_new = false;
             a.pending_quit = false;
             a.mode = Mode::Navigation
         }
@@ -1885,6 +1897,9 @@ fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> 
                                 a.mode = Mode::Navigation;
                                 if let Some(open) = a.pending_open.take() {
                                     open_project(a, audio, open)
+                                } else if a.pending_new {
+                                    a.pending_new = false;
+                                    new_project(a, audio)
                                 } else if a.pending_quit {
                                     a.quit = true
                                 }
@@ -1929,6 +1944,71 @@ fn handle_open_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()
     }
     Ok(())
 }
+
+fn handle_new_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    match k.code {
+        KeyCode::Char('s' | 'S') => {
+            if a.path.is_none() {
+                a.pending_new = true;
+                a.mode = Mode::FileInput(FileAction::SaveAs, String::new())
+            } else {
+                save(a)?;
+                if !a.editor.is_dirty() {
+                    new_project(a, audio)
+                }
+            }
+        }
+        KeyCode::Char('d' | 'D') => new_project(a, audio),
+        KeyCode::Esc | KeyCode::Char('c' | 'C') => a.mode = Mode::Navigation,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn request_new_project(a: &mut App) -> bool {
+    if a.editor.is_dirty() {
+        a.mode = Mode::NewConfirm;
+        false
+    } else {
+        true
+    }
+}
+
+fn reset_project_ui(a: &mut App) {
+    a.row = 0;
+    a.global = 0;
+    a.step = 0;
+    a.scope = Scope::Base;
+    a.playing = false;
+    a.paused = false;
+    a.pattern_cursor = 0;
+    a.active_pattern = 0;
+    a.queued_pattern = None;
+    a.playheads = [None; TRACK_COUNT];
+    a.pending_open = None;
+    a.pending_new = false;
+    a.pending_quit = false;
+    a.fader_animations.clear();
+    a.mode = Mode::Navigation;
+}
+
+fn new_project(a: &mut App, audio: &mut Audio) {
+    if audio.available_commands() < 2 {
+        a.mode = Mode::Error("Audio command queue full; new project was not created".into());
+        return;
+    }
+    let project = Project::new();
+    let _ = audio.send(AudioCommand::Stop);
+    if audio.send(Audio::snapshot(&project)).is_err() {
+        a.mode = Mode::Error("Audio command queue full; new project was not created".into());
+        return;
+    }
+    a.editor.replace_loaded(project);
+    a.path = None;
+    reset_project_ui(a);
+    a.status = "New project".into();
+}
+
 fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
     match persistence::load(&path) {
         Ok(project) => {
@@ -1943,18 +2023,8 @@ fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
             }
             a.editor.replace_loaded(project);
             a.path = Some(path.clone());
-            a.row = 0;
-            a.global = 0;
-            a.step = 0;
-            a.scope = Scope::Base;
-            a.playing = false;
-            a.paused = false;
-            a.pattern_cursor = 0;
-            a.active_pattern = 0;
-            a.queued_pattern = None;
-            a.playheads = [None; TRACK_COUNT];
+            reset_project_ui(a);
             a.status = format!("Opened {}", path.display());
-            a.mode = Mode::Navigation;
         }
         Err(e) => a.mode = Mode::Error(e.to_string()),
     }
@@ -2224,6 +2294,7 @@ fn mode_name(mode: &Mode) -> String {
         Mode::TrackLengthInput(_) => "Track length input".into(),
         Mode::FileInput(_, _) => "File-path input".into(),
         Mode::OpenConfirm(_) => "Unsaved confirmation".into(),
+        Mode::NewConfirm => "Unsaved confirmation".into(),
         Mode::Error(_) => "Error dialog".into(),
         Mode::Help => "Help".into(),
         Mode::QuitConfirm => "Unsaved confirmation".into(),
@@ -3404,7 +3475,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
                 device_name, a.editor.project.globals.tempo_bpm
             )),
             Span::raw("  [Ctrl+P] Patterns"),
-            Span::raw("  [Ctrl+S] Save [Ctrl+O] Open"),
+            Span::raw("  [Ctrl+N] New [Ctrl+S] Save [Ctrl+O] Open"),
         ]),
         Line::from(format!(
             "[Space] Play/Pause  [.] Stop  [Ctrl+Z] Undo  [Ctrl+Y] Redo  [Ctrl+Q] Quit{}",
@@ -3664,7 +3735,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: A toggles event accent or empty-step input default; Shift+G toggles Bass slide; Shift+T edits condition/chance/retriggers.\nTracks: Shift+S edits 0–75% swing; l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C trigger editor (shape, arp, type, rate).\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or trigger editing. Esc or ? closes Help.",
+            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: A toggles event accent or empty-step input default; Shift+G toggles Bass slide; Shift+T edits condition/chance/retriggers.\nTracks: Shift+S edits 0–75% swing; l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C trigger editor (shape, arp, type, rate).\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+N new project, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or trigger editing. Esc or ? closes Help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3672,6 +3743,14 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             quit_popup_rect(area),
             "Unsaved changes",
+            "Save [S]  Discard [D]  Cancel [Esc]",
+        )
+    }
+    if a.mode == Mode::NewConfirm {
+        popup_at(
+            f,
+            quit_popup_rect(area),
+            "New project",
             "Save [S]  Discard [D]  Cancel [Esc]",
         )
     }
@@ -4834,6 +4913,7 @@ mod tests {
         assert!(screen.contains("Pitched tracks: 1–8 inserts notes"));
         assert!(screen.contains("[`/1–9/0] enters 0/10–90/100%"));
         assert!(screen.contains("Ctrl+Shift+S save as"));
+        assert!(screen.contains("Ctrl+N new project"));
         assert!(screen.contains("o audition"));
         assert!(screen.contains("y delay division"));
         assert!(screen.contains("filter envelope"));
@@ -5271,6 +5351,7 @@ mod tests {
         );
         assert_eq!(mode_name(&Mode::Error("bad".into())), "Error dialog");
         assert_eq!(mode_name(&Mode::Help), "Help");
+        assert_eq!(mode_name(&Mode::NewConfirm), "Unsaved confirmation");
         assert_eq!(
             mode_name(&Mode::LfoEdit {
                 parameter: ParameterId::Cutoff,
@@ -5282,6 +5363,33 @@ mod tests {
             mode_name(&Mode::TrackLengthInput(String::new())),
             "Track length input"
         );
+    }
+
+    #[test]
+    fn new_project_requests_confirmation_only_when_dirty() {
+        let mut app = App::new(Project::new(), None);
+        assert!(request_new_project(&mut app));
+        assert_eq!(app.mode, Mode::Navigation);
+
+        app.editor
+            .edit(None, |project| {
+                project.tracks[0].muted = !project.tracks[0].muted;
+                Ok(())
+            })
+            .unwrap();
+        assert!(!request_new_project(&mut app));
+        assert_eq!(app.mode, Mode::NewConfirm);
+    }
+
+    #[test]
+    fn new_project_confirmation_renders_save_discard_and_cancel() {
+        let mut app = App::new(Project::new(), None);
+        app.mode = Mode::NewConfirm;
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("New project"));
+        assert!(screen.contains("Save [S]"));
+        assert!(screen.contains("Discard [D]"));
+        assert!(screen.contains("Cancel [Esc]"));
     }
 
     #[test]
