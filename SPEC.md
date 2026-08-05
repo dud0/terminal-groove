@@ -300,14 +300,14 @@ The application uses ordinary portable terminal press events. It must not requir
 | Pattern dialog | `N` / `D` | Insert an empty pattern / duplicate the cursor pattern |
 | Pattern dialog | `C` / `X` / `V` | Copy / cut / paste after the cursor |
 | Pattern dialog | `Delete` | Remove the cursor pattern, resetting the final pattern instead |
-| Anywhere | `o` | Audition selected track/step without editing |
+| Track | `o` | Audition selected track/step without editing |
 | Anywhere | `Ctrl+S` | Save, prompting if no current path exists |
 | Anywhere | `Ctrl+Shift+S` | Save as |
 | Anywhere | `Ctrl+O` | Open project |
 | Anywhere | `Ctrl+Q` | Quit, with dirty confirmation |
 | Anywhere | `Ctrl+Z` | Undo |
 | Anywhere | `Ctrl+Y` | Redo |
-| Anywhere | `?` | Toggle full help overlay |
+| Navigation, parameter, LFO, or Chord-shape editor | `?` | Open the full help overlay |
 | Track | `p` | Toggle visible `BASE`/`LOCK` scope |
 | Track | `Shift+Left` / `Shift+Right` | Move to the previous/next 16-step bank |
 | Track | `PageUp` / `PageDown` | Move to the previous/next step while editing a parameter |

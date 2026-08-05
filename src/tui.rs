@@ -30,6 +30,7 @@ use std::{
 };
 
 const DIRECT_PARAMETER_RAMP: Duration = Duration::from_millis(30);
+const DIRECT_PERCENTAGE_HINT: &str = "[`/1–9/0] 0/10–90/100%";
 
 struct TerminalGuard;
 impl TerminalGuard {
@@ -1020,7 +1021,7 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
                 return Ok(true);
             }
             if let Some(value) = crate::reducer::percentage_key(c) {
-                if !parameter.is_waveform() && !parameter.is_chorus() {
+                if parameter_supports_direct_percentage(parameter) {
                     set_parameter(
                         a,
                         audio,
@@ -1059,6 +1060,13 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
         }
         _ => Ok(true),
     }
+}
+
+fn parameter_supports_direct_percentage(parameter: ParameterId) -> bool {
+    !matches!(
+        parameter,
+        ParameterId::Waveform | ParameterId::Chorus | ParameterId::Spread
+    )
 }
 
 fn parameter_edit_passthrough(key: KeyCode) -> bool {
@@ -1897,6 +1905,13 @@ fn mode_name(mode: &Mode) -> String {
     }
 }
 
+fn help_available(mode: &Mode) -> bool {
+    matches!(
+        mode,
+        Mode::Navigation | Mode::ParameterEdit(_) | Mode::LfoEdit { .. } | Mode::ChordEdit { .. }
+    )
+}
+
 fn track_label(t: &crate::model::Track) -> String {
     if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
         format!("{} O{}", t.name, t.input_octave.unwrap_or(3))
@@ -2472,9 +2487,9 @@ const GLOBAL_IDS: [GlobalParameterId; 8] = [
 fn global_display_name(id: GlobalParameterId) -> &'static str {
     match id {
         GlobalParameterId::Tempo => "Tempo",
-        GlobalParameterId::DelayDivision => "Delay",
+        GlobalParameterId::DelayDivision => "Delay div.",
         GlobalParameterId::DelayFeedback => "Feedback",
-        GlobalParameterId::ReverbTime => "Reverb",
+        GlobalParameterId::ReverbTime => "Reverb time",
         GlobalParameterId::ReverbTone => "Tone",
         GlobalParameterId::ReverbPreDelay => "Pre-delay",
         GlobalParameterId::Key => "Key",
@@ -2862,10 +2877,15 @@ fn draw(f: &mut ratatui::Frame, a: &App, audio: &Audio) {
 fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     let area = f.area();
     if area.width < 120 || area.height < 34 {
+        let help_hint = if help_available(&a.mode) {
+            "  [?] Help"
+        } else {
+            ""
+        };
         f.render_widget(
             Paragraph::new(format!(
-                "terminal-groove needs 120x34\nCurrent: {}x{}\nCtrl+Q quit  ? help",
-                area.width, area.height
+                "terminal-groove needs 120x34\nCurrent: {}x{}\n[Ctrl+Q] Quit{help_hint}",
+                area.width, area.height,
             ))
             .block(Block::bordered().title("Terminal too small")),
             area,
@@ -2918,7 +2938,14 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             Span::raw("  [Ctrl+P] Patterns"),
             Span::raw("  [Ctrl+S] Save [Ctrl+O] Open"),
         ]),
-        Line::from("[Space] Play/Pause  [.] Stop  [Ctrl+Z/Y] Undo/Redo  [Ctrl+Q] Quit  [?] Help"),
+        Line::from(format!(
+            "[Space] Play/Pause  [.] Stop  [Ctrl+Z] Undo  [Ctrl+Y] Redo  [Ctrl+Q] Quit{}",
+            if help_available(&a.mode) {
+                "  [?] Help"
+            } else {
+                ""
+            }
+        )),
     ];
     f.render_widget(Paragraph::new(header), chunks[0]);
     let g = &a.editor.project.globals;
@@ -3087,13 +3114,27 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     let mut status_lines = vec![mode_line];
     if let Mode::ParameterEdit(parameter) = a.mode {
         let track = a.row.saturating_sub(1);
+        let kind = a.editor.project.tracks[track].kind;
+        let percentage_hint = parameter_supports_direct_percentage(parameter)
+            .then_some(format!("  {DIRECT_PERCENTAGE_HINT}"))
+            .unwrap_or_default();
+        let lfo_hint = if parameter.supports_lfo(kind) {
+            "  [Shift+L] LFO"
+        } else {
+            ""
+        };
+        let lock_hint = if a.scope == Scope::Lock {
+            "  [Backspace/Del] remove lock"
+        } else {
+            ""
+        };
         status_lines.push(Line::from(format!(
-            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..6] track  [0-9] set percentage  [Shift+L] LFO  [Enter/Esc] finish  [Del] clear lock",
-            physical_parameter_readout(a, track, a.step, parameter)
+            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..6] track{percentage_hint}{lfo_hint}  [Enter/Esc] finish{lock_hint}",
+            physical_parameter_readout(a, track, a.step, parameter),
         )));
     } else if matches!(a.mode, Mode::LfoEdit { .. }) {
         status_lines.push(Line::from(
-            "Track-level LFO · [←/→] field  [↑/↓] adjust  [0-9] set rate/depth  [Del] remove  [Enter/Esc] finish",
+            "Track-level LFO · [←/→] field  [↑/↓] adjust  [Shift+↑/↓] ±10% fields  [`/1–9/0] free rate/depth  [Backspace/Del] remove  [Enter/Esc] finish",
         ));
     } else if matches!(a.mode, Mode::ChordEdit { .. }) {
         status_lines.push(Line::from(
@@ -3114,7 +3155,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; arrows, Home, and End move the cursor. Enter selects or queues it. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, n pan, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus, e spread, C shape.\nGlobal: t tempo, y delay, f feedback, r reverb time, b tone, p pre-delay, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: Shift+A toggles accent; Shift+G toggles Bass slide.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nTracks: l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C shape.\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or Chord-shape editing. Esc or ? closes Help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3145,7 +3186,9 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Tempo numeric input",
-            &format!("Tempo: {input}_\nEnter confirms  Esc cancels  ↑/↓ adjusts current tempo"),
+            &format!(
+                "Tempo: {input}_\nEnter confirms  Esc closes (keeps arrow changes)  ↑/↓ adjusts current tempo"
+            ),
         ),
         Mode::TrackLengthInput(input) => {
             let current = a.editor.project.tracks[a.row - 1].steps.len();
@@ -3303,7 +3346,7 @@ fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
     let help_y = inner.y + 2.min(inner.height.saturating_sub(1));
     f.render_widget(
         Paragraph::new(vec![
-            Line::from("▶ playing  ⏭ next  ·  ←/→ Home End  ·  Enter queue"),
+            Line::from("▶ playing  ⏭ next  ·  ←/→ Home End  ·  Enter select (queue while playing)"),
             Line::from(
                 "N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close",
             ),
@@ -3364,8 +3407,8 @@ fn render_lfo_popup(
     };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from("[←/→] select   [↑/↓] adjust   [Shift+↑/↓] ±10"),
-            Line::from("[0-9] set free rate/depth   [Del] remove   [Enter/Esc] close"),
+            Line::from("[←/→] select   [↑/↓] adjust   [Shift+↑/↓] ±10% fields"),
+            Line::from("[`/1–9/0] free rate/depth   [Backspace/Del] remove   [Enter/Esc] close"),
         ])
         .alignment(Alignment::Center),
         help_area,
@@ -3806,6 +3849,7 @@ mod tests {
         assert!(screen.contains("Patterns (3)"));
         assert!(screen.contains("1") && screen.contains("2") && screen.contains("3"));
         assert!(screen.contains("▶") && screen.contains("⏭"));
+        assert!(screen.contains("Enter select (queue while playing)"));
         assert!(!screen.contains("P001"));
         assert!(!screen.contains("used"));
     }
@@ -3859,6 +3903,30 @@ mod tests {
         assert!(parameter_edit_passthrough(KeyCode::Char('o')));
         assert!(parameter_edit_passthrough(KeyCode::Char('A')));
         assert!(parameter_edit_passthrough(KeyCode::Char('G')));
+    }
+
+    #[test]
+    fn direct_percentage_entry_excludes_discrete_parameters() {
+        assert!(parameter_supports_direct_percentage(ParameterId::Level));
+        assert!(!parameter_supports_direct_percentage(ParameterId::Waveform));
+        assert!(!parameter_supports_direct_percentage(ParameterId::Chorus));
+        assert!(!parameter_supports_direct_percentage(ParameterId::Spread));
+    }
+
+    #[test]
+    fn help_hint_is_limited_to_supported_modes() {
+        assert!(help_available(&Mode::Navigation));
+        assert!(help_available(&Mode::ParameterEdit(ParameterId::Level)));
+        assert!(help_available(&Mode::LfoEdit {
+            parameter: ParameterId::Level,
+            field: LfoField::Depth,
+        }));
+        assert!(help_available(&Mode::ChordEdit {
+            shape: ChordShape::TriadRoot,
+        }));
+        assert!(!help_available(&Mode::PatternDialog));
+        assert!(!help_available(&Mode::GlobalEdit(GlobalParameterId::Key)));
+        assert!(!help_available(&Mode::TempoInput(String::new())));
     }
 
     #[test]
@@ -3965,6 +4033,50 @@ mod tests {
         let screen = rendered(&app, 119, 34);
         assert!(screen.contains("terminal-groove needs 120x34"));
         assert!(screen.contains("Current: 119x34"));
+        assert!(screen.contains("[?] Help"));
+
+        let mut modal = App::new(Project::new(), None);
+        modal.mode = Mode::TempoInput(String::new());
+        let modal_screen = rendered(&modal, 119, 34);
+        assert!(!modal_screen.contains("[?] Help"));
+    }
+
+    #[test]
+    fn help_overlay_lists_contextual_shortcuts_and_direct_percentage_mapping() {
+        let mut app = App::new(Project::new(), None);
+        app.mode = Mode::Help;
+        let screen = rendered(&app, 240, 60);
+
+        assert!(screen.contains("Left/Right, Home, and End"));
+        assert!(screen.contains("Enter selects while stopped or queues while playing"));
+        assert!(screen.contains("Pitched tracks: 1–8 inserts notes"));
+        assert!(screen.contains("[`/1–9/0] enters 0/10–90/100%"));
+        assert!(screen.contains("Ctrl+Shift+S save as"));
+        assert!(screen.contains("o audition"));
+        assert!(screen.contains("y delay division"));
+        assert!(screen.contains("filter envelope"));
+    }
+
+    #[test]
+    fn parameter_editor_hints_match_scope_and_parameter_capabilities() {
+        let mut app = App::new(Project::new(), None);
+        app.row = 1;
+        app.mode = Mode::ParameterEdit(ParameterId::Level);
+        let base = rendered(&app, 220, 34);
+        assert!(base.contains(DIRECT_PERCENTAGE_HINT));
+        assert!(base.contains("[Shift+L] LFO"));
+        assert!(!base.contains("remove lock"));
+
+        app.scope = Scope::Lock;
+        let locked = rendered(&app, 220, 34);
+        assert!(locked.contains("[Backspace/Del] remove lock"));
+
+        app.row = 5;
+        app.scope = Scope::Base;
+        app.mode = Mode::ParameterEdit(ParameterId::Spread);
+        let spread = rendered(&app, 220, 34);
+        assert!(!spread.contains(DIRECT_PERCENTAGE_HINT));
+        assert!(!spread.contains("[Shift+L] LFO"));
     }
 
     #[test]
