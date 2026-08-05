@@ -1152,6 +1152,19 @@ fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool>
         Some(StepEvent::Tie { .. })
     );
     match k.code {
+        KeyCode::Char('o') => {
+            if audio
+                .send(AudioCommand::Audition {
+                    track: (a.row - 1) as u8,
+                    step: a.step as u8,
+                })
+                .is_ok()
+            {
+                a.status = "Auditioning selection".into()
+            } else {
+                a.status = "Audio command queue full".into()
+            }
+        }
         KeyCode::Enter | KeyCode::Esc | KeyCode::Char('C') => {
             a.mode = Mode::Navigation;
             a.status = "Chord trigger editing finished".into();
