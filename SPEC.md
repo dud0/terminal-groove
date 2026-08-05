@@ -40,7 +40,7 @@ All sound is synthesized in real time. The application contains no audio samples
 - Samples, sample import, or sample playback
 - MIDI input, output, or clock sync
 - WAV or other audio export
-- Pattern chaining or song mode
+- Song-mode playback or song-editing UI. The project retains a persisted song reference list for forward-compatible project data, but the MVP does not play or edit that list.
 - Time-signature changes
 - Microtiming or continuously variable event velocity
 - Polyphonic note entry outside the fixed Chord shape mapping, or oscillator detune
@@ -59,7 +59,7 @@ All sound is synthesized in real time. The application contains no audio samples
 - Starting from the reset state triggers step 1 of every track immediately.
 - `Space` while playing pauses before the next unplayed step. Active synth gates are released, while delay and reverb tails continue.
 - `Space` while paused resumes by triggering the next unplayed step immediately and establishing a new timing origin.
-- `.` stops playback, resets the next step to step 1, releases all voices, and clears delay and reverb state.
+- `.` stops playback, resets the active pattern and every track's next step to step 1, releases all voices, and clears delay and reverb state.
 - The edit cursor is independent from the playhead.
 - Tempo changes become active at the next step boundary without skipping or repeating a step.
 - Changing a track length while playing preserves its next local step when that step remains in range; otherwise that track wraps to step 1. Other tracks do not restart.
@@ -69,6 +69,7 @@ All sound is synthesized in real time. The application contains no audio samples
 ### 2.2 Patterns
 
 - A project contains 1 through 100 dynamic patterns, numbered from 1. Each pattern owns the six track sequences; instrument, mixer, global, and effect settings are shared. New projects contain one empty pattern.
+- The MVP plays patterns directly and does not play the persisted `song` reference list. Pattern edits keep that list's one-based references valid where possible.
 - `Ctrl+P` opens a horizontally organized pattern dialog. Left/right, `Home`, and `End` move a visual cursor without changing playback. `Enter` selects the cursor pattern while stopped or queues it for the next bar while playing, then closes the dialog. `N` inserts an empty pattern after the cursor, `D` duplicates it, `C` copies it, `X` cuts it, `V` pastes the copied pattern after the cursor, and `Delete` removes it. The final pattern cannot be removed and is reset to empty.
 - The dialog marks the currently playing pattern with `▶`, the next queued pattern with `⏭`, and empty patterns with a muted style. The pattern strip scrolls horizontally when necessary.
 - Pattern insertion, deletion, and replacement rebase active and queued playback indexes so queued playback continues to refer to the same pattern where possible.
@@ -431,10 +432,12 @@ When the terminal is smaller than `120x34`, replace the main layout with the cur
 The current mode is always named on screen. Modes are:
 
 - Navigation
-- Parameter edit
+- Pattern dialog
+- Parameter, global, LFO, Chord, trigger, and swing editors
 - Tempo numeric input
+- Track-length input
 - File-path input
-- Unsaved-changes confirmation
+- Open, new-project, and quit confirmations
 - Error dialog
 - Help
 
@@ -507,9 +510,10 @@ The top-level object is:
 - `reverb_send`: integer 0–100
 - An `instrument` object with the applicable base values
 - A required sparse `lfos` object containing compatible per-destination assignments
-- A `steps` array containing 1 through 64 elements; its array length is the track length
 - Bass, Chord, and Lead additionally store `input_degree` and `input_octave`. Chord tracks may store `input_chord_shape` and `input_chord_arpeggio`; omitted values mean `1-3-5` and disabled/Up/`1/16`.
 - Every track may store `input_accent`; omitted means `false`. It is the persisted accent inherited by newly entered triggers and notes and by empty-step audition.
+
+Top-level tracks contain shared configuration only. Sequence data is stored under `patterns[].tracks[].steps`; each pattern track contains 1 through 64 steps, and its array length is the track length.
 
 Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. `spread` accepts `off`, `narrow`, or `wide`. Lead stores the same percentage controls except `chorus` and `spread`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
 
@@ -670,7 +674,7 @@ Linux setup documentation must include Rust installation and:
 - Debian/Ubuntu: `libasound2-dev`
 - Fedora: `alsa-lib-devel`
 
-The current development workspace does not yet have Rust or the ALSA development package installed.
+Install Rust and the ALSA development package before building on a new Linux system. The repository's current toolchain and dependency versions are listed above and are verified by the build and test commands in `AGENTS.md`.
 
 ### 10.2 Package organization
 
@@ -690,10 +694,10 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 
 - The main thread owns terminal input, rendering, dialogs, undo/redo, file I/O, and the canonical editable project.
 - CPAL's audio callback owns transport timing, a mirrored engine project, voices, filters, effects, and sample conversion.
-- UI-to-audio communication uses a preallocated bounded SPSC queue containing fixed-size typed mutations and transport/audition commands.
+- UI-to-audio communication uses a preallocated bounded SPSC queue of typed commands. Transport, pattern selection, and audition commands are small; project edits are converted on the main thread into immutable boxed project snapshots before being queued.
 - Independent per-track playheads and transport telemetry return through atomics or a second bounded channel where intermediate redundant playhead updates may be dropped.
-- Project load happens while transport is stopped and may rebuild the audio engine outside the callback.
-- The callback must not allocate, free heap-backed messages, lock a mutex, block, access the filesystem, format text, or log.
+- Project files are parsed and validated on the main thread. Opening or creating a project queues a stop followed by its immutable snapshot; the callback applies the snapshot at a command boundary and reuses its preallocated audio state.
+- The callback must not allocate or free heap-backed project snapshots, lock a mutex, block, access the filesystem, format text, or log. Replaced snapshots are returned through a bounded retirement queue and reclaimed on the main thread.
 - Noise generators use preallocated deterministic PRNG state local to each voice.
 - Queue exhaustion is handled on the UI side before committing the model change.
 - CPAL stream errors are forwarded to the UI through a non-blocking error path and shown prominently.
