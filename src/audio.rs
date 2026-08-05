@@ -892,7 +892,22 @@ impl Renderer {
             *slot = Some(action);
         }
     }
+    fn prune_scheduled_actions(&mut self) {
+        for action in &mut self.scheduled {
+            let Some(pending) = *action else { continue };
+            let valid = self
+                .project
+                .patterns
+                .get(self.active_pattern)
+                .and_then(|pattern| pattern.tracks.get(usize::from(pending.track)))
+                .is_some_and(|sequence| usize::from(pending.step) < sequence.step_count as usize);
+            if !valid {
+                *action = None;
+            }
+        }
+    }
     fn advance_scheduled(&mut self) {
+        self.prune_scheduled_actions();
         let mut ready = [None; 32];
         for (index, action) in self.scheduled.iter_mut().enumerate() {
             let Some(mut pending) = *action else { continue };
@@ -1034,6 +1049,7 @@ impl Renderer {
         debug_assert!(self.retire.push(old).is_ok());
         self.active_pattern = active_pattern;
         self.queued_pattern = queued_pattern;
+        self.prune_scheduled_actions();
         self.status
             .active_pattern
             .store(active_pattern as u8, Ordering::Release);
@@ -1975,7 +1991,7 @@ impl Renderer {
                     let horizon = (step_samples + next_delay).saturating_sub(delay);
                     for hit in 1..count {
                         self.enqueue(ScheduledTrackAction {
-                            remaining: horizon * u32::from(hit) / u32::from(count),
+                            remaining: delay + horizon * u32::from(hit) / u32::from(count),
                             track: track as u8,
                             step: step as u8,
                             retrigger: true,
@@ -2298,7 +2314,9 @@ impl Renderer {
         {
             self.boundary(global_step)
         }
-        self.advance_scheduled();
+        if self.playing {
+            self.advance_scheduled();
+        }
         self.advance_chord_arpeggios();
         let mut dry_l = 0.0;
         let mut dry_r = 0.0;
@@ -2631,6 +2649,116 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn scheduled_actions_for_removed_steps_are_discarded_after_resize() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps.resize(4, None);
+        project.patterns[0].tracks[0].steps[3] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 4,
+            locks: Default::default(),
+        });
+        project.tracks[0].swing = Percent::new(75).unwrap();
+
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.next_steps[0] = 3;
+        renderer.boundary(1);
+        assert!(renderer.scheduled.iter().any(|action| {
+            matches!(action, Some(action) if action.track == 0 && action.step == 3)
+        }));
+
+        project.patterns[0].tracks[0].steps.resize(3, None);
+        renderer.command(Audio::snapshot(&project));
+        assert!(!renderer.scheduled.iter().any(|action| {
+            matches!(action, Some(action) if action.track == 0 && action.step == 3)
+        }));
+
+        for _ in 0..1_000 {
+            renderer.next();
+        }
+    }
+
+    #[test]
+    fn swung_retriggers_are_offset_from_the_swung_start() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 2,
+            locks: Default::default(),
+        });
+        project.tracks[0].swing = Percent::new(75).unwrap();
+
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary(1);
+
+        let track_actions: Vec<_> = renderer
+            .scheduled
+            .iter()
+            .flatten()
+            .filter(|action| action.track == 0)
+            .collect();
+        assert_eq!(track_actions.len(), 2);
+        let initial = track_actions
+            .iter()
+            .find(|action| !action.retrigger)
+            .unwrap();
+        let retrigger = track_actions
+            .iter()
+            .find(|action| action.retrigger)
+            .unwrap();
+        assert_eq!(initial.remaining, 749);
+        assert_eq!(retrigger.remaining, 874);
+        assert!(retrigger.remaining > initial.remaining);
+    }
+
+    #[test]
+    fn scheduled_actions_freeze_while_paused() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            slide: false,
+            condition: Default::default(),
+            retrigger_count: 2,
+            locks: Default::default(),
+        });
+        project.tracks[3].swing = Percent::new(75).unwrap();
+
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary(1);
+        let remaining_before = renderer
+            .scheduled
+            .iter()
+            .find(|action| matches!(action, Some(action) if action.track == 3 && !action.retrigger))
+            .and_then(|action| action.as_ref())
+            .unwrap()
+            .remaining;
+
+        renderer.command(AudioCommand::PlayPause);
+        for _ in 0..1_000 {
+            renderer.next();
+        }
+
+        let remaining_after = renderer
+            .scheduled
+            .iter()
+            .find(|action| matches!(action, Some(action) if action.track == 3 && !action.retrigger))
+            .and_then(|action| action.as_ref())
+            .unwrap()
+            .remaining;
+        assert_eq!(remaining_after, remaining_before);
+        assert!(!renderer.synth[0].active);
     }
 
     #[test]
