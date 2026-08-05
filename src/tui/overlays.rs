@@ -707,6 +707,19 @@ pub(super) fn quit_popup_rect(area: Rect) -> Rect {
     }
 }
 
+pub(super) fn tempo_popup_rect(area: Rect) -> Rect {
+    const WIDTH: u16 = 77;
+    const HEIGHT: u16 = 4;
+    let width = WIDTH.min(area.width);
+    let height = HEIGHT.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
+}
+
 pub(super) fn lfo_popup_rect(area: Rect) -> Rect {
     let width = area.width.saturating_sub(4).min(92);
     let height = area.height.saturating_sub(4).min(20);

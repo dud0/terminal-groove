@@ -382,10 +382,10 @@ Adding or replacing a trigger or note automatically auditions it while transport
 
 At `120x34` or larger, the normal screen contains:
 
-1. Header: application name, project filename or `Untitled`, dirty marker, audio device/status, transport state, and tempo.
-2. Global row: the six global controls, current values, and their local shortcuts.
+1. Header: one metadata-only line containing the application name, project filename or `Untitled`, dirty marker, audio device/status, transport state, pattern state, and tempo. Persistent command shortcut hints are not shown there; the `?` overlay contains the complete key map.
+2. Global row: all eight global controls, current values, and their local shortcuts.
 3. Six variable-length sequencer track blocks: track name, mute state, absolute step range, and compact fixed-width step cells. The displayed range communicates the track length.
-4. A selected-control panel: vertical parameter faders for the selected track, or six global detail cards when the global row is selected.
+4. A selected-control panel: vertical parameter faders for the selected track, or eight titled global detail cards when the global row is selected. The global cards show a tempo numeric readout, delay-division/key/scale selectors, and faders for delay feedback, reverb time, reverb tone, and reverb pre-delay. Global faders use their model ranges (`0–95%`, `0.2–10.0 s`, `0–100%`, and `0–200 ms`) and show exact values with units beside the fader; every card retains its local shortcut.
 5. Status line: current mode, last successful operation or actionable error, and active-editor guidance. While a track parameter is being edited in `LOCK` scope, the selected-control panel and status line prominently show `LOCK PARAMETER EDITING` using contrasting styling.
 
 Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows event accent, the empty-step input accent default, inherited accent/source on ties, and Bass slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, and envelope groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.

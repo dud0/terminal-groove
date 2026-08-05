@@ -32,7 +32,10 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 #[cfg(test)]
 #[allow(unused_imports)]
-use ratatui::{layout::Rect, style::Color};
+use ratatui::{
+    layout::Rect,
+    style::{Color, Modifier},
+};
 
 const DIRECT_PARAMETER_RAMP: Duration = Duration::from_millis(30);
 const DIRECT_PERCENTAGE_HINT: &str = "[`/1–9/0] 0/10–90/100%";
@@ -92,17 +95,18 @@ use overlays::{
     lfo_inactive_style, lfo_popup_rect, pattern_is_empty, popup, popup_at, popup_rect,
     quit_popup_rect, render_chord_control, render_chord_popup, render_generator_popup,
     render_lfo_control, render_lfo_fader, render_lfo_popup, render_lfo_selector, render_lfo_switch,
-    render_pattern_popup, render_trigger_popup,
+    render_pattern_popup, render_trigger_popup, tempo_popup_rect,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
 use render::{
     GLOBAL_IDS, ParameterDescriptor, ParameterGroup, ValueOrigin, articulation_title,
     displayed_parameter, draw_with_device, fader_segments, global_control_text,
-    global_display_name, global_shortcut_text, global_value_text, help_available,
-    lock_has_parameter, mode_name, parameter_descriptors, physical_parameter_readout,
-    render_centered, render_global_cards, render_parameter_bank, render_pitch_lfo_card, scope_name,
-    selected_accent, selected_chord_shape, step_cell, track_label,
+    global_display_name, global_fader_segments, global_shortcut_text, global_value_text,
+    help_available, lock_has_parameter, mode_name, parameter_descriptors,
+    physical_parameter_readout, render_centered, render_global_cards, render_parameter_bank,
+    render_pitch_lfo_card, scope_name, selected_accent, selected_chord_shape, step_cell,
+    track_label,
 };
 
 pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
@@ -489,6 +493,31 @@ mod tests {
     }
 
     #[test]
+    fn global_faders_normalize_to_their_model_bounds() {
+        let mut globals = Project::new().globals;
+        globals.reverb_time_seconds = 0.2;
+        assert_eq!(
+            global_fader_segments(&globals, GlobalParameterId::ReverbTime),
+            Some(0)
+        );
+        globals.reverb_time_seconds = 10.0;
+        assert_eq!(
+            global_fader_segments(&globals, GlobalParameterId::ReverbTime),
+            Some(10)
+        );
+        globals.reverb_pre_delay_ms = 0;
+        assert_eq!(
+            global_fader_segments(&globals, GlobalParameterId::ReverbPreDelay),
+            Some(0)
+        );
+        globals.reverb_pre_delay_ms = 200;
+        assert_eq!(
+            global_fader_segments(&globals, GlobalParameterId::ReverbPreDelay),
+            Some(10)
+        );
+    }
+
+    #[test]
     fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
         let backend = TestBackend::new(120, 34);
         let mut project = Project::new();
@@ -570,9 +599,20 @@ mod tests {
         assert!(screen.contains("Ctrl+N new project"));
         assert!(screen.contains("o audition"));
         assert!(screen.contains("y delay division"));
+        assert!(screen.contains("Global: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale."));
         assert!(screen.contains("filter envelope"));
         assert!(screen.contains("Events: A toggles event accent or empty-step input default"));
         assert!(!screen.contains("Events: Shift+A toggles accent"));
+    }
+
+    #[test]
+    fn metadata_header_is_one_line_without_persistent_shortcut_hints() {
+        let app = App::new(Project::new(), None);
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("terminal-groove"));
+        assert!(screen.contains("audio: null"));
+        assert!(!screen.contains("[Ctrl+P] Patterns"));
+        assert!(!screen.contains("[Space] Play/Pause"));
     }
 
     #[test]
@@ -709,6 +749,14 @@ mod tests {
         assert_eq!(
             quit_popup_rect(Rect::new(0, 0, 120, 34)),
             Rect::new(41, 15, 37, 3)
+        );
+    }
+
+    #[test]
+    fn tempo_popup_fits_its_content() {
+        assert_eq!(
+            tempo_popup_rect(Rect::new(0, 0, 120, 34)),
+            Rect::new(21, 15, 77, 4)
         );
     }
 
@@ -969,9 +1017,33 @@ mod tests {
     fn global_cards_show_all_local_shortcuts() {
         let app = App::new(Project::new(), None);
         let screen = rendered(&app, 120, 34);
-        for key in ["[t]", "[y]", "[f]", "[r]", "[k]", "[s]"] {
+        for key in ["[t]", "[y]", "[f]", "[r]", "[b]", "[p]", "[k]", "[s]"] {
             assert!(screen.contains(key), "missing {key}");
         }
+        for value in ["Tempo", "1/8", "30%", "2.5 s", "40%", "20 ms", "C", "Major"] {
+            assert!(screen.contains(value), "missing {value}");
+        }
+        assert!(screen.contains("███"));
+        assert!(screen.contains("● 1/8"));
+        assert!(screen.contains("● C"));
+        assert!(screen.contains("● Major"));
+
+        let backend = TestBackend::new(120, 34);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_with_device(frame, &app, "null"))
+            .unwrap();
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .enumerate()
+                .any(|(index, cell)| {
+                    index / 120 >= 14 && cell.modifier.contains(Modifier::REVERSED)
+                })
+        );
     }
 
     #[test]

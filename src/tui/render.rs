@@ -1,6 +1,6 @@
 use super::overlays::{
     popup, popup_at, quit_popup_rect, render_chord_popup, render_generator_popup, render_lfo_popup,
-    render_pattern_popup, render_trigger_popup,
+    render_lfo_selector, render_pattern_popup, render_trigger_popup, tempo_popup_rect,
 };
 use super::{
     controller::{global_name, resolved_path},
@@ -11,8 +11,9 @@ use crate::tui::DIRECT_PERCENTAGE_HINT;
 use crate::{
     audio::Audio,
     model::{
-        ChordShape, ChorusMode, GlobalParameterId, ParameterId, ParameterValue, STEP_BANK_SIZE,
-        STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
+        ChordShape, ChorusMode, DelayDivision, GlobalParameterId, ParameterId, ParameterValue,
+        PitchClass, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
+        TriggerCondition, Waveform,
     },
     reducer::Scope,
 };
@@ -706,6 +707,80 @@ pub(super) fn global_value_text(g: &crate::model::Globals, id: GlobalParameterId
     }
 }
 
+fn global_fader_value(g: &crate::model::Globals, id: GlobalParameterId) -> Option<f32> {
+    match id {
+        GlobalParameterId::DelayFeedback => Some(g.delay_feedback.get() as f32),
+        GlobalParameterId::ReverbTime => Some(g.reverb_time_seconds),
+        GlobalParameterId::ReverbTone => Some(g.reverb_tone.get() as f32),
+        GlobalParameterId::ReverbPreDelay => Some(g.reverb_pre_delay_ms as f32),
+        GlobalParameterId::Tempo
+        | GlobalParameterId::DelayDivision
+        | GlobalParameterId::Key
+        | GlobalParameterId::Scale => None,
+    }
+}
+
+fn global_fader_bounds(id: GlobalParameterId) -> Option<(f32, f32)> {
+    match id {
+        GlobalParameterId::DelayFeedback => Some((0.0, 95.0)),
+        GlobalParameterId::ReverbTime => Some((0.2, 10.0)),
+        GlobalParameterId::ReverbTone => Some((0.0, 100.0)),
+        GlobalParameterId::ReverbPreDelay => Some((0.0, 200.0)),
+        GlobalParameterId::Tempo
+        | GlobalParameterId::DelayDivision
+        | GlobalParameterId::Key
+        | GlobalParameterId::Scale => None,
+    }
+}
+
+pub(super) fn global_fader_segments(
+    g: &crate::model::Globals,
+    id: GlobalParameterId,
+) -> Option<usize> {
+    let value = global_fader_value(g, id)?;
+    let (minimum, maximum) = global_fader_bounds(id)?;
+    let normalized = if value.is_finite() {
+        ((value - minimum) / (maximum - minimum)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    Some((normalized * 10.0).round() as usize)
+}
+
+fn global_selector_data(
+    g: &crate::model::Globals,
+    id: GlobalParameterId,
+) -> Option<(Vec<String>, usize)> {
+    match id {
+        GlobalParameterId::DelayDivision => Some((
+            DelayDivision::ALL.iter().map(ToString::to_string).collect(),
+            DelayDivision::ALL
+                .iter()
+                .position(|division| *division == g.delay_division)
+                .unwrap_or_default(),
+        )),
+        GlobalParameterId::Key => Some((
+            PitchClass::ALL.iter().map(ToString::to_string).collect(),
+            PitchClass::ALL
+                .iter()
+                .position(|key| *key == g.key)
+                .unwrap_or_default(),
+        )),
+        GlobalParameterId::Scale => Some((
+            [Scale::Major, Scale::NaturalMinor]
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            usize::from(g.scale == Scale::NaturalMinor),
+        )),
+        GlobalParameterId::Tempo
+        | GlobalParameterId::DelayFeedback
+        | GlobalParameterId::ReverbTime
+        | GlobalParameterId::ReverbTone
+        | GlobalParameterId::ReverbPreDelay => None,
+    }
+}
+
 pub(super) fn global_control_text(g: &crate::model::Globals) -> Vec<String> {
     GLOBAL_IDS
         .iter()
@@ -721,24 +796,21 @@ pub(super) fn global_control_text(g: &crate::model::Globals) -> Vec<String> {
 }
 
 pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
-    let panel = Block::bordered().title("Global controls  [←→] select  [Enter] edit");
+    let panel = Block::bordered().title("Global detail");
     let inner = panel.inner(area);
     f.render_widget(panel, area);
-    let card_width = (inner.width / GLOBAL_IDS.len() as u16).min(18);
-    let cards_width = card_width.saturating_mul(GLOBAL_IDS.len() as u16);
-    let cards = Rect {
-        x: inner.x + inner.width.saturating_sub(cards_width) / 2,
-        y: inner.y + inner.height.saturating_sub(7) / 2,
-        width: cards_width,
-        height: 7.min(inner.height),
-    };
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
     let g = &a.editor.project.globals;
     for (index, id) in GLOBAL_IDS.iter().enumerate() {
+        let x = inner.x + inner.width * index as u16 / GLOBAL_IDS.len() as u16;
+        let next_x = inner.x + inner.width * (index + 1) as u16 / GLOBAL_IDS.len() as u16;
         let slot = Rect {
-            x: cards.x + card_width * index as u16,
-            y: cards.y,
-            width: card_width,
-            height: cards.height,
+            x,
+            y: inner.y,
+            width: next_x.saturating_sub(x),
+            height: inner.height,
         };
         let active = a.row == 0 && a.global == index;
         let block = if active {
@@ -749,26 +821,86 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 )
+                .title_style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .reversed()
+                        .add_modifier(Modifier::BOLD),
+                )
+                .title(global_display_name(*id))
                 .style(Style::default().reversed())
         } else {
-            Block::bordered()
+            Block::bordered().title(global_display_name(*id))
         };
         let content = block.inner(slot);
         f.render_widget(block, slot);
         let style = if active {
-            Style::default().reversed().add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::LightCyan)
+                .reversed()
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD)
         };
-        let lines = vec![
-            Line::from(Span::styled(global_display_name(*id), style)),
-            Line::from(Span::styled(global_value_text(g, *id), style)),
-            Line::from(Span::styled(
-                format!("[{}]", global_shortcut_text(*id)),
+        let shortcut_area = Rect {
+            x: content.x,
+            y: content.y + content.height.saturating_sub(1),
+            width: content.width,
+            height: content.height.min(1),
+        };
+        render_centered(
+            f,
+            &format!("[{}]", global_shortcut_text(*id)),
+            shortcut_area,
+            style,
+        );
+
+        let body = Rect {
+            x: content.x,
+            y: content.y,
+            width: content.width,
+            height: content.height.saturating_sub(1),
+        };
+        if let Some(filled) = global_fader_segments(g, *id) {
+            render_centered(
+                f,
+                &global_value_text(g, *id),
+                Rect { height: 1, ..body },
                 style,
-            )),
-        ];
-        f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), content);
+            );
+            let fader_area = Rect {
+                y: body.y + 1,
+                height: body.height.saturating_sub(1),
+                ..body
+            };
+            let height = fader_area.height.min(10);
+            let start_y = fader_area.y + fader_area.height.saturating_sub(height) / 2;
+            for segment in 0..height {
+                let is_filled = usize::from(segment) >= 10usize.saturating_sub(filled);
+                let segment_style = if active || is_filled {
+                    style
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                render_centered(
+                    f,
+                    if is_filled { "███" } else { "···" },
+                    Rect {
+                        x: fader_area.x,
+                        y: start_y + segment,
+                        width: fader_area.width,
+                        height: 1,
+                    },
+                    segment_style,
+                );
+            }
+        } else if let Some((choices, selected)) = global_selector_data(g, *id) {
+            render_lfo_selector(f, body, &choices, selected, style);
+        } else {
+            render_centered(f, &global_value_text(g, *id), body, style);
+        }
     }
 }
 
@@ -1186,11 +1318,11 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         );
         return;
     }
-    let details_height = if a.row == 0 { 9 } else { 16 };
+    let details_height = if a.row == 0 { 18 } else { 16 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
+            Constraint::Length(1),
             Constraint::Length(3),
             Constraint::Min(9),
             Constraint::Length(details_height),
@@ -1216,31 +1348,19 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         a.editor.pattern() + 1,
         a.editor.project.patterns.len()
     );
-    let header = vec![
-        Line::from(vec![
-            Span::styled(
-                " terminal-groove ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(
-                " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
-                device_name, a.editor.project.globals.tempo_bpm
-            )),
-            Span::raw("  [Ctrl+P] Patterns  [g] Generate"),
-            Span::raw("  [Ctrl+N] New [Ctrl+S] Save [Ctrl+O] Open"),
-        ]),
-        Line::from(format!(
-            "[Space] Play/Pause  [.] Stop  [Ctrl+Z] Undo  [Ctrl+Y] Redo  [Ctrl+Q] Quit{}",
-            if help_available(&a.mode) {
-                "  [?] Help"
-            } else {
-                ""
-            }
+    let header = Line::from(vec![
+        Span::styled(
+            " terminal-groove ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(
+            " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
+            device_name, a.editor.project.globals.tempo_bpm
         )),
-    ];
+    ]);
     f.render_widget(Paragraph::new(header), chunks[0]);
     let g = &a.editor.project.globals;
     let globals = global_control_text(g);
@@ -1539,9 +1659,9 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 a.editor.project.tracks[a.row - 1].swing,
             ),
         ),
-        Mode::TempoInput(input) => popup(
+        Mode::TempoInput(input) => popup_at(
             f,
-            area,
+            tempo_popup_rect(area),
             "Tempo numeric input",
             &format!(
                 "Tempo: {input}_\nEnter confirms  Esc closes (keeps arrow changes)  ↑/↓ adjusts current tempo"
