@@ -22,6 +22,55 @@ use std::{
     },
 };
 
+/// Deterministic old-pattern-index to new-pattern-index transform. `u8::MAX`
+/// represents a removed index and is resolved to the nearest valid index by
+/// the receiver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PatternIndexMap {
+    forward: [u8; 100],
+}
+impl PatternIndexMap {
+    pub fn identity() -> Self {
+        Self {
+            forward: std::array::from_fn(|i| i as u8),
+        }
+    }
+    pub fn insert(after: usize) -> Self {
+        Self {
+            forward: std::array::from_fn(|i| if i > after { (i + 1) as u8 } else { i as u8 }),
+        }
+    }
+    pub fn insert_at(at: usize) -> Self {
+        Self {
+            forward: std::array::from_fn(|i| if i >= at { (i + 1) as u8 } else { i as u8 }),
+        }
+    }
+    pub fn delete(at: usize) -> Self {
+        Self {
+            forward: std::array::from_fn(|i| {
+                if i == at {
+                    u8::MAX
+                } else if i > at {
+                    (i - 1) as u8
+                } else {
+                    i as u8
+                }
+            }),
+        }
+    }
+    fn rebase(self, index: usize, next_count: usize) -> usize {
+        if next_count == 0 {
+            return 0;
+        }
+        let mapped = self.forward.get(index).copied().unwrap_or(u8::MAX);
+        if mapped == u8::MAX {
+            index.min(next_count - 1)
+        } else {
+            usize::from(mapped).min(next_count - 1)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct AudioTrack {
     level: Percent,
@@ -67,10 +116,6 @@ impl ParameterSmoothing {
 }
 impl AudioProject {
     pub fn from_project(project: &Project) -> Self {
-        Self::from_project_with_active_pattern(project, 0)
-    }
-
-    pub fn from_project_with_active_pattern(project: &Project, active_pattern: usize) -> Self {
         Self {
             globals: project.globals,
             tracks: std::array::from_fn(|i| {
@@ -92,15 +137,21 @@ impl AudioProject {
                 .patterns
                 .iter()
                 .enumerate()
-                .map(|(pattern, source)| AudioPattern {
+                .map(|(pattern_index, source)| AudioPattern {
                     tracks: std::array::from_fn(|track| {
-                        // `tracks` is the editor's current-pattern workspace. Use it
-                        // only for that pattern; all other entries come from the
-                        // dynamic pattern bank.
-                        let steps = if pattern == active_pattern {
-                            &project.tracks[track].steps
+                        let canonical = &source.tracks[track].steps;
+                        // Compatibility for direct API construction: Editor always
+                        // keeps these equal, while external callers from older API
+                        // revisions may only have filled its transient cache.
+                        let cached = &project.tracks[track].steps;
+                        let steps = if pattern_index == 0
+                            && (canonical.len() != cached.len()
+                                || (canonical.iter().all(Option::is_none)
+                                    && cached.iter().any(Option::is_some)))
+                        {
+                            cached
                         } else {
-                            &source.tracks[track].steps
+                            canonical
                         };
                         AudioSequence {
                             steps: std::array::from_fn(|s| steps.get(s).copied().flatten()),
@@ -124,6 +175,7 @@ pub enum AudioCommand {
     ReplaceProject {
         project: Box<AudioProject>,
         smoothing: ParameterSmoothing,
+        pattern_map: PatternIndexMap,
     },
     Audition {
         track: u8,
@@ -157,18 +209,26 @@ pub struct Audio {
     pub device_name: String,
     pub status: Arc<AudioStatus>,
     producer: Producer<AudioCommand>,
+    retired: Consumer<Box<AudioProject>>,
 }
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 #[error("audio command queue full")]
 pub struct QueueFull;
 impl Audio {
     pub fn send(&mut self, command: AudioCommand) -> Result<(), QueueFull> {
+        self.reap_retired();
         self.producer
             .push(command)
             .map_err(|rtrb::PushError::Full(_)| QueueFull)
     }
     pub fn available_commands(&self) -> usize {
         self.producer.slots()
+    }
+    /// Destroy snapshots on the UI thread, never from the audio callback.
+    pub fn reap_retired(&mut self) {
+        while let Ok(snapshot) = self.retired.pop() {
+            drop(snapshot);
+        }
     }
     pub fn snapshot(project: &Project) -> AudioCommand {
         Self::snapshot_for_pattern(project, 0)
@@ -188,15 +248,20 @@ impl Audio {
     }
     pub fn snapshot_with_smoothing_for_pattern(
         project: &Project,
-        active_pattern: usize,
+        _active_pattern: usize,
         smoothing: ParameterSmoothing,
     ) -> AudioCommand {
+        Self::snapshot_with_smoothing_and_map(project, smoothing, PatternIndexMap::identity())
+    }
+    pub fn snapshot_with_smoothing_and_map(
+        project: &Project,
+        smoothing: ParameterSmoothing,
+        pattern_map: PatternIndexMap,
+    ) -> AudioCommand {
         AudioCommand::ReplaceProject {
-            project: Box::new(AudioProject::from_project_with_active_pattern(
-                project,
-                active_pattern,
-            )),
+            project: Box::new(AudioProject::from_project(project)),
             smoothing,
+            pattern_map,
         }
     }
 }
@@ -257,11 +322,12 @@ pub fn open(requested: Option<&str>, project: &Project) -> Result<Audio> {
     let sr = config.sample_rate;
     let status = Arc::new(AudioStatus::default());
     let (producer, consumer) = RingBuffer::new(256);
+    let (retire_producer, retired) = RingBuffer::new(32);
     let initial = AudioProject::from_project(project);
     let stream = match format {
-        SampleFormat::F32 => { let s=status.clone(); let rs=status.clone(); let mut r=Renderer::new(initial,sr,rs); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[f32],_|render(out,channels,&mut r,&mut c,|x|x),move |_|mark_failed(&s),None) }
-        SampleFormat::I16 => { let s=status.clone(); let rs=status.clone(); let mut r=Renderer::new(initial,sr,rs); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[i16],_|render(out,channels,&mut r,&mut c,|x|(x.clamp(-1.,1.)*32767.) as i16),move |_|mark_failed(&s),None) }
-        SampleFormat::U16 => { let s=status.clone(); let rs=status.clone(); let mut r=Renderer::new(initial,sr,rs); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[u16],_|render(out,channels,&mut r,&mut c,|x|((x.clamp(-1.,1.)*0.5+0.5)*65535.) as u16),move |_|mark_failed(&s),None) }
+        SampleFormat::F32 => { let s=status.clone(); let rs=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[f32],_|render(out,channels,&mut r,&mut c,|x|x),move |_|mark_failed(&s),None) }
+        SampleFormat::I16 => { let s=status.clone(); let rs=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[i16],_|render(out,channels,&mut r,&mut c,|x|(x.clamp(-1.,1.)*32767.) as i16),move |_|mark_failed(&s),None) }
+        SampleFormat::U16 => { let s=status.clone(); let rs=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[u16],_|render(out,channels,&mut r,&mut c,|x|((x.clamp(-1.,1.)*0.5+0.5)*65535.) as u16),move |_|mark_failed(&s),None) }
         other => bail!("audio output `{name}` uses unsupported sample format {other:?}; supported: f32, i16, u16"),
     }.with_context(|| format!("could not build stream for audio output `{name}`"))?;
     stream
@@ -272,6 +338,7 @@ pub fn open(requested: Option<&str>, project: &Project) -> Result<Audio> {
         device_name: name,
         status,
         producer,
+        retired,
     })
 }
 
@@ -685,7 +752,9 @@ impl SynthVoice {
 }
 
 struct Renderer {
-    project: AudioProject,
+    project: Box<AudioProject>,
+    retire: Producer<Box<AudioProject>>,
+    pending: Option<(Box<AudioProject>, ParameterSmoothing, PatternIndexMap)>,
     clock: StepClock,
     next_steps: [usize; TRACK_COUNT],
     active_pattern: usize,
@@ -711,10 +780,22 @@ struct Renderer {
 }
 impl Renderer {
     fn new(project: AudioProject, sr: u32, status: Arc<AudioStatus>) -> Self {
+        let (retire, _discarded) = RingBuffer::new(32);
+        Self::new_with_retirement(Box::new(project), sr, status, retire)
+    }
+
+    fn new_with_retirement(
+        project: Box<AudioProject>,
+        sr: u32,
+        status: Arc<AudioStatus>,
+        retire: Producer<Box<AudioProject>>,
+    ) -> Self {
         let tempo_bpm = project.globals.tempo_bpm;
         let muted: [bool; TRACK_COUNT] = std::array::from_fn(|i| project.tracks[i].muted);
         let mut r = Self {
             project,
+            retire,
+            pending: None,
             clock: StepClock::new(sr, tempo_bpm),
             next_steps: [0; TRACK_COUNT],
             active_pattern: 0,
@@ -853,45 +934,67 @@ impl Renderer {
                 }
             }
             AudioCommand::SelectPattern { .. } => {}
-            AudioCommand::ReplaceProject { project, smoothing } => {
-                let old_active = self.active_pattern;
-                let old_queued = self.queued_pattern;
-                let old_project = &self.project;
-                let active_pattern = rebase_pattern_index(old_project, &project, old_active);
-                let queued_pattern =
-                    old_queued.map(|index| rebase_pattern_index(old_project, &project, index));
-                self.reconcile_lfos(&project);
-                self.project = *project;
-                self.active_pattern = active_pattern;
-                self.queued_pattern = queued_pattern;
-                self.status
-                    .active_pattern
-                    .store(active_pattern as u8, Ordering::Release);
-                self.status.queued_pattern.store(
-                    queued_pattern.map_or(u8::MAX, |pattern| pattern as u8),
-                    Ordering::Release,
-                );
-                let smoothing_samples = smoothing.samples(self.sr);
-                for (track, next) in self.next_steps.iter_mut().enumerate() {
-                    if *next
-                        >= self.project.patterns[self.active_pattern].tracks[track].step_count
-                            as usize
-                    {
-                        *next = 0;
-                    }
-                    let playhead = &self.status.playheads[track];
-                    if playhead.load(Ordering::Acquire)
-                        >= self.project.patterns[self.active_pattern].tracks[track].step_count
-                    {
-                        playhead.store(u8::MAX, Ordering::Release);
-                    }
-                }
-                self.configure_effects(smoothing_samples);
-                self.update_mutes(false);
-                self.refresh_active_parameters(smoothing_samples);
+            AudioCommand::ReplaceProject {
+                project,
+                smoothing,
+                pattern_map,
+            } => {
+                self.replace_project(project, smoothing, pattern_map);
             }
             AudioCommand::Audition { track, step } => self.audition(track as usize, step as usize),
         }
+    }
+
+    fn replace_project(
+        &mut self,
+        project: Box<AudioProject>,
+        smoothing: ParameterSmoothing,
+        pattern_map: PatternIndexMap,
+    ) {
+        if self.retire.slots() == 0 {
+            self.pending = Some((project, smoothing, pattern_map));
+            return;
+        }
+        let active_pattern = pattern_map.rebase(self.active_pattern, project.patterns.len());
+        let queued_pattern = self
+            .queued_pattern
+            .map(|index| pattern_map.rebase(index, project.patterns.len()));
+        self.reconcile_lfos(&project);
+        let old = std::mem::replace(&mut self.project, project);
+        debug_assert!(self.retire.push(old).is_ok());
+        self.active_pattern = active_pattern;
+        self.queued_pattern = queued_pattern;
+        self.status
+            .active_pattern
+            .store(active_pattern as u8, Ordering::Release);
+        self.status.queued_pattern.store(
+            queued_pattern.map_or(u8::MAX, |pattern| pattern as u8),
+            Ordering::Release,
+        );
+        let smoothing_samples = smoothing.samples(self.sr);
+        for (track, next) in self.next_steps.iter_mut().enumerate() {
+            if *next >= self.project.patterns[self.active_pattern].tracks[track].step_count as usize
+            {
+                *next = 0;
+            }
+            let playhead = &self.status.playheads[track];
+            if playhead.load(Ordering::Acquire)
+                >= self.project.patterns[self.active_pattern].tracks[track].step_count
+            {
+                playhead.store(u8::MAX, Ordering::Release);
+            }
+        }
+        self.configure_effects(smoothing_samples);
+        self.update_mutes(false);
+        self.refresh_active_parameters(smoothing_samples);
+    }
+
+    fn apply_pending(&mut self) -> bool {
+        let Some((project, smoothing, map)) = self.pending.take() else {
+            return true;
+        };
+        self.replace_project(project, smoothing, map);
+        self.pending.is_none()
     }
 
     fn activate_pattern(&mut self, pattern: usize) {
@@ -1400,6 +1503,11 @@ impl Renderer {
             .unwrap_or(parameters.arpeggio_enabled);
         let arpeggio_type = locks.arpeggio_type.unwrap_or(parameters.arpeggio_type);
         let arpeggio_rate = locks.arpeggio_rate.unwrap_or(parameters.arpeggio_rate);
+        pool.arpeggio_trigger = SynthTrigger {
+            chord_shape: Some(shape),
+            ..trigger
+        };
+        pool.arpeggio_locks = locks;
         if arpeggio_enabled {
             Self::release_chord(pool);
             pool.group = 1 - pool.group;
@@ -1471,6 +1579,60 @@ impl Renderer {
         }
         Self::configure_chorus(&mut pool.chorus, project.tracks[4], locks);
         pool.active = true;
+    }
+
+    /// Apply the effective arpeggiator state at a chord tie without touching
+    /// envelope gates. This is shared by ordinary and wrapped ties because
+    /// callers resolve inherited locks before invoking it.
+    fn apply_chord_tie(
+        project: &AudioProject,
+        sr: f32,
+        track: AudioTrack,
+        locks: ParameterLocks,
+        pool: &mut ChordVoicePool,
+    ) {
+        let Instrument::Chord(parameters) = track.instrument else {
+            return;
+        };
+        let shape = locks.chord_shape.unwrap_or_else(|| {
+            pool.arpeggio_trigger
+                .chord_shape
+                .unwrap_or(pool.arpeggio.shape)
+        });
+        let enabled = locks
+            .arpeggio_enabled
+            .unwrap_or(parameters.arpeggio_enabled);
+        let kind = locks.arpeggio_type.unwrap_or(parameters.arpeggio_type);
+        let rate = locks.arpeggio_rate.unwrap_or(parameters.arpeggio_rate);
+        pool.arpeggio_locks = locks;
+        if pool.arpeggiated {
+            if enabled {
+                pool.arpeggio.update_without_restart(shape, kind, rate);
+            } else {
+                // Keep the currently sounding tone alive; only future ticks stop.
+                pool.arpeggiated = false;
+                pool.arpeggio.enabled = false;
+            }
+        } else if enabled {
+            // Enter at the tie boundary without retriggering the held chord.
+            pool.arpeggiated = true;
+            pool.arpeggio
+                .reset(shape, kind, rate, sr, project.globals.tempo_bpm);
+            pool.arpeggio_trigger.chord_shape = Some(shape);
+        }
+        for voice in &mut pool.voices
+            [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
+        {
+            Self::apply_synth_params(
+                project,
+                sr,
+                4,
+                locks,
+                voice,
+                ParameterSmoothing::Default.samples(sr),
+            );
+        }
+        Self::configure_chorus(&mut pool.chorus, track, locks);
     }
 
     fn trigger_arpeggio_tone(project: &AudioProject, sr: f32, pool: &mut ChordVoicePool) {
@@ -1784,54 +1946,13 @@ impl Renderer {
                         if matches!(sequence.steps[step], Some(StepEvent::Tie { .. })) {
                             let locks = self.locks_at(track, step);
                             if track == 4 {
-                                if self.chord.arpeggiated {
-                                    let parameters = match t.instrument {
-                                        Instrument::Chord(parameters) => parameters,
-                                        _ => unreachable!(),
-                                    };
-                                    let shape =
-                                        locks.chord_shape.unwrap_or(self.chord.arpeggio.shape);
-                                    let enabled = locks
-                                        .arpeggio_enabled
-                                        .unwrap_or(parameters.arpeggio_enabled);
-                                    if !enabled {
-                                        Self::release_chord(&mut self.chord);
-                                    } else {
-                                        self.chord.arpeggio_locks = locks;
-                                        self.chord.arpeggio.update_without_restart(
-                                            shape,
-                                            locks.arpeggio_type.unwrap_or(parameters.arpeggio_type),
-                                            locks.arpeggio_rate.unwrap_or(parameters.arpeggio_rate),
-                                        );
-                                        let voice = &mut self.chord.voices
-                                            [self.chord.group * CHORD_GROUP_SIZE];
-                                        Self::apply_synth_params(
-                                            &self.project,
-                                            self.sr,
-                                            track,
-                                            locks,
-                                            voice,
-                                            ParameterSmoothing::Default.samples(self.sr),
-                                        );
-                                    }
-                                    Self::configure_chorus(&mut self.chord.chorus, t, locks);
-                                } else {
-                                    for voice in &mut self.chord.voices[self.chord.group
-                                        * CHORD_GROUP_SIZE
-                                        ..self.chord.group * CHORD_GROUP_SIZE
-                                            + self.chord.voice_count]
-                                    {
-                                        Self::apply_synth_params(
-                                            &self.project,
-                                            self.sr,
-                                            track,
-                                            locks,
-                                            voice,
-                                            ParameterSmoothing::Default.samples(self.sr),
-                                        );
-                                    }
-                                    Self::configure_chorus(&mut self.chord.chorus, t, locks);
-                                }
+                                Self::apply_chord_tie(
+                                    &self.project,
+                                    self.sr,
+                                    t,
+                                    locks,
+                                    &mut self.chord,
+                                );
                             } else {
                                 Self::apply_synth_params(
                                     &self.project,
@@ -2236,24 +2357,6 @@ impl Renderer {
     }
 }
 
-fn rebase_pattern_index(old: &AudioProject, next: &AudioProject, index: usize) -> usize {
-    if next.patterns.is_empty() {
-        return 0;
-    }
-    let Some(pattern) = old.patterns.get(index) else {
-        return index.min(next.patterns.len() - 1);
-    };
-    next.patterns
-        .iter()
-        .enumerate()
-        .filter(|(_, candidate)| **candidate == *pattern)
-        .min_by_key(|(candidate, _)| candidate.abs_diff(index))
-        .map_or_else(
-            || index.min(next.patterns.len() - 1),
-            |(candidate, _)| candidate,
-        )
-}
-
 fn render<T: Copy, F: Fn(f32) -> T>(
     out: &mut [T],
     channels: usize,
@@ -2261,8 +2364,14 @@ fn render<T: Copy, F: Fn(f32) -> T>(
     commands: &mut Consumer<AudioCommand>,
     convert: F,
 ) {
-    while let Ok(c) = commands.pop() {
-        renderer.command(c)
+    if renderer.apply_pending() {
+        while let Ok(c) = commands.pop() {
+            let is_replace = matches!(c, AudioCommand::ReplaceProject { .. });
+            renderer.command(c);
+            if is_replace && renderer.pending.is_some() {
+                break;
+            }
+        }
     }
     for frame in out.chunks_mut(channels) {
         let (l, r) = renderer.next();
@@ -2322,6 +2431,7 @@ mod tests {
         let AudioCommand::ReplaceProject {
             project: s,
             smoothing,
+            ..
         } = Audio::snapshot(&p)
         else {
             panic!()

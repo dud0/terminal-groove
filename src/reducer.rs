@@ -1,3 +1,4 @@
+use crate::audio::PatternIndexMap;
 use crate::model::{
     ArpeggioRate, ArpeggioType, ChordShape, Instrument, LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT,
     ParameterId, ParameterValue, Pattern, Percent, Project, StepEvent, TrackKind, Waveform,
@@ -66,6 +67,8 @@ struct Revision {
     after_pattern: usize,
     coalesce: Option<CoalesceKey>,
     at: Instant,
+    pattern_map: PatternIndexMap,
+    inverse_pattern_map: PatternIndexMap,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoalesceKey(pub usize, pub usize, pub u8);
@@ -77,9 +80,20 @@ pub struct Editor {
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
     clipboard: Option<Pattern>,
+    pending_pattern_map: PatternIndexMap,
 }
 impl Editor {
-    pub fn new(project: Project) -> Self {
+    pub fn new(mut project: Project) -> Self {
+        if project.patterns.first().is_some_and(|pattern| {
+            pattern
+                .tracks
+                .iter()
+                .zip(&project.tracks)
+                .any(|(canonical, cached)| canonical.steps != cached.steps)
+        }) {
+            let _ = project.store_active_pattern(0);
+        }
+        project.activate_pattern(0);
         Self {
             saved: project.clone(),
             project,
@@ -87,6 +101,7 @@ impl Editor {
             undo: VecDeque::new(),
             redo: Vec::new(),
             clipboard: None,
+            pending_pattern_map: PatternIndexMap::identity(),
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -107,9 +122,13 @@ impl Editor {
         self.redo.clear();
         self.pattern = 0;
         self.clipboard = None;
+        self.pending_pattern_map = PatternIndexMap::identity();
     }
     pub fn pattern(&self) -> usize {
         self.pattern
+    }
+    pub fn take_pattern_map(&mut self) -> PatternIndexMap {
+        std::mem::replace(&mut self.pending_pattern_map, PatternIndexMap::identity())
     }
     pub fn select_pattern(&mut self, pattern: usize) -> bool {
         if pattern >= self.project.patterns.len() || !self.project.activate_pattern(pattern) {
@@ -140,6 +159,7 @@ impl Editor {
     {
         self.project.store_active_pattern(self.pattern);
         let before = self.project.clone();
+        let before_count = before.patterns.len();
         let before_pattern = self.pattern;
         let next_pattern = f(&mut self.project, self.pattern)?;
         self.pattern = next_pattern;
@@ -154,6 +174,17 @@ impl Editor {
             self.pattern,
             None,
         );
+        if self.project.patterns.len() == before_count + 1 {
+            self.record_pattern_map(
+                PatternIndexMap::insert(before_pattern),
+                PatternIndexMap::delete(before_pattern + 1),
+            );
+        } else if self.project.patterns.len() + 1 == before_count {
+            self.record_pattern_map(
+                PatternIndexMap::delete(before_pattern),
+                PatternIndexMap::insert_at(before_pattern),
+            );
+        }
         Ok(true)
     }
 
@@ -170,6 +201,7 @@ impl Editor {
         }
         self.project.store_active_pattern(self.pattern);
         let before = self.project.clone();
+        let before_count = before.patterns.len();
         let before_pattern = self.pattern;
         let (next_cursor, next_active) = f(&mut self.project, cursor, before_pattern)?;
         self.pattern = next_active;
@@ -184,6 +216,17 @@ impl Editor {
             self.pattern,
             None,
         );
+        if self.project.patterns.len() == before_count + 1 {
+            self.record_pattern_map(
+                PatternIndexMap::insert(cursor),
+                PatternIndexMap::delete(cursor + 1),
+            );
+        } else if self.project.patterns.len() + 1 == before_count {
+            self.record_pattern_map(
+                PatternIndexMap::delete(cursor),
+                PatternIndexMap::insert_at(cursor),
+            );
+        }
         Ok((true, next_cursor))
     }
     fn push_revision(
@@ -204,8 +247,17 @@ impl Editor {
             after_pattern,
             coalesce,
             at: Instant::now(),
+            pattern_map: PatternIndexMap::identity(),
+            inverse_pattern_map: PatternIndexMap::identity(),
         });
         self.redo.clear();
+    }
+    fn record_pattern_map(&mut self, map: PatternIndexMap, inverse: PatternIndexMap) {
+        self.pending_pattern_map = map;
+        if let Some(revision) = self.undo.back_mut() {
+            revision.pattern_map = map;
+            revision.inverse_pattern_map = inverse;
+        }
     }
     pub fn insert_pattern(&mut self) -> Result<bool, EditError> {
         if self.project.patterns.len() >= crate::model::MAX_PATTERN_COUNT {
@@ -412,6 +464,8 @@ impl Editor {
                 after_pattern: self.pattern,
                 coalesce: key,
                 at: now,
+                pattern_map: PatternIndexMap::identity(),
+                inverse_pattern_map: PatternIndexMap::identity(),
             });
         }
         self.redo.clear();
@@ -421,6 +475,7 @@ impl Editor {
         if let Some(r) = self.undo.pop_back() {
             self.project = r.before.clone();
             self.pattern = r.before_pattern;
+            self.pending_pattern_map = r.inverse_pattern_map;
             self.redo.push(r);
             true
         } else {
@@ -431,6 +486,7 @@ impl Editor {
         if let Some(r) = self.redo.pop() {
             self.project = r.after.clone();
             self.pattern = r.after_pattern;
+            self.pending_pattern_map = r.pattern_map;
             self.undo.push_back(r);
             true
         } else {

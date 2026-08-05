@@ -605,18 +605,6 @@ fn commit_pattern(a: &mut App, audio: &mut Audio, pattern: usize) -> bool {
     if pattern != previous && !a.editor.select_pattern(pattern) {
         return false;
     }
-    if pattern != previous
-        && audio
-            .send(Audio::snapshot_for_pattern(
-                &a.editor.project,
-                a.editor.pattern(),
-            ))
-            .is_err()
-    {
-        let _ = a.editor.select_pattern(previous);
-        a.status = "Audio command queue full; pattern switch rejected".into();
-        return false;
-    }
     if audio
         .send(AudioCommand::SelectPattern {
             pattern: pattern as u8,
@@ -1597,11 +1585,12 @@ fn sync_project_with_smoothing(a: &mut App, audio: &mut Audio, direct_entry: boo
     } else {
         ParameterSmoothing::Default
     };
+    let pattern_map = a.editor.take_pattern_map();
     if audio
-        .send(Audio::snapshot_with_smoothing_for_pattern(
+        .send(Audio::snapshot_with_smoothing_and_map(
             &a.editor.project,
-            a.editor.pattern(),
             smoothing,
+            pattern_map,
         ))
         .is_err()
     {

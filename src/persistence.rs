@@ -44,17 +44,18 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if version != Some(9) {
+    if version != Some(10) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
         });
     }
-    let project: Project =
+    let mut project: Project =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
         })?;
+    let _ = project.activate_pattern(0);
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
@@ -65,7 +66,11 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
 }
 
 pub fn save_atomic(path: &Path, project: &Project) -> Result<(), ProjectIoError> {
-    project
+    // A caller editing outside `Editor` may still have a transient selected
+    // cache. Serialize a canonical copy, never top-level track steps.
+    let mut canonical = project.clone();
+    let _ = canonical.store_active_pattern(0);
+    canonical
         .validate()
         .map_err(|source| ProjectIoError::Validation {
             path: path.into(),
@@ -80,7 +85,7 @@ pub fn save_atomic(path: &Path, project: &Project) -> Result<(), ProjectIoError>
     let result = (|| -> io::Result<()> {
         let file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         let mut out = BufWriter::new(file);
-        serde_json::to_writer_pretty(&mut out, project).map_err(io::Error::other)?;
+        serde_json::to_writer_pretty(&mut out, &canonical).map_err(io::Error::other)?;
         out.write_all(b"\n")?;
         out.flush()?;
         out.get_ref().sync_all()?;
@@ -153,9 +158,18 @@ mod tests {
         assert!(load(&f).is_err());
     }
     #[test]
+    fn v10_rejects_legacy_top_level_track_steps() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("legacy-steps.groove.json");
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["tracks"][0]["steps"] = serde_json::json!(vec![serde_json::Value::Null; 16]);
+        fs::write(&f, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&f), Err(ProjectIoError::Json { .. })));
+    }
+    #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 9);
+        assert_eq!(value["format_version"], 10);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -265,7 +279,7 @@ mod tests {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
             let project = load(path.path()).unwrap();
-            assert_eq!(project.format_version, 9);
+            assert_eq!(project.format_version, 10);
             assert!(
                 (crate::model::MIN_PATTERN_COUNT..=crate::model::MAX_PATTERN_COUNT)
                     .contains(&project.patterns.len())
@@ -351,8 +365,8 @@ mod tests {
         save_atomic(&path, &project).unwrap();
         assert_eq!(load(&path).unwrap(), project);
 
-        let mut value = serde_json::to_value(project).unwrap();
-        value["tracks"][4]["steps"][0]
+        let mut value = serde_json::to_value(load(&path).unwrap()).unwrap();
+        value["patterns"][0]["tracks"][4]["steps"][0]
             .as_object_mut()
             .unwrap()
             .remove("chord_shape");

@@ -1061,6 +1061,9 @@ pub struct Track {
     pub reverb_send: Percent,
     pub instrument: Instrument,
     pub lfos: LfoAssignments,
+    /// Transient editor cache for the selected pattern.  It is deliberately
+    /// excluded from v10 JSON; canonical sequence data is `patterns`.
+    #[serde(skip, default = "default_step_cache")]
     pub steps: Vec<Step>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_degree: Option<u8>,
@@ -1092,7 +1095,7 @@ pub struct SongEntry {
     pub bars: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub format_version: u32,
@@ -1104,11 +1107,34 @@ pub struct Project {
     pub song: Vec<SongEntry>,
 }
 
+impl PartialEq for Project {
+    fn eq(&self, other: &Self) -> bool {
+        let mut left = self.clone();
+        let mut right = other.clone();
+        let _ = left.store_active_pattern(0);
+        let _ = right.store_active_pattern(0);
+        for track in &mut left.tracks {
+            track.steps.clear();
+        }
+        for track in &mut right.tracks {
+            track.steps.clear();
+        }
+        left.format_version == right.format_version
+            && left.globals == right.globals
+            && left.tracks == right.tracks
+            && left.patterns == right.patterns
+            && left.song == right.song
+    }
+}
+
 fn p(n: u8) -> Percent {
     Percent(n)
 }
 fn default_pan() -> Percent {
     Percent(50)
+}
+fn default_step_cache() -> Vec<Step> {
+    vec![None; STEP_BANK_SIZE]
 }
 impl Project {
     pub fn new() -> Self {
@@ -1146,7 +1172,7 @@ impl Project {
             input_chord_shape: (kind == TrackKind::Chord).then_some(ChordShape::default()),
         };
         Self {
-            format_version: 9,
+            format_version: 10,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1237,6 +1263,23 @@ impl Project {
             }],
         }
     }
+    pub fn pattern_steps(&self, pattern: usize, track: usize) -> Option<&[Step]> {
+        self.patterns
+            .get(pattern)?
+            .tracks
+            .get(track)
+            .map(|track| track.steps.as_slice())
+    }
+
+    pub fn pattern_steps_mut(&mut self, pattern: usize, track: usize) -> Option<&mut Vec<Step>> {
+        self.patterns
+            .get_mut(pattern)?
+            .tracks
+            .get_mut(track)
+            .map(|track| &mut track.steps)
+    }
+
+    /// Synchronize the non-persisted editor cache from a canonical pattern.
     pub fn activate_pattern(&mut self, pattern: usize) -> bool {
         let Some(source) = self.patterns.get(pattern) else {
             return false;
@@ -1245,10 +1288,12 @@ impl Project {
             return false;
         }
         for (track, sequence) in self.tracks.iter_mut().zip(&source.tracks) {
-            track.steps = sequence.steps.clone();
+            track.steps.clone_from(&sequence.steps);
         }
         true
     }
+
+    /// Commit the transient editor cache to canonical sequence ownership.
     pub fn store_active_pattern(&mut self, pattern: usize) -> bool {
         let Some(destination) = self.patterns.get_mut(pattern) else {
             return false;
@@ -1257,14 +1302,28 @@ impl Project {
             return false;
         }
         for (sequence, track) in destination.tracks.iter_mut().zip(&self.tracks) {
-            sequence.steps = track.steps.clone();
+            sequence.steps.clone_from(&track.steps);
         }
         true
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 9 {
+        if self.format_version != 10 {
             return Err(ValidationError::Version(self.format_version));
+        }
+        // Preserve validation semantics for programmatic users of the former
+        // editable-track API; persisted v10 projects always have an empty or
+        // synchronized cache, so canonical pattern data remains authoritative.
+        if self.patterns.first().is_some_and(|pattern| {
+            pattern
+                .tracks
+                .iter()
+                .zip(&self.tracks)
+                .any(|(sequence, track)| !track.steps.is_empty() && sequence.steps != track.steps)
+        }) {
+            let mut synchronized = self.clone();
+            let _ = synchronized.store_active_pattern(0);
+            return synchronized.validate();
         }
         if self.tracks.len() != TRACK_COUNT {
             return Err(ValidationError::TrackCount);
@@ -1303,9 +1362,6 @@ impl Project {
             if t.kind != expected[ti].0 || t.name != expected[ti].1 {
                 return Err(ValidationError::TrackOrder(ti, expected[ti].1));
             }
-            if !(MIN_STEP_COUNT..=MAX_STEP_COUNT).contains(&t.steps.len()) {
-                return Err(ValidationError::StepCount(ti, t.steps.len()));
-            }
             let pitched = matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead);
             let instrument_ok = matches!(
                 (t.kind, t.instrument),
@@ -1334,51 +1390,17 @@ impl Project {
                     return Err(ValidationError::TrackOrder(ti, "valid input octave"));
                 }
             }
-            for (si, event) in t.steps.iter().enumerate() {
-                if let Some(event) = event {
-                    let event_ok = matches!(
-                        (t.kind, event),
-                        (
-                            TrackKind::Kick | TrackKind::Snare | TrackKind::Hat,
-                            StepEvent::Trigger { .. }
-                        ) | (TrackKind::Bass, StepEvent::BassNote { .. })
-                            | (TrackKind::Bass, StepEvent::Tie { .. })
-                            | (TrackKind::Chord | TrackKind::Lead, StepEvent::Note { .. })
-                            | (TrackKind::Chord | TrackKind::Lead, StepEvent::Tie { .. })
-                    );
-                    if !event_ok {
-                        return Err(ValidationError::EventKind(ti, si));
-                    }
-                    if let StepEvent::Note { chord_shape, .. } = event {
-                        if t.kind == TrackKind::Lead && chord_shape.is_some() {
-                            return Err(ValidationError::EventKind(ti, si));
-                        }
-                    }
-                    if let StepEvent::Note { degree, octave, .. }
-                    | StepEvent::BassNote { degree, octave, .. } = event
-                    {
-                        if !(1..=8).contains(degree) || *octave > 7 {
-                            return Err(ValidationError::EventKind(ti, si));
-                        }
-                    }
-                    validate_locks(ti, si, t.kind, event.locks())?;
-                }
-            }
-            if pitched {
-                validate_ties(ti, &t.steps)?;
-            }
         }
         for pattern in &self.patterns {
             if pattern.tracks.len() != TRACK_COUNT {
                 return Err(ValidationError::TrackCount);
             }
             for (ti, sequence) in pattern.tracks.iter().enumerate() {
-                let mut track = self.tracks[ti].clone();
-                track.steps = sequence.steps.clone();
-                if !(MIN_STEP_COUNT..=MAX_STEP_COUNT).contains(&track.steps.len()) {
-                    return Err(ValidationError::StepCount(ti, track.steps.len()));
+                let track = &self.tracks[ti];
+                if !(MIN_STEP_COUNT..=MAX_STEP_COUNT).contains(&sequence.steps.len()) {
+                    return Err(ValidationError::StepCount(ti, sequence.steps.len()));
                 }
-                for (si, event) in track.steps.iter().enumerate() {
+                for (si, event) in sequence.steps.iter().enumerate() {
                     if let Some(event) = event {
                         let event_ok = matches!(
                             (track.kind, event),
@@ -1412,7 +1434,7 @@ impl Project {
                     track.kind,
                     TrackKind::Bass | TrackKind::Chord | TrackKind::Lead
                 ) {
-                    validate_ties(ti, &track.steps)?;
+                    validate_ties(ti, &sequence.steps)?;
                 }
             }
         }
