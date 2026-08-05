@@ -107,6 +107,9 @@ pub struct App {
     playheads: [Option<usize>; TRACK_COUNT],
     playing: bool,
     paused: bool,
+    pattern_cursor: usize,
+    active_pattern: usize,
+    queued_pattern: Option<usize>,
     fader_animations: Vec<FaderAnimation>,
 }
 
@@ -151,6 +154,9 @@ impl App {
             playheads: [None; TRACK_COUNT],
             playing: false,
             paused: false,
+            pattern_cursor: 0,
+            active_pattern: 0,
+            queued_pattern: None,
             fader_animations: Vec::new(),
         }
     }
@@ -290,7 +296,10 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     }
     if k.modifiers.contains(KeyModifiers::CONTROL) {
         match k.code {
-            KeyCode::Char('p' | 'P') => a.mode = Mode::PatternDialog,
+            KeyCode::Char('p' | 'P') => {
+                a.pattern_cursor = a.editor.pattern().min(a.editor.project.patterns.len() - 1);
+                a.mode = Mode::PatternDialog;
+            }
             KeyCode::Char('q' | 'Q') => {
                 if a.editor.is_dirty() {
                     a.mode = Mode::QuitConfirm
@@ -570,22 +579,26 @@ fn select_track(a: &mut App, track: usize) {
     }
 }
 
-fn select_pattern(a: &mut App, audio: &mut Audio, pattern: usize) {
-    if pattern == a.editor.pattern() {
-        return;
-    }
+fn commit_pattern(a: &mut App, audio: &mut Audio, pattern: usize) -> bool {
     let previous = a.editor.pattern();
     if pattern >= a.editor.project.patterns.len() || audio.available_commands() < 2 {
         a.status = "Audio command queue full; pattern switch rejected".into();
-        return;
+        return false;
     }
-    if !a.editor.select_pattern(pattern) {
-        return;
+    if pattern != previous && !a.editor.select_pattern(pattern) {
+        return false;
     }
-    if audio.send(Audio::snapshot(&a.editor.project)).is_err() {
+    if pattern != previous
+        && audio
+            .send(Audio::snapshot_for_pattern(
+                &a.editor.project,
+                a.editor.pattern(),
+            ))
+            .is_err()
+    {
         let _ = a.editor.select_pattern(previous);
         a.status = "Audio command queue full; pattern switch rejected".into();
-        return;
+        return false;
     }
     if audio
         .send(AudioCommand::SelectPattern {
@@ -594,8 +607,9 @@ fn select_pattern(a: &mut App, audio: &mut Audio, pattern: usize) {
         .is_err()
     {
         a.status = "Audio command queue full; pattern switch rejected".into();
-        return;
+        return false;
     }
+    a.pattern_cursor = pattern;
     a.step = 0;
     a.playheads = [None; TRACK_COUNT];
     a.status = if a.playing {
@@ -603,6 +617,7 @@ fn select_pattern(a: &mut App, audio: &mut Audio, pattern: usize) {
     } else {
         format!("Pattern {} selected", pattern + 1)
     };
+    true
 }
 
 fn adjacent_pattern_in_count(pattern: usize, forward: bool, count: usize) -> usize {
@@ -620,68 +635,78 @@ fn handle_pattern_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     match k.code {
         KeyCode::Esc | KeyCode::Char('p' | 'P') => a.mode = Mode::Navigation,
         KeyCode::Left => {
-            let pattern = adjacent_pattern_in_count(
-                a.editor.pattern(),
-                false,
-                a.editor.project.patterns.len(),
-            );
-            select_pattern(a, audio, pattern);
+            let pattern =
+                adjacent_pattern_in_count(a.pattern_cursor, false, a.editor.project.patterns.len());
+            a.pattern_cursor = pattern;
         }
         KeyCode::Right => {
-            let pattern = adjacent_pattern_in_count(
-                a.editor.pattern(),
-                true,
-                a.editor.project.patterns.len(),
-            );
-            select_pattern(a, audio, pattern);
+            let pattern =
+                adjacent_pattern_in_count(a.pattern_cursor, true, a.editor.project.patterns.len());
+            a.pattern_cursor = pattern;
         }
-        KeyCode::Home => select_pattern(a, audio, 0),
-        KeyCode::End => select_pattern(a, audio, a.editor.project.patterns.len() - 1),
-        KeyCode::Char('n' | 'N') => {
-            pattern_edit(a, audio, |e| e.insert_pattern(), "Inserted pattern")
+        KeyCode::Home => a.pattern_cursor = 0,
+        KeyCode::End => a.pattern_cursor = a.editor.project.patterns.len() - 1,
+        KeyCode::Enter => {
+            let pattern = a.pattern_cursor;
+            if commit_pattern(a, audio, pattern) {
+                a.mode = Mode::Navigation;
+            }
         }
-        KeyCode::Char('d') | KeyCode::Char('D') => {
-            pattern_edit(a, audio, |e| e.duplicate_pattern(), "Duplicated pattern")
-        }
+        KeyCode::Char('n' | 'N') => pattern_edit_at(
+            a,
+            audio,
+            |e, cursor| e.insert_pattern_at(cursor),
+            "Inserted pattern",
+        ),
+        KeyCode::Char('d') | KeyCode::Char('D') => pattern_edit_at(
+            a,
+            audio,
+            |e, cursor| e.duplicate_pattern_at(cursor),
+            "Duplicated pattern",
+        ),
         KeyCode::Char('c' | 'C') => {
-            a.editor.copy_pattern();
-            a.status = format!("Copied pattern {}", a.editor.pattern() + 1);
+            if a.editor.copy_pattern_at(a.pattern_cursor) {
+                a.status = format!("Copied pattern {}", a.pattern_cursor + 1);
+            }
         }
-        KeyCode::Char('x' | 'X') => pattern_edit(a, audio, |e| e.cut_pattern(), "Cut pattern"),
-        KeyCode::Char('v' | 'V') => pattern_edit(a, audio, |e| e.paste_pattern(), "Pasted pattern"),
-        KeyCode::Delete | KeyCode::Backspace => {
-            pattern_edit(a, audio, |e| e.delete_pattern(), "Deleted pattern")
-        }
+        KeyCode::Char('x' | 'X') => pattern_edit_at(
+            a,
+            audio,
+            |e, cursor| e.cut_pattern_at(cursor),
+            "Cut pattern",
+        ),
+        KeyCode::Char('v' | 'V') => pattern_edit_at(
+            a,
+            audio,
+            |e, cursor| e.paste_pattern_at(cursor),
+            "Pasted pattern",
+        ),
+        KeyCode::Delete | KeyCode::Backspace => pattern_edit_at(
+            a,
+            audio,
+            |e, cursor| e.delete_pattern_at(cursor),
+            "Deleted pattern",
+        ),
         _ => {}
     }
     Ok(())
 }
 
-fn pattern_edit<F>(a: &mut App, audio: &mut Audio, f: F, message: &str)
+fn pattern_edit_at<F>(a: &mut App, audio: &mut Audio, f: F, message: &str)
 where
-    F: FnOnce(&mut Editor) -> Result<bool, crate::reducer::EditError>,
+    F: FnOnce(&mut Editor, usize) -> Result<(bool, usize), crate::reducer::EditError>,
 {
-    if audio.available_commands() < 2 {
+    if audio.available_commands() == 0 {
         a.status = "Audio command queue full; pattern edit rejected".into();
         return;
     }
-    match f(&mut a.editor) {
-        Ok(true) if sync_project(a, audio) => {
-            if audio
-                .send(AudioCommand::SelectPattern {
-                    pattern: a.editor.pattern() as u8,
-                })
-                .is_ok()
-            {
-                a.step = 0;
-                a.playheads = [None; TRACK_COUNT];
-                a.status = format!("{message}: P{}", a.editor.pattern() + 1);
-            } else {
-                a.status = "Audio command queue full; pattern edit rejected".into();
-            }
+    match f(&mut a.editor, a.pattern_cursor) {
+        Ok((true, cursor)) if sync_project(a, audio) => {
+            a.pattern_cursor = cursor;
+            a.status = format!("{message}: {}", cursor + 1);
         }
-        Ok(true) => {}
-        Ok(false) => a.status = "No change".into(),
+        Ok((true, _)) => {}
+        Ok((false, _)) => a.status = "No change".into(),
         Err(e) => a.status = e.to_string(),
     }
 }
@@ -745,6 +770,9 @@ fn move_step_vertical(a: &mut App, down: bool) {
 }
 
 fn normalize_cursor(a: &mut App) {
+    a.pattern_cursor = a
+        .pattern_cursor
+        .min(a.editor.project.patterns.len().saturating_sub(1));
     if a.row > 0 {
         a.step = a
             .step
@@ -1430,7 +1458,11 @@ fn sync_project_with_smoothing(a: &mut App, audio: &mut Audio, direct_entry: boo
         ParameterSmoothing::Default
     };
     if audio
-        .send(Audio::snapshot_with_smoothing(&a.editor.project, smoothing))
+        .send(Audio::snapshot_with_smoothing_for_pattern(
+            &a.editor.project,
+            a.editor.pattern(),
+            smoothing,
+        ))
         .is_err()
     {
         a.editor.undo();
@@ -1586,6 +1618,9 @@ fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
             a.scope = Scope::Base;
             a.playing = false;
             a.paused = false;
+            a.pattern_cursor = 0;
+            a.active_pattern = 0;
+            a.queued_pattern = None;
             a.playheads = [None; TRACK_COUNT];
             a.status = format!("Opened {}", path.display());
             a.mode = Mode::Navigation;
@@ -1816,6 +1851,11 @@ fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()>
 fn refresh_audio_status(a: &mut App, audio: &Audio) {
     a.playing = audio.status.running.load(Ordering::Acquire);
     a.paused = audio.status.paused.load(Ordering::Acquire);
+    a.active_pattern = usize::from(audio.status.active_pattern.load(Ordering::Acquire))
+        .min(a.editor.project.patterns.len() - 1);
+    let queued = audio.status.queued_pattern.load(Ordering::Acquire);
+    a.queued_pattern =
+        (queued != u8::MAX).then_some(usize::from(queued).min(a.editor.project.patterns.len() - 1));
     for track in 0..TRACK_COUNT {
         let step = audio.status.playheads[track].load(Ordering::Acquire);
         a.playheads[track] =
@@ -2858,7 +2898,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         "STOP"
     };
     let pattern_state = format!(
-        "P{} / {}",
+        "{} / {}",
         a.editor.pattern() + 1,
         a.editor.project.patterns.len()
     );
@@ -3074,7 +3114,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+P opens the dialog; arrows, Home, and End select patterns. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, n pan, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus, e spread, C shape.\nGlobal: t tempo, y delay, f feedback, r reverb time, b tone, p pre-delay, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; arrows, Home, and End move the cursor. Enter selects or queues it. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, n pan, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus, e spread, C shape.\nGlobal: t tempo, y delay, f feedback, r reverb time, b tone, p pre-delay, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3187,8 +3227,8 @@ fn render_chord_popup(f: &mut ratatui::Frame, area: Rect, selected: ChordShape, 
 }
 
 fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
-    let height = (a.editor.project.patterns.len() as u16 + 6).min(area.height.saturating_sub(4));
-    let width = 64.min(area.width.saturating_sub(4));
+    let height = 7.min(area.height.saturating_sub(4));
+    let width = area.width.saturating_sub(8).max(24);
     let popup_area = Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
         y: area.y + area.height.saturating_sub(height) / 2,
@@ -3196,40 +3236,91 @@ fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
         height,
     };
     f.render_widget(Clear, popup_area);
-    let lines = a
+    let block = Block::bordered().title(format!("Patterns ({})", a.editor.project.patterns.len()));
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    let cell_width = 6usize;
+    let cursor_x = a.pattern_cursor.saturating_mul(cell_width);
+    let visible_width = usize::from(inner.width);
+    let scroll_x = cursor_x
+        .saturating_add(cell_width)
+        .saturating_sub(visible_width)
+        .min(cursor_x)
+        .min(usize::from(u16::MAX));
+    let cells = a
         .editor
         .project
         .patterns
         .iter()
         .enumerate()
-        .map(|(index, pattern)| {
-            let used = pattern
-                .tracks
-                .iter()
-                .any(|track| track.steps.iter().any(Option::is_some));
-            let marker = if index == a.editor.pattern() {
-                "▶"
-            } else {
-                " "
+        .flat_map(|(index, pattern)| {
+            let empty = pattern_is_empty(pattern);
+            let cursor = index == a.pattern_cursor;
+            let active = index == a.active_pattern;
+            let queued = a.queued_pattern == Some(index);
+            let marker = match (active, queued) {
+                (true, true) => "▶⏭",
+                (true, false) => "▶ ",
+                (false, true) => "⏭ ",
+                (false, false) => "  ",
             };
-            let state = if used { "used" } else { "empty" };
-            Line::from(format!(" {marker} P{:03}  {state}", index + 1))
+            let base = if empty { Color::DarkGray } else { Color::White };
+            let style = if cursor {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(base)
+            };
+            let marker_style = if cursor {
+                style
+            } else if active {
+                Style::default()
+                    .fg(Color::LightGreen)
+                    .add_modifier(Modifier::BOLD)
+            } else if queued {
+                Style::default()
+                    .fg(Color::LightYellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                style
+            };
+            [
+                Span::styled(marker, marker_style),
+                Span::styled(format!("{:>3} ", index + 1), style),
+            ]
         })
         .collect::<Vec<_>>();
-    let mut content = lines;
-    content.push(Line::from(""));
-    content.push(Line::from("←/→ Home End · N insert · D duplicate"));
-    content.push(Line::from(
-        "C copy · X cut · V paste · Delete remove · Esc close",
-    ));
     f.render_widget(
-        Paragraph::new(content)
-            .block(
-                Block::bordered().title(format!("Patterns ({})", a.editor.project.patterns.len())),
-            )
-            .scroll((a.editor.pattern().min(u16::MAX as usize) as u16, 0)),
-        popup_area,
+        Paragraph::new(Line::from(cells)).scroll((0, scroll_x as u16)),
+        Rect {
+            height: 1.min(inner.height),
+            ..inner
+        },
     );
+    let help_y = inner.y + 2.min(inner.height.saturating_sub(1));
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from("▶ playing  ⏭ next  ·  ←/→ Home End  ·  Enter queue"),
+            Line::from(
+                "N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close",
+            ),
+        ]),
+        Rect {
+            y: help_y,
+            height: inner.height.saturating_sub(help_y.saturating_sub(inner.y)),
+            ..inner
+        },
+    );
+}
+
+fn pattern_is_empty(pattern: &crate::model::Pattern) -> bool {
+    pattern
+        .tracks
+        .iter()
+        .all(|track| track.steps.iter().all(Option::is_none))
 }
 
 fn render_lfo_popup(
@@ -3693,6 +3784,29 @@ mod tests {
         assert_eq!(adjacent_pattern_in_count(2, true, 3), 0);
         assert_eq!(adjacent_pattern_in_count(1, false, 3), 0);
         assert_eq!(adjacent_pattern_in_count(1, true, 3), 2);
+    }
+
+    #[test]
+    fn pattern_dialog_renders_horizontal_plain_numbered_states() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        project.patterns.push(project.patterns[0].clone());
+        project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            locks: Default::default(),
+        });
+        let mut app = App::new(project, None);
+        app.mode = Mode::PatternDialog;
+        app.pattern_cursor = 2;
+        app.active_pattern = 0;
+        app.queued_pattern = Some(1);
+
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("Patterns (3)"));
+        assert!(screen.contains("1") && screen.contains("2") && screen.contains("3"));
+        assert!(screen.contains("▶") && screen.contains("⏭"));
+        assert!(!screen.contains("P001"));
+        assert!(!screen.contains("used"));
     }
 
     #[test]

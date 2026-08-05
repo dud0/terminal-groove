@@ -68,9 +68,9 @@ All sound is synthesized in real time. The application contains no audio samples
 
 ### 2.2 Patterns
 
-- A project contains 1 through 100 dynamic patterns, numbered from P1. Each pattern owns the six track sequences; instrument, mixer, global, and effect settings are shared. New projects contain one empty pattern.
-- `Ctrl+P` opens the pattern dialog. Left/right, `Home`, and `End` select patterns. `N` inserts an empty pattern after the cursor, `D` duplicates it, `C` copies it, `X` cuts it, `V` replaces it from the clipboard, and `Delete` removes it. The final pattern cannot be removed and is reset to empty.
-- Pattern selection while stopped is immediate. While playing, the selected pattern is queued for the next bar.
+- A project contains 1 through 100 dynamic patterns, numbered from 1. Each pattern owns the six track sequences; instrument, mixer, global, and effect settings are shared. New projects contain one empty pattern.
+- `Ctrl+P` opens a horizontally organized pattern dialog. Left/right, `Home`, and `End` move a visual cursor without changing playback. `Enter` selects the cursor pattern while stopped or queues it for the next bar while playing, then closes the dialog. `N` inserts an empty pattern after the cursor, `D` duplicates it, `C` copies it, `X` cuts it, `V` pastes the copied pattern after the cursor, and `Delete` removes it. The final pattern cannot be removed and is reset to empty.
+- The dialog marks the currently playing pattern with `▶`, the next queued pattern with `⏭`, and empty patterns with a muted style. The pattern strip scrolls horizontally when necessary.
 - Pattern insertion, deletion, and replacement rebase active and queued playback indexes so queued playback continues to refer to the same pattern where possible.
 
 ### 2.3 Drum events
@@ -295,9 +295,10 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `Space` | Play/pause |
 | Anywhere | `.` | Stop, reset, and clear effect tails |
 | Anywhere | `Ctrl+P` | Open the dynamic pattern dialog |
-| Pattern dialog | Left/right, `Home`, `End` | Select a pattern |
+| Pattern dialog | Left/right, `Home`, `End` | Move the pattern cursor |
+| Pattern dialog | `Enter` | Select or queue the cursor pattern and close |
 | Pattern dialog | `N` / `D` | Insert an empty pattern / duplicate the cursor pattern |
-| Pattern dialog | `C` / `X` / `V` | Copy / cut / replace the cursor pattern |
+| Pattern dialog | `C` / `X` / `V` | Copy / cut / paste after the cursor |
 | Pattern dialog | `Delete` | Remove the cursor pattern, resetting the final pattern instead |
 | Anywhere | `o` | Audition selected track/step without editing |
 | Anywhere | `Ctrl+S` | Save, prompting if no current path exists |

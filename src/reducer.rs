@@ -148,6 +148,36 @@ impl Editor {
         );
         Ok(true)
     }
+
+    fn pattern_structure_edit_at<F>(
+        &mut self,
+        cursor: usize,
+        f: F,
+    ) -> Result<(bool, usize), EditError>
+    where
+        F: FnOnce(&mut Project, usize, usize) -> Result<(usize, usize), EditError>,
+    {
+        if cursor >= self.project.patterns.len() {
+            return Ok((false, self.pattern));
+        }
+        self.project.store_active_pattern(self.pattern);
+        let before = self.project.clone();
+        let before_pattern = self.pattern;
+        let (next_cursor, next_active) = f(&mut self.project, cursor, before_pattern)?;
+        self.pattern = next_active;
+        self.project.activate_pattern(self.pattern);
+        if before == self.project {
+            return Ok((false, next_cursor));
+        }
+        self.push_revision(
+            before,
+            before_pattern,
+            self.project.clone(),
+            self.pattern,
+            None,
+        );
+        Ok((true, next_cursor))
+    }
     fn push_revision(
         &mut self,
         before: Project,
@@ -183,6 +213,22 @@ impl Editor {
             Ok(cursor + 1)
         })
     }
+
+    pub fn insert_pattern_at(&mut self, cursor: usize) -> Result<(bool, usize), EditError> {
+        if self.project.patterns.len() >= crate::model::MAX_PATTERN_COUNT {
+            return Ok((false, cursor));
+        }
+        self.pattern_structure_edit_at(cursor, |p, cursor, active| {
+            p.patterns.insert(cursor + 1, Self::empty_pattern());
+            for entry in &mut p.song {
+                if usize::from(entry.pattern) > cursor + 1 {
+                    entry.pattern += 1;
+                }
+            }
+            let active = if active > cursor { active + 1 } else { active };
+            Ok((cursor + 1, active))
+        })
+    }
     pub fn duplicate_pattern(&mut self) -> Result<bool, EditError> {
         if self.project.patterns.len() >= crate::model::MAX_PATTERN_COUNT {
             return Ok(false);
@@ -197,20 +243,82 @@ impl Editor {
             Ok(cursor + 1)
         })
     }
+
+    pub fn duplicate_pattern_at(&mut self, cursor: usize) -> Result<(bool, usize), EditError> {
+        if self.project.patterns.len() >= crate::model::MAX_PATTERN_COUNT {
+            return Ok((false, cursor));
+        }
+        self.pattern_structure_edit_at(cursor, |p, cursor, active| {
+            p.patterns.insert(cursor + 1, p.patterns[cursor].clone());
+            for entry in &mut p.song {
+                if usize::from(entry.pattern) > cursor + 1 {
+                    entry.pattern += 1;
+                }
+            }
+            let active = if active > cursor { active + 1 } else { active };
+            Ok((cursor + 1, active))
+        })
+    }
     pub fn copy_pattern(&mut self) {
         self.clipboard = Some(self.current_pattern());
+    }
+
+    pub fn copy_pattern_at(&mut self, cursor: usize) -> bool {
+        let Some(pattern) = self.project.patterns.get(cursor).cloned() else {
+            return false;
+        };
+        self.clipboard = Some(if cursor == self.pattern {
+            self.current_pattern()
+        } else {
+            pattern
+        });
+        true
     }
     pub fn cut_pattern(&mut self) -> Result<bool, EditError> {
         self.clipboard = Some(self.current_pattern());
         self.delete_pattern()
     }
+
+    pub fn cut_pattern_at(&mut self, cursor: usize) -> Result<(bool, usize), EditError> {
+        if !self.copy_pattern_at(cursor) {
+            return Ok((false, cursor));
+        }
+        self.delete_pattern_at(cursor)
+    }
     pub fn paste_pattern(&mut self) -> Result<bool, EditError> {
         let Some(pattern) = self.clipboard.clone() else {
             return Ok(false);
         };
+        if self.project.patterns.len() >= crate::model::MAX_PATTERN_COUNT {
+            return Ok(false);
+        }
         self.pattern_structure_edit(|p, cursor| {
-            p.patterns[cursor] = pattern;
-            Ok(cursor)
+            p.patterns.insert(cursor + 1, pattern);
+            for entry in &mut p.song {
+                if usize::from(entry.pattern) > cursor + 1 {
+                    entry.pattern += 1;
+                }
+            }
+            Ok(cursor + 1)
+        })
+    }
+
+    pub fn paste_pattern_at(&mut self, cursor: usize) -> Result<(bool, usize), EditError> {
+        let Some(pattern) = self.clipboard.clone() else {
+            return Ok((false, cursor));
+        };
+        if self.project.patterns.len() >= crate::model::MAX_PATTERN_COUNT {
+            return Ok((false, cursor));
+        }
+        self.pattern_structure_edit_at(cursor, |p, cursor, active| {
+            p.patterns.insert(cursor + 1, pattern);
+            for entry in &mut p.song {
+                if usize::from(entry.pattern) > cursor + 1 {
+                    entry.pattern += 1;
+                }
+            }
+            let active = if active > cursor { active + 1 } else { active };
+            Ok((cursor + 1, active))
         })
     }
     pub fn delete_pattern(&mut self) -> Result<bool, EditError> {
@@ -230,6 +338,33 @@ impl Editor {
                 }
             }
             Ok(fallback - 1)
+        })
+    }
+
+    pub fn delete_pattern_at(&mut self, cursor: usize) -> Result<(bool, usize), EditError> {
+        self.pattern_structure_edit_at(cursor, |p, cursor, active| {
+            if p.patterns.len() == crate::model::MIN_PATTERN_COUNT {
+                p.patterns[cursor] = Self::empty_pattern();
+                return Ok((cursor, active));
+            }
+            p.patterns.remove(cursor);
+            let fallback = cursor.min(p.patterns.len() - 1);
+            let removed = cursor + 1;
+            for entry in &mut p.song {
+                if entry.pattern == removed as u8 {
+                    entry.pattern = (fallback + 1) as u8;
+                } else if entry.pattern > removed as u8 {
+                    entry.pattern -= 1;
+                }
+            }
+            let active = if active > cursor {
+                active - 1
+            } else if active == cursor {
+                fallback
+            } else {
+                active
+            };
+            Ok((fallback, active))
         })
     }
     pub fn clear_pattern(&mut self) -> Result<bool, EditError> {
@@ -784,6 +919,47 @@ mod tests {
         assert!(!editor.delete_pattern().unwrap());
         assert_eq!(editor.project.patterns.len(), 1);
         assert!(editor.project.tracks[0].steps.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn cursor_pattern_operations_preserve_the_committed_editor_pattern() {
+        let mut editor = Editor::new(Project::new());
+        editor.toggle_event(0, 0).unwrap();
+        editor.duplicate_pattern().unwrap();
+        editor.duplicate_pattern().unwrap();
+        editor.select_pattern(0);
+
+        let (changed, cursor) = editor.insert_pattern_at(1).unwrap();
+        assert!(changed);
+        assert_eq!(cursor, 2);
+        assert_eq!(editor.pattern(), 0);
+        assert!(editor.project.tracks[0].steps[0].is_some());
+        assert_eq!(editor.project.patterns.len(), 4);
+
+        let (changed, cursor) = editor.delete_pattern_at(cursor).unwrap();
+        assert!(changed);
+        assert_eq!(cursor, 2);
+        assert_eq!(editor.pattern(), 0);
+        assert_eq!(editor.project.patterns.len(), 3);
+    }
+
+    #[test]
+    fn cursor_clipboard_operations_use_the_cursor_pattern() {
+        let mut editor = Editor::new(Project::new());
+        editor.duplicate_pattern().unwrap();
+        editor.select_pattern(0);
+        editor.project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            locks: Default::default(),
+        });
+
+        assert!(editor.copy_pattern_at(1));
+        let (changed, cursor) = editor.paste_pattern_at(0).unwrap();
+        assert!(changed);
+        assert_eq!(cursor, 1);
+        assert!(editor.project.patterns[1].tracks[0].steps[0].is_some());
+        assert!(editor.cut_pattern_at(1).unwrap().0);
+        assert_eq!(editor.project.patterns.len(), 2);
     }
     #[test]
     fn edit_invalidates_redo() {

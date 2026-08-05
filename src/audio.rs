@@ -66,6 +66,10 @@ impl ParameterSmoothing {
 }
 impl AudioProject {
     pub fn from_project(project: &Project) -> Self {
+        Self::from_project_with_active_pattern(project, 0)
+    }
+
+    pub fn from_project_with_active_pattern(project: &Project, active_pattern: usize) -> Self {
         Self {
             globals: project.globals,
             tracks: std::array::from_fn(|i| {
@@ -89,10 +93,10 @@ impl AudioProject {
                 .enumerate()
                 .map(|(pattern, source)| AudioPattern {
                     tracks: std::array::from_fn(|track| {
-                        // `tracks` is the editor's current-pattern workspace. Keeping
-                        // pattern 1 sourced from it also preserves the public model
-                        // construction style used by callers of older releases.
-                        let steps = if pattern == 0 {
+                        // `tracks` is the editor's current-pattern workspace. Use it
+                        // only for that pattern; all other entries come from the
+                        // dynamic pattern bank.
+                        let steps = if pattern == active_pattern {
                             &project.tracks[track].steps
                         } else {
                             &source.tracks[track].steps
@@ -166,14 +170,31 @@ impl Audio {
         self.producer.slots()
     }
     pub fn snapshot(project: &Project) -> AudioCommand {
-        Self::snapshot_with_smoothing(project, ParameterSmoothing::Default)
+        Self::snapshot_for_pattern(project, 0)
+    }
+    pub fn snapshot_for_pattern(project: &Project, active_pattern: usize) -> AudioCommand {
+        Self::snapshot_with_smoothing_for_pattern(
+            project,
+            active_pattern,
+            ParameterSmoothing::Default,
+        )
     }
     pub fn snapshot_with_smoothing(
         project: &Project,
         smoothing: ParameterSmoothing,
     ) -> AudioCommand {
+        Self::snapshot_with_smoothing_for_pattern(project, 0, smoothing)
+    }
+    pub fn snapshot_with_smoothing_for_pattern(
+        project: &Project,
+        active_pattern: usize,
+        smoothing: ParameterSmoothing,
+    ) -> AudioCommand {
         AudioCommand::ReplaceProject {
-            project: Box::new(AudioProject::from_project(project)),
+            project: Box::new(AudioProject::from_project_with_active_pattern(
+                project,
+                active_pattern,
+            )),
             smoothing,
         }
     }
@@ -2016,6 +2037,36 @@ mod tests {
         };
         assert_eq!(snapshot.patterns.len(), 3);
         assert_eq!(snapshot.patterns[2].tracks[1].step_count, 24);
+    }
+
+    #[test]
+    fn snapshot_uses_the_editor_workspace_only_for_the_committed_pattern() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            locks: Default::default(),
+        });
+        project.patterns[1].tracks[0].steps[1] = Some(StepEvent::Trigger {
+            accent: true,
+            locks: Default::default(),
+        });
+        project.activate_pattern(1);
+
+        let AudioCommand::ReplaceProject {
+            project: snapshot, ..
+        } = Audio::snapshot_for_pattern(&project, 1)
+        else {
+            panic!()
+        };
+        assert!(matches!(
+            snapshot.patterns[0].tracks[0].steps[0],
+            Some(StepEvent::Trigger { accent: false, .. })
+        ));
+        assert!(matches!(
+            snapshot.patterns[1].tracks[0].steps[1],
+            Some(StepEvent::Trigger { accent: true, .. })
+        ));
     }
 
     #[test]
