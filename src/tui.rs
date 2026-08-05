@@ -3231,7 +3231,7 @@ fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
     let width = area.width.saturating_sub(8).max(24);
     let popup_area = Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 2,
+        y: area.y,
         width,
         height,
     };
@@ -3802,6 +3802,7 @@ mod tests {
         app.queued_pattern = Some(1);
 
         let screen = rendered(&app, 120, 34);
+        assert!(screen.lines().next().unwrap().contains("Patterns (3)"));
         assert!(screen.contains("Patterns (3)"));
         assert!(screen.contains("1") && screen.contains("2") && screen.contains("3"));
         assert!(screen.contains("▶") && screen.contains("⏭"));
