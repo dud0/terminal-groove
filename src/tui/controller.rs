@@ -373,13 +373,17 @@ pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
         }
         KeyCode::Up | KeyCode::Down => {
             let direction = if k.code == KeyCode::Up { 1 } else { -1 };
+            // Selectors are rendered top-to-bottom, so Up selects the previous
+            // value while faders continue to increase on Up.
+            let selector_direction = -direction;
             match id {
                 GlobalParameterId::DelayDivision => edit_global(a, audio, id, move |g| {
                     let i = DelayDivision::ALL
                         .iter()
                         .position(|x| *x == g.delay_division)
                         .unwrap() as i32;
-                    g.delay_division = DelayDivision::ALL[(i + direction).clamp(0, 10) as usize]
+                    g.delay_division =
+                        DelayDivision::ALL[(i + selector_direction).clamp(0, 10) as usize]
                 }),
                 GlobalParameterId::DelayFeedback => {
                     let d: i16 = if k.modifiers.contains(KeyModifiers::SHIFT) {
@@ -431,9 +435,9 @@ pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
                             .clamp(0, 200) as u16
                     })
                 }
-                GlobalParameterId::Key => {
-                    edit_global(a, audio, id, move |g| g.key = g.key.shifted(direction))
-                }
+                GlobalParameterId::Key => edit_global(a, audio, id, move |g| {
+                    g.key = g.key.shifted(selector_direction)
+                }),
                 GlobalParameterId::Scale => edit_global(a, audio, id, |g| {
                     g.scale = if g.scale == Scale::Major {
                         Scale::NaturalMinor
