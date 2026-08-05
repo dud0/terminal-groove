@@ -72,8 +72,8 @@ pub(crate) use state::{ChordField, FileAction, GeneratorDialog, LfoField, Mode, 
 use controller::{
     adjusted_octave, change_octave, edit_global, enter_error, enter_global_edit, global_id,
     global_name, global_shortcut, handle_file_input, handle_global_key, handle_new_confirm,
-    handle_open_confirm, handle_tempo_input, new_project, open_project, refresh_audio_status,
-    request_new_project, reset_project_ui, resolved_path, save, sync_project,
+    handle_open_confirm, handle_tempo_input, move_global_editor, new_project, open_project,
+    refresh_audio_status, request_new_project, reset_project_ui, resolved_path, save, sync_project,
     sync_project_with_smoothing,
 };
 #[cfg(test)]
@@ -1064,6 +1064,21 @@ mod tests {
                 _ => assert_eq!(app.mode, Mode::GlobalEdit(id)),
             }
         }
+    }
+
+    #[test]
+    fn global_editor_left_and_right_cycle_controls() {
+        let mut app = App::new(Project::new(), None);
+        app.global = 0;
+        app.mode = Mode::GlobalEdit(GlobalParameterId::Tempo);
+
+        move_global_editor(&mut app, false);
+        assert_eq!(app.global, GLOBAL_IDS.len() - 1);
+        assert_eq!(app.mode, Mode::GlobalEdit(GlobalParameterId::Scale));
+
+        move_global_editor(&mut app, true);
+        assert_eq!(app.global, 0);
+        assert_eq!(app.mode, Mode::TempoInput(String::new()));
     }
 
     #[test]

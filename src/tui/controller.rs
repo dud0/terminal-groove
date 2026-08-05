@@ -302,6 +302,18 @@ pub(super) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
     };
     a.status = format!("Editing {}", global_name(id));
 }
+
+pub(super) fn move_global_editor(a: &mut App, forward: bool) {
+    let next = if forward {
+        (a.global + 1) % GLOBAL_IDS.len()
+    } else {
+        (a.global + GLOBAL_IDS.len() - 1) % GLOBAL_IDS.len()
+    };
+    a.editor.end_coalescing();
+    a.global = next;
+    enter_global_edit(a, global_id(next));
+}
+
 pub(super) fn global_name(id: GlobalParameterId) -> &'static str {
     match id {
         GlobalParameterId::Tempo => "tempo",
@@ -347,6 +359,8 @@ pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
             a.editor.end_coalescing();
             a.mode = Mode::Navigation
         }
+        KeyCode::Left => move_global_editor(a, false),
+        KeyCode::Right => move_global_editor(a, true),
         KeyCode::Char(c) => {
             if let Some(next) = global_shortcut(c) {
                 a.global = next as usize;
@@ -480,6 +494,8 @@ pub(super) fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
                 g.tempo_bpm = (g.tempo_bpm as i16 + d).clamp(40, 240) as u16
             })
         }
+        KeyCode::Left => move_global_editor(a, false),
+        KeyCode::Right => move_global_editor(a, true),
         KeyCode::Enter => match input.parse::<u16>() {
             Ok(v @ 40..=240) => {
                 edit_global(a, audio, GlobalParameterId::Tempo, move |g| g.tempo_bpm = v);
