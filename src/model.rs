@@ -384,7 +384,7 @@ pub struct Globals {
 }
 
 fn default_reverb_tone() -> Percent {
-    Percent(50)
+    Percent(40)
 }
 
 fn default_reverb_pre_delay_ms() -> u16 {
@@ -1013,7 +1013,10 @@ impl Project {
             pan: default_pan(),
             muted: false,
             delay_send: p(0),
-            reverb_send: p(0),
+            reverb_send: match kind {
+                TrackKind::Chord | TrackKind::Lead => p(20),
+                _ => p(0),
+            },
             instrument,
             lfos: LfoAssignments::default(),
             steps: vec![None; STEP_BANK_SIZE],
@@ -1068,7 +1071,7 @@ impl Project {
                     Instrument::Chord(ChordParameters {
                         oscillator_mix: p(70),
                         pulse_width: p(50),
-                        sub_oscillator: p(35),
+                        sub_oscillator: p(0),
                         chorus: ChorusMode::I,
                         spread: ChordSpread::Off,
                         cutoff: p(55),

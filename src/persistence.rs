@@ -158,15 +158,18 @@ mod tests {
         assert_eq!(value["format_version"], 8);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
-        assert_eq!(value["globals"]["reverb_tone"], 50);
+        assert_eq!(value["globals"]["reverb_tone"], 40);
         assert_eq!(value["globals"]["reverb_pre_delay_ms"], 20);
         assert_eq!(value["tracks"].as_array().unwrap().len(), 6);
         assert_eq!(value["tracks"][0]["name"], "Kick");
         assert_eq!(value["tracks"][4]["kind"], "chord");
         assert_eq!(value["tracks"][4]["name"], "Chord");
+        assert_eq!(value["tracks"][4]["reverb_send"], 20);
         assert_eq!(value["tracks"][4]["instrument"]["chorus"], "i");
+        assert_eq!(value["tracks"][4]["instrument"]["sub_oscillator"], 0);
         assert_eq!(value["tracks"][5]["kind"], "lead");
         assert_eq!(value["tracks"][5]["name"], "Lead");
+        assert_eq!(value["tracks"][5]["reverb_send"], 20);
         assert_eq!(value["tracks"][0]["lfos"], serde_json::json!({}));
         assert!(value["tracks"][0].get("input_degree").is_none());
         assert_eq!(
@@ -191,7 +194,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
 
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.globals.reverb_tone.get(), 50);
+        assert_eq!(loaded.globals.reverb_tone.get(), 40);
         assert_eq!(loaded.globals.reverb_pre_delay_ms, 20);
     }
 

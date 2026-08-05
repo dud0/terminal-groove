@@ -218,7 +218,7 @@ Chord is a Juno-60-inspired polyphonic engine; Lead is an SH-101-inspired monoph
 Chord additionally has a stereo `chorus` selector with Off, I, and II modes. Mode I uses approximately 15 ms base delay, 1.5 ms modulation depth, and 0.5 Hz; mode II uses 12 ms, 2.5 ms, and 0.8 Hz. Mode changes crossfade over approximately 5 ms. Chorus precedes post-fader stereo sends.
 Chord also has a `spread` selector: Off keeps every voice at the track pan, Narrow uses half stereo width, and Wide uses full width. Three voices are placed left/center/right and four voices left/inner-left/inner-right/right in stored voice order; positions are centered around track pan and clamped at the boundaries. Spread is captured for each chord voice group so release tails retain their layout, is lockable per step, and is not LFO-modulatable. Chorus preserves stereo voice input while remaining centered when spread is Off.
 
-Chord defaults: 70% Saw mix, pulse width 50%, sub 35%, chorus I, cutoff 55%, resonance 15%, filter envelope 25%, and ADSR 55/45/75/65%. Lead defaults: 75% Saw mix, pulse width 50%, sub 25%, cutoff 50%, resonance 35%, filter envelope 55%, and ADSR 0/35/55/20%.
+Chord defaults: 70% Saw mix, pulse width 50%, sub 0%, chorus I, cutoff 55%, resonance 15%, filter envelope 25%, and ADSR 55/45/75/65%. Lead defaults: 75% Saw mix, pulse width 50%, sub 25%, cutoff 50%, resonance 35%, filter envelope 55%, and ADSR 0/35/55/20%.
 
 All pitched tracks default to input degree 1 and octave 3. Their oscillators and filters run at 2x oversampling. Chord uses stable DCO pitch and a smoother resonance-compensated response; Lead uses stronger drive and feedback.
 
@@ -229,7 +229,7 @@ Each track provides:
 - Level, default 80%
 - Mute, default off
 - Delay send, default 0%
-- Reverb send, default 0%
+- Reverb send, default 0% (20% for Chord and Lead)
 
 Sends are post-fader and post-mute. Muting ramps the dry track and new send input to silence, but already-generated global effect tails continue. A muted synth voice continues its internal state, so unmuting may reveal a still-active voice.
 
@@ -249,7 +249,7 @@ Feedback ranges from 0% through 95% to prevent unity or unstable feedback. Defau
 
 The reverb is a stereo algorithmic Schroeder/Freeverb-style network using a stereo pre-delay, parallel feedback comb filters, and series all-pass filters. Reverb time specifies the low-frequency RT60. Tone controls the comb damping: 0% is darkest and 100% is brightest. Tone and pre-delay changes are smoothed or crossfaded to avoid clicks. It has no samples, convolution impulse, or independent return-level control.
 
-Reverb time ranges from 0.2 through 10.0 seconds and defaults to 2.5 seconds. Reverb tone ranges from 0% through 100% and defaults to 50%. Reverb pre-delay ranges from 0 through 200 ms and defaults to 20 ms.
+Reverb time ranges from 0.2 through 10.0 seconds and defaults to 2.5 seconds. Reverb tone ranges from 0% through 100% and defaults to 40%. Reverb pre-delay ranges from 0 through 200 ms and defaults to 20 ms.
 
 #### Master safety
 
@@ -263,7 +263,7 @@ The final output stage applies DC blocking, fixed +6 dB makeup gain, and a stere
 | Delay time | Supported division list | `1/8` | Up/down moves through the list |
 | Delay feedback | 0–95% | 30% | Percentage direct entry and arrows |
 | Reverb time | 0.2–10.0 s | 2.5 s | Up/down by 0.1 s and Shift+up/down by 1 s |
-| Reverb tone | 0–100% | 50% | Percentage direct entry, or up/down by 1% and Shift+up/down by 10% |
+| Reverb tone | 0–100% | 40% | Percentage direct entry, or up/down by 1% and Shift+up/down by 10% |
 | Reverb pre-delay | 0–200 ms | 20 ms | Up/down by 1 ms and Shift+up/down by 10 ms |
 | Key | C, C#, D, D#, E, F, F#, G, G#, A, A#, B | C | Up/down moves chromatically |
 | Scale | Major, natural minor | Major | Up/down or the shortcut toggles the value |
@@ -471,7 +471,7 @@ The top-level object is:
   "delay_division": "eighth",
   "delay_feedback": 30,
   "reverb_time_seconds": 2.5,
-  "reverb_tone": 50,
+  "reverb_tone": 40,
   "reverb_pre_delay_ms": 20,
   "key": "C",
   "scale": "major"
