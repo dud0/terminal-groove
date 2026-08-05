@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_legacy_projects_are_rejected() {
+    fn bundled_projects_are_valid_latest_format_files() {
         for json in [
             include_str!("../beat"),
             include_str!("../beat2"),
@@ -261,13 +261,12 @@ mod tests {
         ] {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
-            assert!(matches!(
-                load(path.path()),
-                Err(ProjectIoError::Validation {
-                    source: crate::model::ValidationError::Version(6),
-                    ..
-                })
-            ));
+            let project = load(path.path()).unwrap();
+            assert_eq!(project.format_version, 8);
+            assert!(
+                (crate::model::MIN_PATTERN_COUNT..=crate::model::MAX_PATTERN_COUNT)
+                    .contains(&project.patterns.len())
+            );
         }
     }
 

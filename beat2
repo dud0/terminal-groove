@@ -1,5 +1,5 @@
 {
-  "format_version": 6,
+  "format_version": 8,
   "globals": {
     "tempo_bpm": 120,
     "delay_division": "eighth",
@@ -468,6 +468,384 @@
       "input_degree": 6,
       "input_octave": 4,
       "lfos": {}
+    }
+  ],
+  "patterns": [
+    {
+      "tracks": [
+        {
+          "steps": [
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            {
+              "type": "trigger",
+              "locks": {
+                "decay": 80
+              },
+              "accent": false
+            },
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 6,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 3,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            }
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "locks": {},
+              "accent": false
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 4,
+              "locks": {},
+              "accent": false
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
+        }
+      ]
+    }
+  ],
+  "song": [
+    {
+      "pattern": 1,
+      "bars": 1
     }
   ]
 }

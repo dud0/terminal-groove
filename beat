@@ -1,5 +1,5 @@
 {
-  "format_version": 6,
+  "format_version": 8,
   "globals": {
     "tempo_bpm": 110,
     "delay_division": "eighth",
@@ -315,6 +315,231 @@
       "input_degree": 1,
       "input_octave": 3,
       "lfos": {}
+    }
+  ],
+  "patterns": [
+    {
+      "tracks": [
+        {
+          "steps": [
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            {
+              "type": "trigger",
+              "locks": {
+                "decay": 80
+              },
+              "accent": false
+            },
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            {
+              "type": "trigger",
+              "locks": {
+                "decay": 60
+              },
+              "accent": false
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "locks": {},
+              "accent": false
+            },
+            null
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 1,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 1,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 2,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 1,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 1,
+              "locks": {},
+              "slide": false,
+              "accent": false
+            },
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
+        }
+      ]
+    }
+  ],
+  "song": [
+    {
+      "pattern": 1,
+      "bars": 1
     }
   ]
 }

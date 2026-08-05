@@ -1,5 +1,5 @@
 {
-  "format_version": 6,
+  "format_version": 8,
   "globals": {
     "tempo_bpm": 80,
     "delay_division": "eighth",
@@ -419,6 +419,335 @@
       ],
       "input_degree": 4,
       "input_octave": 4
+    }
+  ],
+  "patterns": [
+    {
+      "tracks": [
+        {
+          "steps": [
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {
+                "decay": 80
+              }
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {
+                "decay": 60
+              }
+            },
+            null
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            }
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 2,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "locks": {
+                "reverb_send": 40
+              }
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null
+          ]
+        }
+      ]
+    }
+  ],
+  "song": [
+    {
+      "pattern": 1,
+      "bars": 1
     }
   ]
 }
