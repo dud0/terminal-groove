@@ -4041,7 +4041,7 @@ fn lfo_popup_rect(area: Rect) -> Rect {
     let height = area.height.saturating_sub(4).min(20);
     Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 2,
+        y: area.y + area.height.saturating_sub(height + 5),
         width,
         height,
     }
@@ -4565,14 +4565,14 @@ mod tests {
     }
 
     #[test]
-    fn lfo_modal_is_centered_and_capped_on_large_terminals() {
+    fn lfo_modal_is_lower_and_capped_on_large_terminals() {
         assert_eq!(
             lfo_popup_rect(Rect::new(0, 0, 120, 34)),
-            Rect::new(14, 7, 92, 20)
+            Rect::new(14, 9, 92, 20)
         );
         assert_eq!(
             lfo_popup_rect(Rect::new(0, 0, 200, 50)),
-            Rect::new(54, 15, 92, 20)
+            Rect::new(54, 25, 92, 20)
         );
     }
 
