@@ -1,8 +1,8 @@
-#[allow(unused_imports)]
-use super::*;
+use super::{AudioCommand, Renderer};
+use rtrb::Consumer;
 
 impl Renderer {
-    pub(crate) fn configure_effects(&mut self, smoothing_samples: u32) {
+    pub(super) fn configure_effects(&mut self, smoothing_samples: u32) {
         self.clock.set_bpm(self.project.globals.tempo_bpm);
         self.delay.configure(
             self.project
@@ -20,7 +20,7 @@ impl Renderer {
         self.reverb
             .set_pre_delay_smoothed(self.project.globals.reverb_pre_delay_ms, smoothing_samples);
     }
-    pub(crate) fn update_mutes(&mut self, immediate: bool) {
+    pub(super) fn update_mutes(&mut self, immediate: bool) {
         let smoothing = if immediate {
             0
         } else {
@@ -32,7 +32,7 @@ impl Renderer {
     }
 }
 
-pub(crate) fn render<T: Copy, F: Fn(f32) -> T>(
+pub(super) fn render<T: Copy, F: Fn(f32) -> T>(
     out: &mut [T],
     channels: usize,
     renderer: &mut Renderer,
@@ -62,10 +62,10 @@ pub(crate) fn render<T: Copy, F: Fn(f32) -> T>(
     }
 }
 
-pub(crate) fn modulated_percent(center: f32, offset: f32) -> f32 {
+pub(super) fn modulated_percent(center: f32, offset: f32) -> f32 {
     (center + offset).clamp(0.0, 100.0)
 }
 
-pub(crate) fn pitch_modulated_frequency(base_frequency: f32, offset_percent: f32) -> f32 {
+pub(super) fn pitch_modulated_frequency(base_frequency: f32, offset_percent: f32) -> f32 {
     base_frequency * 2.0_f32.powf((offset_percent / 100.0 * 2.0) / 12.0)
 }

@@ -1,6 +1,28 @@
-use super::*;
+use super::{
+    controller::{
+        change_octave, edit_global, enter_global_edit, global_id, global_shortcut,
+        handle_file_input, handle_global_key, handle_new_confirm, handle_open_confirm,
+        handle_tempo_input, new_project, request_new_project, save, sync_project,
+        sync_project_with_smoothing,
+    },
+    render::{GLOBAL_IDS, parameter_descriptors, scope_name, selected_chord_shape},
+    state::{App, ChordField, FileAction, GeneratorDialog, LfoField, Mode, TriggerField},
+};
+use crate::{
+    audio::{Audio, AudioCommand},
+    generator::{Config as GeneratorConfig, Target as GeneratorTarget},
+    model::{
+        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, GlobalParameterId, LfoConfig,
+        LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent,
+        STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition,
+        Waveform,
+    },
+    reducer::{Editor, Scope},
+};
+use anyhow::Result;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-pub(crate) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     if matches!(a.mode, Mode::Error(_)) {
         if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
             a.mode = Mode::Navigation;
@@ -331,7 +353,7 @@ pub(crate) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     Ok(())
 }
 
-pub(crate) fn move_step(a: &mut App, forward: bool) {
+pub(super) fn move_step(a: &mut App, forward: bool) {
     let track = a.row - 1;
     let length = a.editor.project.tracks[track].steps.len();
     a.step = if forward {
@@ -341,7 +363,7 @@ pub(crate) fn move_step(a: &mut App, forward: bool) {
     };
 }
 
-pub(crate) fn track_jump_index(k: KeyEvent) -> Option<usize> {
+pub(super) fn track_jump_index(k: KeyEvent) -> Option<usize> {
     let KeyCode::Char(c) = k.code else {
         return None;
     };
@@ -366,7 +388,7 @@ pub(crate) fn track_jump_index(k: KeyEvent) -> Option<usize> {
     None
 }
 
-pub(crate) fn select_track(a: &mut App, track: usize) {
+pub(super) fn select_track(a: &mut App, track: usize) {
     a.editor.end_coalescing();
     a.row = track + 1;
     a.step = a.step.min(a.editor.project.tracks[track].steps.len() - 1);
@@ -382,7 +404,7 @@ pub(crate) fn select_track(a: &mut App, track: usize) {
     }
 }
 
-pub(crate) fn commit_pattern(a: &mut App, audio: &mut Audio, pattern: usize) -> bool {
+pub(super) fn commit_pattern(a: &mut App, audio: &mut Audio, pattern: usize) -> bool {
     let previous = a.editor.pattern();
     if pattern >= a.editor.project.patterns.len() || audio.available_commands() < 2 {
         a.status = "Audio command queue full; pattern switch rejected".into();
@@ -411,7 +433,7 @@ pub(crate) fn commit_pattern(a: &mut App, audio: &mut Audio, pattern: usize) -> 
     true
 }
 
-pub(crate) fn adjacent_pattern_in_count(pattern: usize, forward: bool, count: usize) -> usize {
+pub(super) fn adjacent_pattern_in_count(pattern: usize, forward: bool, count: usize) -> usize {
     if count == 0 {
         return 0;
     }
@@ -422,7 +444,7 @@ pub(crate) fn adjacent_pattern_in_count(pattern: usize, forward: bool, count: us
     }
 }
 
-pub(crate) fn handle_pattern_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+pub(super) fn handle_pattern_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     match k.code {
         KeyCode::Esc | KeyCode::Char('p' | 'P') => a.mode = Mode::Navigation,
         KeyCode::Left => {
@@ -483,7 +505,7 @@ pub(crate) fn handle_pattern_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent)
     Ok(())
 }
 
-pub(crate) fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+pub(super) fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     let Mode::GeneratorDialog(dialog) = &mut a.mode else {
         return Ok(());
     };
@@ -568,7 +590,7 @@ pub(crate) fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEven
     Ok(())
 }
 
-pub(crate) fn pattern_edit_at<F>(a: &mut App, audio: &mut Audio, f: F, message: &str)
+pub(super) fn pattern_edit_at<F>(a: &mut App, audio: &mut Audio, f: F, message: &str)
 where
     F: FnOnce(&mut Editor, usize) -> Result<(bool, usize), crate::reducer::EditError>,
 {
@@ -588,12 +610,12 @@ where
     }
 }
 
-pub(crate) fn move_step_page(a: &mut App, forward: bool) {
+pub(super) fn move_step_page(a: &mut App, forward: bool) {
     a.editor.end_coalescing();
     move_step(a, forward);
 }
 
-pub(crate) fn move_step_bank(a: &mut App, forward: bool) {
+pub(super) fn move_step_bank(a: &mut App, forward: bool) {
     let track = a.row - 1;
     let length = a.editor.project.tracks[track].steps.len();
     let banks = length.div_ceil(STEP_BANK_SIZE);
@@ -610,7 +632,7 @@ pub(crate) fn move_step_bank(a: &mut App, forward: bool) {
     a.step = (next_bank * STEP_BANK_SIZE + offset).min(length - 1);
 }
 
-pub(crate) fn move_step_vertical(a: &mut App, down: bool) {
+pub(super) fn move_step_vertical(a: &mut App, down: bool) {
     if a.row == 0 {
         if down {
             a.row = 1;
@@ -646,7 +668,7 @@ pub(crate) fn move_step_vertical(a: &mut App, down: bool) {
     }
 }
 
-pub(crate) fn normalize_cursor(a: &mut App) {
+pub(super) fn normalize_cursor(a: &mut App) {
     a.pattern_cursor = a
         .pattern_cursor
         .min(a.editor.project.patterns.len().saturating_sub(1));
@@ -657,7 +679,7 @@ pub(crate) fn normalize_cursor(a: &mut App) {
     }
 }
 
-pub(crate) fn set_selected_track_length(
+pub(super) fn set_selected_track_length(
     a: &mut App,
     audio: &mut Audio,
     length: usize,
@@ -703,7 +725,7 @@ pub(crate) fn set_selected_track_length(
     }
 }
 
-pub(crate) fn duplicate_selected_track(a: &mut App, audio: &mut Audio) {
+pub(super) fn duplicate_selected_track(a: &mut App, audio: &mut Audio) {
     if audio.available_commands() == 0 {
         a.status = "Audio command queue full; duplication rejected".into();
         return;
@@ -725,7 +747,7 @@ pub(crate) fn duplicate_selected_track(a: &mut App, audio: &mut Audio) {
     }
 }
 
-pub(crate) fn handle_track_length_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+pub(super) fn handle_track_length_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     let Mode::TrackLengthInput(mut input) = a.mode.clone() else {
         return Ok(());
     };
@@ -770,7 +792,7 @@ pub(crate) fn handle_track_length_input(a: &mut App, audio: &mut Audio, k: KeyEv
     Ok(())
 }
 
-pub(crate) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::ParameterEdit(parameter) = a.mode else {
         return Ok(false);
     };
@@ -957,14 +979,14 @@ pub(crate) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
     }
 }
 
-pub(crate) fn parameter_supports_direct_percentage(parameter: ParameterId) -> bool {
+pub(super) fn parameter_supports_direct_percentage(parameter: ParameterId) -> bool {
     !matches!(
         parameter,
         ParameterId::Waveform | ParameterId::Chorus | ParameterId::Spread | ParameterId::Pitch
     )
 }
 
-pub(crate) fn parameter_edit_passthrough(key: KeyCode) -> bool {
+pub(super) fn parameter_edit_passthrough(key: KeyCode) -> bool {
     matches!(
         key,
         KeyCode::Char(' ')
@@ -975,7 +997,7 @@ pub(crate) fn parameter_edit_passthrough(key: KeyCode) -> bool {
     )
 }
 
-pub(crate) fn open_lfo_editor(a: &mut App, audio: &mut Audio, parameter: ParameterId) {
+pub(super) fn open_lfo_editor(a: &mut App, audio: &mut Audio, parameter: ParameterId) {
     let track = a.row.saturating_sub(1);
     let kind = a.editor.project.tracks[track].kind;
     if !parameter.supports_lfo(kind) {
@@ -1008,7 +1030,7 @@ pub(crate) fn open_lfo_editor(a: &mut App, audio: &mut Audio, parameter: Paramet
     a.status = format!("Editing track LFO for {}", parameter.display_name());
 }
 
-pub(crate) fn open_chord_editor(a: &mut App) {
+pub(super) fn open_chord_editor(a: &mut App) {
     if a.row != 5 {
         a.status = "Chord editor is available on the Chord track only".into();
         return;
@@ -1032,7 +1054,7 @@ pub(crate) fn open_chord_editor(a: &mut App) {
     };
 }
 
-pub(crate) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::ChordEdit { shape } = a.mode else {
         return Ok(false);
     };
@@ -1170,7 +1192,7 @@ pub(crate) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
     Ok(true)
 }
 
-pub(crate) fn move_chord_editor_step(a: &mut App, forward: bool) {
+pub(super) fn move_chord_editor_step(a: &mut App, forward: bool) {
     move_step_page(a, forward);
     let shape = a
         .editor
@@ -1179,7 +1201,7 @@ pub(crate) fn move_chord_editor_step(a: &mut App, forward: bool) {
     a.mode = Mode::ChordEdit { shape };
 }
 
-pub(crate) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+pub(super) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::TriggerEdit { field } = a.mode else {
         return Ok(false);
     };
@@ -1305,7 +1327,7 @@ pub(crate) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
     Ok(true)
 }
 
-pub(crate) fn handle_swing_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+pub(super) fn handle_swing_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let track = a.row.saturating_sub(1);
     match k.code {
         KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o') => Ok(false),
@@ -1343,7 +1365,7 @@ pub(crate) fn handle_swing_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
     }
 }
 
-pub(crate) fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+pub(super) fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::LfoEdit { parameter, field } = a.mode.clone() else {
         return Ok(false);
     };
@@ -1468,7 +1490,7 @@ pub(crate) fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Res
     Ok(true)
 }
 
-pub(crate) fn lfo_choice_index(current: usize, len: usize, key: KeyCode) -> usize {
+pub(super) fn lfo_choice_index(current: usize, len: usize, key: KeyCode) -> usize {
     match key {
         KeyCode::Up => current.saturating_sub(1),
         KeyCode::Down => current.saturating_add(1).min(len.saturating_sub(1)),
@@ -1476,7 +1498,7 @@ pub(crate) fn lfo_choice_index(current: usize, len: usize, key: KeyCode) -> usiz
     }
 }
 
-pub(crate) fn set_lfo_config(
+pub(super) fn set_lfo_config(
     a: &mut App,
     audio: &mut Audio,
     parameter: ParameterId,
@@ -1498,24 +1520,24 @@ pub(crate) fn set_lfo_config(
     }
 }
 
-pub(crate) fn parameter_shortcut(kind: TrackKind, c: char) -> Option<ParameterId> {
+pub(super) fn parameter_shortcut(kind: TrackKind, c: char) -> Option<ParameterId> {
     parameter_descriptors(kind)
         .iter()
         .find(|descriptor| descriptor.shortcut.starts_with(c))
         .map(|descriptor| descriptor.id)
 }
 
-pub(crate) fn enter_parameter_edit(a: &mut App, parameter: ParameterId) {
+pub(super) fn enter_parameter_edit(a: &mut App, parameter: ParameterId) {
     a.mode = Mode::ParameterEdit(parameter);
     a.status = format!("Editing {}", parameter.display_name());
 }
 
-pub(crate) fn switch_parameter_editor(a: &mut App, parameter: ParameterId) {
+pub(super) fn switch_parameter_editor(a: &mut App, parameter: ParameterId) {
     a.editor.end_coalescing();
     enter_parameter_edit(a, parameter);
 }
 
-pub(crate) fn move_parameter_editor(a: &mut App, forward: bool) {
+pub(super) fn move_parameter_editor(a: &mut App, forward: bool) {
     let Mode::ParameterEdit(current) = a.mode else {
         return;
     };
@@ -1532,14 +1554,14 @@ pub(crate) fn move_parameter_editor(a: &mut App, forward: bool) {
     switch_parameter_editor(a, descriptors[next].id);
 }
 
-pub(crate) fn flipped_waveform(waveform: Waveform) -> Waveform {
+pub(super) fn flipped_waveform(waveform: Waveform) -> Waveform {
     match waveform {
         Waveform::Square => Waveform::Saw,
         Waveform::Saw => Waveform::Square,
     }
 }
 
-pub(crate) fn set_parameter(
+pub(super) fn set_parameter(
     a: &mut App,
     audio: &mut Audio,
     parameter: ParameterId,
@@ -1594,7 +1616,7 @@ pub(crate) fn set_parameter(
     }
 }
 
-pub(crate) fn coalesce_key(
+pub(super) fn coalesce_key(
     track: usize,
     step: usize,
     parameter: ParameterId,
@@ -1602,7 +1624,7 @@ pub(crate) fn coalesce_key(
     crate::reducer::CoalesceKey(track, step, parameter as u8)
 }
 
-pub(crate) fn apply<F: FnOnce(&mut Editor) -> Result<bool, crate::reducer::EditError>>(
+pub(super) fn apply<F: FnOnce(&mut Editor) -> Result<bool, crate::reducer::EditError>>(
     a: &mut App,
     audio: &Audio,
     f: F,

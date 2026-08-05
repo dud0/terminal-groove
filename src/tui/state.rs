@@ -1,4 +1,11 @@
-use super::*;
+use super::render::ValueOrigin;
+use crate::tui::DIRECT_PARAMETER_RAMP;
+use crate::{
+    generator::Target as GeneratorTarget,
+    model::{ChordShape, GlobalParameterId, ParameterId, Percent, Project, TRACK_COUNT},
+    reducer::{Editor, Scope},
+};
+use std::{path::PathBuf, time::Instant};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -58,7 +65,7 @@ pub(crate) enum TriggerField {
 }
 
 impl TriggerField {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 5] = [
         Self::Mode,
         Self::CyclePosition,
         Self::CycleLength,
@@ -68,11 +75,11 @@ impl TriggerField {
 }
 
 impl ChordField {
-    pub(crate) const ALL: [Self; 4] = [Self::Shape, Self::Arp, Self::Type, Self::Rate];
+    pub(super) const ALL: [Self; 4] = [Self::Shape, Self::Arp, Self::Type, Self::Rate];
 }
 
 impl LfoField {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 5] = [
         Self::Enabled,
         Self::Waveform,
         Self::RateMode,
@@ -98,39 +105,39 @@ pub(crate) struct GeneratorDialog {
 }
 pub struct App {
     pub editor: Editor,
-    pub(crate) row: usize,
-    pub(crate) step: usize,
-    pub(crate) global: usize,
-    pub(crate) scope: Scope,
-    pub(crate) mode: Mode,
-    pub(crate) chord_field: ChordField,
-    pub(crate) status: String,
-    pub(crate) path: Option<PathBuf>,
-    pub(crate) pending_open: Option<PathBuf>,
-    pub(crate) pending_new: bool,
-    pub(crate) pending_quit: bool,
-    pub(crate) quit: bool,
-    pub(crate) playheads: [Option<usize>; TRACK_COUNT],
-    pub(crate) playing: bool,
-    pub(crate) paused: bool,
-    pub(crate) pattern_cursor: usize,
-    pub(crate) active_pattern: usize,
-    pub(crate) queued_pattern: Option<usize>,
-    pub(crate) fader_animations: Vec<FaderAnimation>,
+    pub(super) row: usize,
+    pub(super) step: usize,
+    pub(super) global: usize,
+    pub(super) scope: Scope,
+    pub(super) mode: Mode,
+    pub(super) chord_field: ChordField,
+    pub(super) status: String,
+    pub(super) path: Option<PathBuf>,
+    pub(super) pending_open: Option<PathBuf>,
+    pub(super) pending_new: bool,
+    pub(super) pending_quit: bool,
+    pub(super) quit: bool,
+    pub(super) playheads: [Option<usize>; TRACK_COUNT],
+    pub(super) playing: bool,
+    pub(super) paused: bool,
+    pub(super) pattern_cursor: usize,
+    pub(super) active_pattern: usize,
+    pub(super) queued_pattern: Option<usize>,
+    pub(super) fader_animations: Vec<FaderAnimation>,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct FaderAnimation {
-    pub(crate) track: usize,
-    pub(crate) step: usize,
-    pub(crate) scope: Scope,
-    pub(crate) parameter: ParameterId,
-    pub(crate) from: Percent,
-    pub(crate) to: Percent,
-    pub(crate) started: Instant,
+pub(super) struct FaderAnimation {
+    pub(super) track: usize,
+    pub(super) step: usize,
+    pub(super) scope: Scope,
+    pub(super) parameter: ParameterId,
+    pub(super) from: Percent,
+    pub(super) to: Percent,
+    pub(super) started: Instant,
 }
 impl FaderAnimation {
-    pub(crate) fn value_at(self, now: Instant) -> Percent {
+    pub(super) fn value_at(self, now: Instant) -> Percent {
         let elapsed = now.saturating_duration_since(self.started);
         let progress = (elapsed.as_secs_f32() / DIRECT_PARAMETER_RAMP.as_secs_f32()).min(1.0);
         Percent::new(
@@ -139,7 +146,7 @@ impl FaderAnimation {
         )
         .unwrap()
     }
-    pub(crate) fn is_complete(self, now: Instant) -> bool {
+    pub(super) fn is_complete(self, now: Instant) -> bool {
         now.saturating_duration_since(self.started) >= DIRECT_PARAMETER_RAMP
     }
 }
@@ -168,7 +175,7 @@ impl App {
             fader_animations: Vec::new(),
         }
     }
-    pub(crate) fn start_fader_animation(
+    pub(super) fn start_fader_animation(
         &mut self,
         track: usize,
         step: usize,
@@ -199,7 +206,7 @@ impl App {
             });
         }
     }
-    pub(crate) fn animated_percent(
+    pub(super) fn animated_percent(
         &self,
         track: usize,
         step: usize,

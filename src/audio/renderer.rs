@@ -1,60 +1,23 @@
-#[allow(unused_imports)]
-use super::*;
-
-pub(crate) struct Renderer {
-    pub(super) project: Box<AudioProject>,
-    pub(super) retire: Producer<Box<AudioProject>>,
-    pub(super) pending: Option<(Box<AudioProject>, ParameterSmoothing, PatternIndexMap)>,
-    pub(super) clock: StepClock,
-    pub(super) next_steps: [usize; TRACK_COUNT],
-    pub(super) active_pattern: usize,
-    pub(super) queued_pattern: Option<usize>,
-    pub(super) playing: bool,
-    pub(super) sr: f32,
-    pub(super) status: Arc<AudioStatus>,
-    pub(super) drums: [DrumVoice; 3],
-    pub(super) preview_drums: [DrumVoice; 3],
-    pub(super) synth: [SynthVoice; 3],
-    pub(super) preview: [SynthVoice; 3],
-    pub(super) chord: ChordVoicePool,
-    pub(super) preview_chord: ChordVoicePool,
-    pub(super) delay: Delay,
-    pub(super) reverb: Reverb,
-    pub(super) dc: DcBlock,
-    pub(super) limiter: MasterLimiter,
-    pub(super) mute: [Smoother; TRACK_COUNT],
-    pub(super) lfos: [[Lfo; ParameterId::ALL.len()]; TRACK_COUNT],
-    pub(super) preview_lfos: [[Lfo; ParameterId::ALL.len()]; TRACK_COUNT],
-    pub(super) lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
-    pub(super) preview_lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
-    pub(super) scheduled: [Option<ScheduledTrackAction>; 32],
-    pub(super) cycle_counts: [[u32; MAX_STEP_COUNT]; TRACK_COUNT],
-    pub(super) condition_rng: [u32; TRACK_COUNT],
-    pub(super) preview_scheduled: [Option<PreviewAction>; 24],
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct ScheduledTrackAction {
-    pub(super) remaining: u32,
-    pub(super) track: u8,
-    pub(super) step: u8,
-    pub(super) retrigger: bool,
-    pub(super) trigger_allowed: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct PreviewAction {
-    pub(super) remaining: u32,
-    pub(super) track: u8,
-    pub(super) step: u8,
-}
+use super::effects::{modulated_percent, pitch_modulated_frequency};
+use super::voices::{CHORD_GROUP_SIZE, REVERB_RETURN_GAIN};
+use super::{
+    AudioProject, AudioStatus, ChordVoicePool, DrumVoice, ParameterId, Renderer, StepClock,
+    SynthVoice, TRACK_COUNT,
+};
+use crate::dsp::{
+    Delay, EnvStage, Lfo, MasterLimiter, Reverb, Smoother, equal_power_pan, exp_map_f32,
+};
+use crate::model::{MAX_STEP_COUNT, Waveform};
+use rtrb::{Producer, RingBuffer};
+use std::f32::consts::TAU;
+use std::sync::{Arc, atomic::Ordering};
 impl Renderer {
-    pub(crate) fn new(project: AudioProject, sr: u32, status: Arc<AudioStatus>) -> Self {
+    pub(super) fn new(project: AudioProject, sr: u32, status: Arc<AudioStatus>) -> Self {
         let (retire, _discarded) = RingBuffer::new(32);
         Self::new_with_retirement(Box::new(project), sr, status, retire)
     }
 
-    pub(crate) fn new_with_retirement(
+    pub(super) fn new_with_retirement(
         project: Box<AudioProject>,
         sr: u32,
         status: Arc<AudioStatus>,
@@ -111,7 +74,7 @@ impl Renderer {
         r
     }
 
-    pub(crate) fn render_synth(
+    pub(super) fn render_synth(
         v: &mut SynthVoice,
         sr: f32,
         offsets: &[f32; ParameterId::ALL.len()],
@@ -226,7 +189,7 @@ impl Renderer {
             reverb_send,
         )
     }
-    pub(crate) fn render_drum(
+    pub(super) fn render_drum(
         voice: &mut DrumVoice,
         track: usize,
         sr: f32,
@@ -274,7 +237,7 @@ impl Renderer {
             modulated_percent(voice.pan.next_value(), pan_offset),
         )
     }
-    pub(crate) fn next(&mut self) -> (f32, f32) {
+    pub(super) fn next(&mut self) -> (f32, f32) {
         if self.playing {
             self.advance_lfos();
         }
@@ -451,7 +414,7 @@ impl Renderer {
         self.limiter.process(l, r)
     }
 
-    pub(crate) fn advance_chord_arpeggios(&mut self) {
+    pub(super) fn advance_chord_arpeggios(&mut self) {
         let bpm = self.project.globals.tempo_bpm;
         if self.chord.arpeggiated && self.chord.active && self.chord.arpeggio.tick(self.sr, bpm) {
             Self::trigger_arpeggio_tone(&self.project, self.sr, &mut self.chord);

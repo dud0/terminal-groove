@@ -1,5 +1,16 @@
-#[allow(unused_imports)]
-use super::*;
+use super::effects::modulated_percent;
+use super::voices::{CHORD_GROUP_SIZE, ChordVoicePool, DrumControls, DrumVoice, SynthTrigger};
+use super::{
+    AudioProject, AudioTrack, ParameterSmoothing, PreviewAction, Renderer, ScheduledTrackAction,
+    SynthVoice, TRACK_COUNT,
+};
+use crate::dsp::{EnvelopeProfile, StereoChorus};
+use crate::engine::{GateAction, synth_action};
+use crate::model::{
+    ArpeggioConfig, ChordShape, ChorusMode, Instrument, ParameterId, ParameterLocks, Percent,
+    StepEvent,
+};
+use std::sync::atomic::Ordering;
 
 impl Renderer {
     pub(super) fn drum_controls(
@@ -36,14 +47,14 @@ impl Renderer {
         }
     }
 
-    pub(crate) fn trigger_drum(&mut self, track: usize, accent: bool, locks: ParameterLocks) {
+    pub(super) fn trigger_drum(&mut self, track: usize, accent: bool, locks: ParameterLocks) {
         let t = self.project.tracks[track];
         let Some(controls) = Self::drum_controls(t, locks, &self.lfo_offsets[track]) else {
             return;
         };
         Self::start_drum_voice(&mut self.drums[track], track, controls, accent, self.sr);
     }
-    pub(crate) fn trigger_preview_drum(
+    pub(super) fn trigger_preview_drum(
         &mut self,
         track: usize,
         accent: bool,
@@ -73,7 +84,7 @@ impl Renderer {
         voice.pan.set(locks.pan.unwrap_or(t.pan).get() as f32, 0);
         voice.locks = locks;
     }
-    pub(crate) fn start_drum_voice(
+    pub(super) fn start_drum_voice(
         voice: &mut DrumVoice,
         track: usize,
         controls: DrumControls,
@@ -124,7 +135,7 @@ impl Renderer {
             }
         }
     }
-    pub(crate) fn update_drum_mix(&mut self, track: usize, step: usize, smoothing: u32) {
+    pub(super) fn update_drum_mix(&mut self, track: usize, step: usize, smoothing: u32) {
         let t = self.project.tracks[track];
         let locks = self.locks_at(track, step);
         let voice = &mut self.drums[track];
@@ -152,7 +163,7 @@ impl Renderer {
             .set(locks.pan.unwrap_or(track.pan).get() as f32, smoothing);
         voice.locks = locks;
     }
-    pub(crate) fn apply_synth_params_core(
+    pub(super) fn apply_synth_params_core(
         project: &AudioProject,
         track: usize,
         locks: ParameterLocks,
@@ -282,7 +293,7 @@ impl Renderer {
             ChorusMode::Ii => 2,
         });
     }
-    pub(crate) fn configure_synth_voice(
+    pub(super) fn configure_synth_voice(
         project: &AudioProject,
         sr: f32,
         track: usize,
@@ -297,7 +308,7 @@ impl Renderer {
         Self::configure_synth_voice_frequency(project, sr, track, frequency, trigger, locks, voice);
     }
 
-    pub(crate) fn configure_synth_voice_frequency(
+    pub(super) fn configure_synth_voice_frequency(
         project: &AudioProject,
         sr: f32,
         track: usize,
@@ -341,7 +352,7 @@ impl Renderer {
         voice.active = true;
     }
 
-    pub(crate) fn chord_midis(
+    pub(super) fn chord_midis(
         project: &AudioProject,
         degree: u8,
         octave: u8,
@@ -366,7 +377,7 @@ impl Renderer {
         (midis, shape.degrees().len())
     }
 
-    pub(crate) fn trigger_chord(
+    pub(super) fn trigger_chord(
         project: &AudioProject,
         sr: f32,
         trigger: SynthTrigger,
@@ -455,7 +466,7 @@ impl Renderer {
         pool.active = true;
     }
 
-    pub(crate) fn trigger_arpeggio_tone(
+    pub(super) fn trigger_arpeggio_tone(
         project: &AudioProject,
         sr: f32,
         pool: &mut ChordVoicePool,
@@ -503,7 +514,7 @@ impl Renderer {
         );
     }
 
-    pub(crate) fn release_chord(pool: &mut ChordVoicePool) {
+    pub(super) fn release_chord(pool: &mut ChordVoicePool) {
         if pool.active {
             for voice in &mut pool.voices
                 [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
@@ -518,7 +529,7 @@ impl Renderer {
         pool.arpeggio.enabled = false;
         pool.preview_remaining = 0;
     }
-    pub(crate) fn refresh_active_parameters(&mut self, smoothing: u32) {
+    pub(super) fn refresh_active_parameters(&mut self, smoothing: u32) {
         for track in 0..3 {
             let params = self.project.tracks[track];
             // Locks are captured at the step boundary. A live project snapshot may
@@ -578,7 +589,7 @@ impl Renderer {
             );
         }
     }
-    pub(crate) fn audition(&mut self, track: usize, step: usize) {
+    pub(super) fn audition(&mut self, track: usize, step: usize) {
         if track >= TRACK_COUNT
             || step >= self.project.patterns[self.active_pattern].tracks[track].step_count as usize
         {
@@ -604,7 +615,7 @@ impl Renderer {
             }
         }
     }
-    pub(crate) fn audition_once(&mut self, track: usize, step: usize) {
+    pub(super) fn audition_once(&mut self, track: usize, step: usize) {
         if track >= TRACK_COUNT
             || step >= self.project.patterns[self.active_pattern].tracks[track].step_count as usize
         {
@@ -743,7 +754,7 @@ impl Renderer {
         Self::configure_synth_voice(&self.project, self.sr, track, trigger, locks, v);
         v.remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
     }
-    pub(crate) fn boundary(&mut self, global_step: usize) {
+    pub(super) fn boundary(&mut self, global_step: usize) {
         if global_step % 16 == 0
             && let Some(pattern) = self.queued_pattern
         {
@@ -802,7 +813,7 @@ impl Renderer {
         self.advance_scheduled();
     }
 
-    pub(crate) fn process_track_action(
+    pub(super) fn process_track_action(
         &mut self,
         track: usize,
         step: usize,
@@ -935,7 +946,7 @@ impl Renderer {
 
 #[cfg(test)]
 impl Renderer {
-    pub(crate) fn apply_synth_params(
+    pub(super) fn apply_synth_params(
         project: &AudioProject,
         _sr: f32,
         track: usize,

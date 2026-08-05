@@ -1,5 +1,8 @@
-#[allow(unused_imports)]
-use super::*;
+use super::{AudioCommand, AudioProject, AudioStatus, ParameterSmoothing, PatternIndexMap};
+use crate::model::Project;
+use cpal::Stream;
+use rtrb::{Consumer, Producer};
+use std::sync::Arc;
 
 pub struct Audio {
     pub stream: Stream,
@@ -12,6 +15,22 @@ pub struct Audio {
 #[error("audio command queue full")]
 pub struct QueueFull;
 impl Audio {
+    pub(super) fn new(
+        stream: Stream,
+        device_name: String,
+        status: Arc<AudioStatus>,
+        producer: Producer<AudioCommand>,
+        retired: Consumer<Box<AudioProject>>,
+    ) -> Self {
+        Self {
+            stream,
+            device_name,
+            status,
+            producer,
+            retired,
+        }
+    }
+
     pub fn send(&mut self, command: AudioCommand) -> Result<(), QueueFull> {
         self.reap_retired();
         self.producer

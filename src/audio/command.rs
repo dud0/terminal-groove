@@ -1,5 +1,6 @@
-#[allow(unused_imports)]
-use super::*;
+use super::voices::{ArpeggioState, DRUM_SILENCE};
+use super::{AudioProject, ParameterSmoothing, PatternIndexMap, Renderer, TRACK_COUNT};
+use std::sync::atomic::Ordering;
 
 #[derive(Clone, Debug)]
 pub enum AudioCommand {
@@ -19,7 +20,7 @@ pub enum AudioCommand {
     },
 }
 
-pub(crate) fn handle(renderer: &mut Renderer, command: AudioCommand) {
+pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
     match command {
         AudioCommand::PlayPause => {
             if !renderer.playing && renderer.status.paused.load(Ordering::Acquire) {
@@ -120,7 +121,7 @@ pub(crate) fn handle(renderer: &mut Renderer, command: AudioCommand) {
 }
 
 impl Renderer {
-    pub(crate) fn command(&mut self, command: AudioCommand) {
+    pub(super) fn command(&mut self, command: AudioCommand) {
         handle(self, command);
     }
 }

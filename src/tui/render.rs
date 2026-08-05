@@ -1,13 +1,36 @@
-use super::*;
+use super::overlays::{
+    popup, popup_at, quit_popup_rect, render_chord_popup, render_generator_popup, render_lfo_popup,
+    render_pattern_popup, render_trigger_popup,
+};
+use super::{
+    controller::{global_name, resolved_path},
+    input::parameter_supports_direct_percentage,
+    state::{App, FileAction, Mode},
+};
+use crate::tui::DIRECT_PERCENTAGE_HINT;
+use crate::{
+    audio::Audio,
+    model::{
+        ChordShape, ChorusMode, GlobalParameterId, ParameterId, ParameterValue, STEP_BANK_SIZE,
+        STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
+    },
+    reducer::Scope,
+};
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, Paragraph, Row, Table},
+};
 
-pub(crate) fn scope_name(scope: Scope) -> &'static str {
+pub(super) fn scope_name(scope: Scope) -> &'static str {
     match scope {
         Scope::Base => "BASE",
         Scope::Lock => "LOCK",
     }
 }
 
-pub(crate) fn mode_name(mode: &Mode) -> String {
+pub(super) fn mode_name(mode: &Mode) -> String {
     match mode {
         Mode::Navigation => "Navigation".into(),
         Mode::PatternDialog => "Pattern dialog".into(),
@@ -33,7 +56,7 @@ pub(crate) fn mode_name(mode: &Mode) -> String {
     }
 }
 
-pub(crate) fn help_available(mode: &Mode) -> bool {
+pub(super) fn help_available(mode: &Mode) -> bool {
     matches!(
         mode,
         Mode::Navigation
@@ -45,7 +68,7 @@ pub(crate) fn help_available(mode: &Mode) -> bool {
     )
 }
 
-pub(crate) fn track_label(t: &crate::model::Track) -> String {
+pub(super) fn track_label(t: &crate::model::Track) -> String {
     if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
         format!("{} O{}", t.name, t.input_octave.unwrap_or(3))
     } else {
@@ -53,7 +76,7 @@ pub(crate) fn track_label(t: &crate::model::Track) -> String {
     }
 }
 
-pub(crate) fn step_cell(event: Option<&StepEvent>) -> String {
+pub(super) fn step_cell(event: Option<&StepEvent>) -> String {
     match event {
         None => " . ".into(),
         Some(StepEvent::Trigger {
@@ -109,7 +132,7 @@ pub(crate) fn step_cell(event: Option<&StepEvent>) -> String {
     }
 }
 
-pub(crate) fn selected_accent(a: &App, track: usize) -> Option<(bool, Option<usize>)> {
+pub(super) fn selected_accent(a: &App, track: usize) -> Option<(bool, Option<usize>)> {
     let t = a.editor.project.tracks.get(track)?;
     let Some(event) = t.steps[a.step].as_ref() else {
         return Some((t.input_accent, None));
@@ -124,7 +147,7 @@ pub(crate) fn selected_accent(a: &App, track: usize) -> Option<(bool, Option<usi
         .map(|accent| (accent, Some(source)))
 }
 
-pub(crate) fn articulation_title(a: &App, track: usize) -> String {
+pub(super) fn articulation_title(a: &App, track: usize) -> String {
     match selected_accent(a, track) {
         Some((accent, None)) => {
             let is_default = a.editor.project.tracks[track].steps[a.step].is_none();
@@ -154,7 +177,7 @@ pub(crate) fn articulation_title(a: &App, track: usize) -> String {
     }
 }
 
-pub(crate) fn selected_chord_shape(a: &App, track: usize) -> Option<ChordShape> {
+pub(super) fn selected_chord_shape(a: &App, track: usize) -> Option<ChordShape> {
     if a.editor.project.tracks.get(track)?.kind != TrackKind::Chord {
         return None;
     }
@@ -180,15 +203,15 @@ pub(crate) fn selected_chord_shape(a: &App, track: usize) -> Option<ChordShape> 
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ParameterDescriptor {
-    pub(crate) id: ParameterId,
-    pub(crate) label: &'static str,
-    pub(crate) shortcut: &'static str,
-    pub(crate) group: ParameterGroup,
+pub(super) struct ParameterDescriptor {
+    pub(super) id: ParameterId,
+    pub(super) label: &'static str,
+    pub(super) shortcut: &'static str,
+    pub(super) group: ParameterGroup,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ParameterGroup {
+pub(super) enum ParameterGroup {
     Mixer,
     Instrument,
     Filter,
@@ -205,7 +228,7 @@ impl ParameterGroup {
         }
     }
 
-    pub(crate) fn color(self) -> Color {
+    pub(super) fn color(self) -> Color {
         match self {
             Self::Mixer => Color::Cyan,
             Self::Instrument => Color::Green,
@@ -451,7 +474,7 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 15] = [
     CHORD_PARAMETERS[16],
 ];
 
-pub(crate) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescriptor] {
+pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescriptor] {
     match kind {
         TrackKind::Kick => &KICK_PARAMETERS,
         TrackKind::Snare => &SNARE_PARAMETERS,
@@ -463,16 +486,16 @@ pub(crate) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescr
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ValueOrigin {
+pub(super) enum ValueOrigin {
     Base,
     Lock,
 }
 
-pub(crate) fn lock_has_parameter(event: &StepEvent, parameter: ParameterId) -> bool {
+pub(super) fn lock_has_parameter(event: &StepEvent, parameter: ParameterId) -> bool {
     event.locks().get(parameter).is_some()
 }
 
-pub(crate) fn displayed_parameter(
+pub(super) fn displayed_parameter(
     a: &App,
     track: usize,
     step: usize,
@@ -521,11 +544,11 @@ pub(crate) fn displayed_parameter(
     Some((value, origin))
 }
 
-pub(crate) fn fader_segments(value: u8) -> usize {
+pub(super) fn fader_segments(value: u8) -> usize {
     ((value as usize * 10 + 50) / 100).min(10)
 }
 
-pub(crate) fn physical_parameter_readout(
+pub(super) fn physical_parameter_readout(
     a: &App,
     track: usize,
     step: usize,
@@ -633,7 +656,7 @@ pub(crate) fn physical_parameter_readout(
     format!("{physical} · {origin}")
 }
 
-pub(crate) fn global_shortcut_text(id: GlobalParameterId) -> &'static str {
+pub(super) fn global_shortcut_text(id: GlobalParameterId) -> &'static str {
     match id {
         GlobalParameterId::Tempo => "t",
         GlobalParameterId::DelayDivision => "y",
@@ -646,7 +669,7 @@ pub(crate) fn global_shortcut_text(id: GlobalParameterId) -> &'static str {
     }
 }
 
-pub(crate) const GLOBAL_IDS: [GlobalParameterId; 8] = [
+pub(super) const GLOBAL_IDS: [GlobalParameterId; 8] = [
     GlobalParameterId::Tempo,
     GlobalParameterId::DelayDivision,
     GlobalParameterId::DelayFeedback,
@@ -657,7 +680,7 @@ pub(crate) const GLOBAL_IDS: [GlobalParameterId; 8] = [
     GlobalParameterId::Scale,
 ];
 
-pub(crate) fn global_display_name(id: GlobalParameterId) -> &'static str {
+pub(super) fn global_display_name(id: GlobalParameterId) -> &'static str {
     match id {
         GlobalParameterId::Tempo => "Tempo",
         GlobalParameterId::DelayDivision => "Delay div.",
@@ -670,7 +693,7 @@ pub(crate) fn global_display_name(id: GlobalParameterId) -> &'static str {
     }
 }
 
-pub(crate) fn global_value_text(g: &crate::model::Globals, id: GlobalParameterId) -> String {
+pub(super) fn global_value_text(g: &crate::model::Globals, id: GlobalParameterId) -> String {
     match id {
         GlobalParameterId::Tempo => format!("{} BPM", g.tempo_bpm),
         GlobalParameterId::DelayDivision => g.delay_division.to_string(),
@@ -683,7 +706,7 @@ pub(crate) fn global_value_text(g: &crate::model::Globals, id: GlobalParameterId
     }
 }
 
-pub(crate) fn global_control_text(g: &crate::model::Globals) -> Vec<String> {
+pub(super) fn global_control_text(g: &crate::model::Globals) -> Vec<String> {
     GLOBAL_IDS
         .iter()
         .map(|id| {
@@ -697,7 +720,7 @@ pub(crate) fn global_control_text(g: &crate::model::Globals) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
+pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
     let panel = Block::bordered().title("Global controls  [←→] select  [Enter] edit");
     let inner = panel.inner(area);
     f.render_widget(panel, area);
@@ -749,7 +772,7 @@ pub(crate) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
     }
 }
 
-pub(crate) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usize) {
+pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usize) {
     let t = &a.editor.project.tracks[track];
     let lock_editing = a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_));
     let chord_shape = a
@@ -1040,7 +1063,7 @@ pub(crate) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
     }
 }
 
-pub(crate) fn render_pitch_lfo_card(
+pub(super) fn render_pitch_lfo_card(
     f: &mut ratatui::Frame,
     content: Rect,
     track: &crate::model::Track,
@@ -1130,7 +1153,7 @@ pub(crate) fn render_pitch_lfo_card(
     );
 }
 
-pub(crate) fn render_centered(f: &mut ratatui::Frame, text: &str, area: Rect, style: Style) {
+pub(super) fn render_centered(f: &mut ratatui::Frame, text: &str, area: Rect, style: Style) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -1141,11 +1164,11 @@ pub(crate) fn render_centered(f: &mut ratatui::Frame, text: &str, area: Rect, st
     );
 }
 
-pub(crate) fn draw(f: &mut ratatui::Frame, a: &App, audio: &Audio) {
+pub(super) fn draw(f: &mut ratatui::Frame, a: &App, audio: &Audio) {
     draw_with_device(f, a, &audio.device_name);
 }
 
-pub(crate) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
+pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     let area = f.area();
     if area.width < 120 || area.height < 34 {
         let help_hint = if help_available(&a.mode) {

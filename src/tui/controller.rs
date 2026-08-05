@@ -1,10 +1,22 @@
-use super::*;
+use super::{
+    render::GLOBAL_IDS,
+    state::{App, FileAction, Mode},
+};
+use crate::{
+    audio::{Audio, AudioCommand, ParameterSmoothing},
+    model::{DelayDivision, GlobalParameterId, Percent, Project, Scale, TRACK_COUNT},
+    persistence,
+    reducer::Scope,
+};
+use anyhow::Result;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::{path::PathBuf, sync::atomic::Ordering};
 
-pub(crate) fn sync_project(a: &mut App, audio: &mut Audio) -> bool {
+pub(super) fn sync_project(a: &mut App, audio: &mut Audio) -> bool {
     sync_project_with_smoothing(a, audio, false)
 }
 
-pub(crate) fn sync_project_with_smoothing(
+pub(super) fn sync_project_with_smoothing(
     a: &mut App,
     audio: &mut Audio,
     direct_entry: bool,
@@ -31,7 +43,7 @@ pub(crate) fn sync_project_with_smoothing(
         true
     }
 }
-pub(crate) fn change_octave(a: &mut App, audio: &mut Audio, d: i8) {
+pub(super) fn change_octave(a: &mut App, audio: &mut Audio, d: i8) {
     let ti = a.row - 1;
     let track_name = a.editor.project.tracks[ti].name.clone();
     let old = a.editor.project.tracks[ti].input_octave.unwrap();
@@ -53,18 +65,18 @@ pub(crate) fn change_octave(a: &mut App, audio: &mut Audio, d: i8) {
     }
 }
 
-pub(crate) fn adjusted_octave(octave: u8, delta: i8) -> u8 {
+pub(super) fn adjusted_octave(octave: u8, delta: i8) -> u8 {
     (octave as i8 + delta).clamp(0, 7) as u8
 }
 
-pub(crate) fn enter_error(a: &mut App, message: impl Into<String>) {
+pub(super) fn enter_error(a: &mut App, message: impl Into<String>) {
     a.pending_open = None;
     a.pending_new = false;
     a.pending_quit = false;
     a.mode = Mode::Error(message.into());
 }
 
-pub(crate) fn save(a: &mut App) -> Result<()> {
+pub(super) fn save(a: &mut App) -> Result<()> {
     if let Some(path) = a.path.clone() {
         let project = a.editor.synchronized_project();
         match persistence::save_atomic(&path, &project) {
@@ -80,7 +92,7 @@ pub(crate) fn save(a: &mut App) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn resolved_path(input: &str) -> Result<PathBuf> {
+pub(super) fn resolved_path(input: &str) -> Result<PathBuf> {
     let path = PathBuf::from(input);
     if path.is_absolute() {
         Ok(path)
@@ -88,7 +100,7 @@ pub(crate) fn resolved_path(input: &str) -> Result<PathBuf> {
         Ok(std::env::current_dir()?.join(path))
     }
 }
-pub(crate) fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+pub(super) fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     let Mode::FileInput(action, mut input) = a.mode.clone() else {
         return Ok(());
     };
@@ -149,7 +161,7 @@ pub(crate) fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
     }
     Ok(())
 }
-pub(crate) fn handle_open_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+pub(super) fn handle_open_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     let Mode::OpenConfirm(path) = a.mode.clone() else {
         return Ok(());
     };
@@ -172,7 +184,7 @@ pub(crate) fn handle_open_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -
     Ok(())
 }
 
-pub(crate) fn handle_new_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+pub(super) fn handle_new_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     match k.code {
         KeyCode::Char('s' | 'S') => {
             if a.path.is_none() {
@@ -192,7 +204,7 @@ pub(crate) fn handle_new_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
     Ok(())
 }
 
-pub(crate) fn request_new_project(a: &mut App) -> bool {
+pub(super) fn request_new_project(a: &mut App) -> bool {
     if a.editor.is_dirty() {
         a.mode = Mode::NewConfirm;
         false
@@ -201,7 +213,7 @@ pub(crate) fn request_new_project(a: &mut App) -> bool {
     }
 }
 
-pub(crate) fn reset_project_ui(a: &mut App) {
+pub(super) fn reset_project_ui(a: &mut App) {
     a.row = 0;
     a.global = 0;
     a.step = 0;
@@ -219,7 +231,7 @@ pub(crate) fn reset_project_ui(a: &mut App) {
     a.mode = Mode::Navigation;
 }
 
-pub(crate) fn new_project(a: &mut App, audio: &mut Audio) {
+pub(super) fn new_project(a: &mut App, audio: &mut Audio) {
     if audio.available_commands() < 2 {
         enter_error(a, "Audio command queue full; new project was not created");
         return;
@@ -236,7 +248,7 @@ pub(crate) fn new_project(a: &mut App, audio: &mut Audio) {
     a.status = "New project".into();
 }
 
-pub(crate) fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
+pub(super) fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
     match persistence::load(&path) {
         Ok(project) => {
             if audio.available_commands() < 2 {
@@ -257,7 +269,7 @@ pub(crate) fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
     }
 }
 
-pub(crate) fn global_id(index: usize) -> GlobalParameterId {
+pub(super) fn global_id(index: usize) -> GlobalParameterId {
     [
         GlobalParameterId::Tempo,
         GlobalParameterId::DelayDivision,
@@ -269,7 +281,7 @@ pub(crate) fn global_id(index: usize) -> GlobalParameterId {
         GlobalParameterId::Scale,
     ][index % GLOBAL_IDS.len()]
 }
-pub(crate) fn global_shortcut(c: char) -> Option<GlobalParameterId> {
+pub(super) fn global_shortcut(c: char) -> Option<GlobalParameterId> {
     match c {
         't' => Some(GlobalParameterId::Tempo),
         'y' => Some(GlobalParameterId::DelayDivision),
@@ -282,7 +294,7 @@ pub(crate) fn global_shortcut(c: char) -> Option<GlobalParameterId> {
         _ => None,
     }
 }
-pub(crate) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
+pub(super) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
     a.mode = if id == GlobalParameterId::Tempo {
         Mode::TempoInput(String::new())
     } else {
@@ -290,7 +302,7 @@ pub(crate) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
     };
     a.status = format!("Editing {}", global_name(id));
 }
-pub(crate) fn global_name(id: GlobalParameterId) -> &'static str {
+pub(super) fn global_name(id: GlobalParameterId) -> &'static str {
     match id {
         GlobalParameterId::Tempo => "tempo",
         GlobalParameterId::DelayDivision => "delay division",
@@ -302,7 +314,7 @@ pub(crate) fn global_name(id: GlobalParameterId) -> &'static str {
         GlobalParameterId::Scale => "scale",
     }
 }
-pub(crate) fn edit_global<F: FnOnce(&mut crate::model::Globals)>(
+pub(super) fn edit_global<F: FnOnce(&mut crate::model::Globals)>(
     a: &mut App,
     audio: &mut Audio,
     id: GlobalParameterId,
@@ -326,7 +338,7 @@ pub(crate) fn edit_global<F: FnOnce(&mut crate::model::Globals)>(
         a.status = format!("{} updated", global_name(id))
     }
 }
-pub(crate) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::GlobalEdit(id) = a.mode else {
         return Ok(false);
     };
@@ -436,7 +448,7 @@ pub(crate) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
     }
     Ok(true)
 }
-pub(crate) fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+pub(super) fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     let Mode::TempoInput(mut input) = a.mode.clone() else {
         return Ok(());
     };
@@ -476,7 +488,7 @@ pub(crate) fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
     }
     Ok(())
 }
-pub(crate) fn refresh_audio_status(a: &mut App, audio: &Audio) {
+pub(super) fn refresh_audio_status(a: &mut App, audio: &Audio) {
     a.playing = audio.status.running.load(Ordering::Acquire);
     a.paused = audio.status.paused.load(Ordering::Acquire);
     a.active_pattern = usize::from(audio.status.active_pattern.load(Ordering::Acquire))

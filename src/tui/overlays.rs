@@ -1,6 +1,22 @@
-use super::*;
+use super::{
+    render::{fader_segments, render_centered},
+    state::{App, ChordField, GeneratorDialog, LfoField, TriggerField},
+};
+use crate::{
+    generator::Target as GeneratorTarget,
+    model::{
+        ArpeggioRate, ArpeggioType, ChordShape, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
+        ParameterId, StepEvent, TriggerCondition,
+    },
+};
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
+};
 
-pub(crate) fn render_trigger_popup(
+pub(super) fn render_trigger_popup(
     f: &mut ratatui::Frame,
     area: Rect,
     a: &App,
@@ -72,7 +88,7 @@ pub(crate) fn render_trigger_popup(
     );
 }
 
-pub(crate) fn render_chord_popup(
+pub(super) fn render_chord_popup(
     f: &mut ratatui::Frame,
     area: Rect,
     selected: ChordShape,
@@ -129,7 +145,7 @@ pub(crate) fn render_chord_popup(
     );
 }
 
-pub(crate) fn render_chord_control(
+pub(super) fn render_chord_control(
     f: &mut ratatui::Frame,
     area: Rect,
     shape: ChordShape,
@@ -204,7 +220,7 @@ pub(crate) fn render_chord_control(
     }
 }
 
-pub(crate) fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
+pub(super) fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
     let height = 7.min(area.height.saturating_sub(4));
     let width = area.width.saturating_sub(8).max(24);
     let popup_area = Rect {
@@ -294,7 +310,7 @@ pub(crate) fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) 
     );
 }
 
-pub(crate) fn render_generator_popup(
+pub(super) fn render_generator_popup(
     f: &mut ratatui::Frame,
     area: Rect,
     dialog: &GeneratorDialog,
@@ -323,14 +339,14 @@ pub(crate) fn render_generator_popup(
     popup(f, area, "Pattern idea generator [g]", &text);
 }
 
-pub(crate) fn pattern_is_empty(pattern: &crate::model::Pattern) -> bool {
+pub(super) fn pattern_is_empty(pattern: &crate::model::Pattern) -> bool {
     pattern
         .tracks
         .iter()
         .all(|track| track.steps.iter().all(Option::is_none))
 }
 
-pub(crate) fn render_lfo_popup(
+pub(super) fn render_lfo_popup(
     f: &mut ratatui::Frame,
     area: Rect,
     parameter: ParameterId,
@@ -380,7 +396,7 @@ pub(crate) fn render_lfo_popup(
     );
 }
 
-pub(crate) fn render_lfo_control(
+pub(super) fn render_lfo_control(
     f: &mut ratatui::Frame,
     area: Rect,
     config: LfoConfig,
@@ -535,7 +551,7 @@ pub(crate) fn render_lfo_control(
     }
 }
 
-pub(crate) fn render_lfo_fader(f: &mut ratatui::Frame, area: Rect, value: u8, active_style: Style) {
+pub(super) fn render_lfo_fader(f: &mut ratatui::Frame, area: Rect, value: u8, active_style: Style) {
     let height = area.height.min(10);
     let start_y = area.y + area.height.saturating_sub(height) / 2;
     let filled = fader_segments(value);
@@ -560,7 +576,7 @@ pub(crate) fn render_lfo_fader(f: &mut ratatui::Frame, area: Rect, value: u8, ac
     }
 }
 
-pub(crate) fn render_lfo_switch(
+pub(super) fn render_lfo_switch(
     f: &mut ratatui::Frame,
     area: Rect,
     top: &str,
@@ -614,7 +630,7 @@ pub(crate) fn render_lfo_switch(
     }
 }
 
-pub(crate) fn render_lfo_selector<T: AsRef<str>>(
+pub(super) fn render_lfo_selector<T: AsRef<str>>(
     f: &mut ratatui::Frame,
     area: Rect,
     choices: &[T],
@@ -656,7 +672,7 @@ pub(crate) fn render_lfo_selector<T: AsRef<str>>(
     }
 }
 
-pub(crate) fn lfo_inactive_style(active_style: Style) -> Style {
+pub(super) fn lfo_inactive_style(active_style: Style) -> Style {
     if active_style.add_modifier.contains(Modifier::REVERSED) {
         active_style
     } else {
@@ -664,11 +680,11 @@ pub(crate) fn lfo_inactive_style(active_style: Style) -> Style {
     }
 }
 
-pub(crate) fn popup(f: &mut ratatui::Frame, area: Rect, title: &str, text: &str) {
+pub(super) fn popup(f: &mut ratatui::Frame, area: Rect, title: &str, text: &str) {
     popup_at(f, popup_rect(area), title, text);
 }
 
-pub(crate) fn popup_at(f: &mut ratatui::Frame, r: Rect, title: &str, text: &str) {
+pub(super) fn popup_at(f: &mut ratatui::Frame, r: Rect, title: &str, text: &str) {
     f.render_widget(Clear, r);
     f.render_widget(
         Paragraph::new(text)
@@ -678,7 +694,7 @@ pub(crate) fn popup_at(f: &mut ratatui::Frame, r: Rect, title: &str, text: &str)
     )
 }
 
-pub(crate) fn quit_popup_rect(area: Rect) -> Rect {
+pub(super) fn quit_popup_rect(area: Rect) -> Rect {
     const WIDTH: u16 = 37;
     const HEIGHT: u16 = 3;
     let width = WIDTH.min(area.width);
@@ -691,7 +707,7 @@ pub(crate) fn quit_popup_rect(area: Rect) -> Rect {
     }
 }
 
-pub(crate) fn lfo_popup_rect(area: Rect) -> Rect {
+pub(super) fn lfo_popup_rect(area: Rect) -> Rect {
     let width = area.width.saturating_sub(4).min(92);
     let height = area.height.saturating_sub(4).min(20);
     Rect {
@@ -702,7 +718,7 @@ pub(crate) fn lfo_popup_rect(area: Rect) -> Rect {
     }
 }
 
-pub(crate) fn popup_rect(area: Rect) -> Rect {
+pub(super) fn popup_rect(area: Rect) -> Rect {
     Rect {
         x: area.x + 10,
         y: area.y + 5,

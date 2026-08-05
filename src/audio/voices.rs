@@ -1,7 +1,9 @@
-#[allow(unused_imports)]
-use super::*;
+use crate::dsp::{Adsr, Biquad, LadderFilter, PolyBlepOsc, Smoother, StereoChorus};
+use crate::model::{
+    ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, ParameterLocks, Waveform,
+};
 
-pub(crate) struct SynthVoice {
+pub(super) struct SynthVoice {
     pub(super) osc: PolyBlepOsc,
     pub(super) sub_osc: PolyBlepOsc,
     pub(super) env: Adsr,
@@ -30,7 +32,7 @@ pub(crate) struct SynthVoice {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct SynthTrigger {
+pub(super) struct SynthTrigger {
     pub(super) degree: u8,
     pub(super) octave: u8,
     pub(super) accent: bool,
@@ -39,10 +41,10 @@ pub(crate) struct SynthTrigger {
     pub(super) arpeggio: ArpeggioConfig,
 }
 
-pub(crate) const CHORD_GROUP_SIZE: usize = 4;
+pub(super) const CHORD_GROUP_SIZE: usize = 4;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ArpeggioState {
+pub(super) struct ArpeggioState {
     pub(super) enabled: bool,
     pub(super) kind: ArpeggioType,
     pub(super) rate: ArpeggioRate,
@@ -71,7 +73,7 @@ impl Default for ArpeggioState {
 }
 
 impl ArpeggioState {
-    pub(crate) fn reset(
+    pub(super) fn reset(
         &mut self,
         shape: ChordShape,
         kind: ArpeggioType,
@@ -88,7 +90,7 @@ impl ArpeggioState {
         self.rebuild_order();
     }
 
-    pub(crate) fn rebuild_order(&mut self) {
+    pub(super) fn rebuild_order(&mut self) {
         let n = self.shape.degrees().len().min(4);
         self.order_len = match self.kind {
             ArpeggioType::Up | ArpeggioType::Down | ArpeggioType::Random => n as u8,
@@ -128,7 +130,7 @@ impl ArpeggioState {
         }
     }
 
-    pub(crate) fn shuffle(&mut self) {
+    pub(super) fn shuffle(&mut self) {
         for i in (1..self.order_len as usize).rev() {
             self.random ^= self.random << 13;
             self.random ^= self.random >> 17;
@@ -138,11 +140,11 @@ impl ArpeggioState {
         }
     }
 
-    pub(crate) fn current_voice(&self) -> usize {
+    pub(super) fn current_voice(&self) -> usize {
         self.order[self.position as usize] as usize
     }
 
-    pub(crate) fn tick(&mut self, sr: f32, bpm: u16) -> bool {
+    pub(super) fn tick(&mut self, sr: f32, bpm: u16) -> bool {
         if !self.enabled {
             return false;
         }
@@ -163,7 +165,7 @@ impl ArpeggioState {
     }
 }
 
-pub(crate) struct ChordVoicePool {
+pub(super) struct ChordVoicePool {
     pub(super) voices: [SynthVoice; CHORD_GROUP_SIZE * 2],
     pub(super) group: usize,
     pub(super) voice_count: usize,
@@ -177,7 +179,7 @@ pub(crate) struct ChordVoicePool {
 }
 
 impl ChordVoicePool {
-    pub(crate) fn new(sample_rate: u32) -> Self {
+    pub(super) fn new(sample_rate: u32) -> Self {
         Self {
             voices: std::array::from_fn(|_| SynthVoice::new(sample_rate as f32)),
             group: 1,
@@ -200,10 +202,10 @@ impl ChordVoicePool {
     }
 }
 
-pub(crate) const DRUM_SILENCE: f32 = 0.0001;
-pub(crate) const REVERB_RETURN_GAIN: f32 = 0.5;
+pub(super) const DRUM_SILENCE: f32 = 0.0001;
+pub(super) const REVERB_RETURN_GAIN: f32 = 0.5;
 
-pub(crate) struct DrumEnvelope {
+pub(super) struct DrumEnvelope {
     pub(super) value: f32,
     pub(super) start: f32,
     pub(super) peak: f32,
@@ -212,7 +214,7 @@ pub(crate) struct DrumEnvelope {
     pub(super) elapsed: u32,
 }
 impl DrumEnvelope {
-    pub(crate) fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             value: DRUM_SILENCE,
             start: DRUM_SILENCE,
@@ -222,14 +224,14 @@ impl DrumEnvelope {
             elapsed: 1,
         }
     }
-    pub(crate) fn trigger(&mut self, peak: f32, attack: f32, decay: f32, sr: f32) {
+    pub(super) fn trigger(&mut self, peak: f32, attack: f32, decay: f32, sr: f32) {
         self.start = self.value.max(DRUM_SILENCE);
         self.peak = peak;
         self.attack_samples = (attack * sr).round().max(1.0) as u32;
         self.decay_samples = (decay * sr).round().max(self.attack_samples as f32 + 1.0) as u32;
         self.elapsed = 0;
     }
-    pub(crate) fn next_value(&mut self) -> f32 {
+    pub(super) fn next_value(&mut self) -> f32 {
         if self.elapsed < self.attack_samples {
             let t = self.elapsed as f32 / self.attack_samples as f32;
             self.value = self.start * (self.peak / self.start).powf(t);
@@ -245,7 +247,7 @@ impl DrumEnvelope {
     }
 }
 
-pub(crate) struct KickPitchEnvelope {
+pub(super) struct KickPitchEnvelope {
     pub(super) value: f32,
     pub(super) start: f32,
     pub(super) peak: f32,
@@ -255,7 +257,7 @@ pub(crate) struct KickPitchEnvelope {
     pub(super) elapsed: u32,
 }
 impl KickPitchEnvelope {
-    pub(crate) fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             value: 75.0,
             start: 75.0,
@@ -266,7 +268,7 @@ impl KickPitchEnvelope {
             elapsed: 1,
         }
     }
-    pub(crate) fn trigger(&mut self, tone: f32, decay: f32, sr: f32) {
+    pub(super) fn trigger(&mut self, tone: f32, decay: f32, sr: f32) {
         self.start = self.value.max(20.0);
         self.peak = 110.0 + tone * 170.0;
         self.settled = 45.0 + tone * 25.0;
@@ -276,7 +278,7 @@ impl KickPitchEnvelope {
             .max(self.rise_samples as f32 + 1.0) as u32;
         self.elapsed = 0;
     }
-    pub(crate) fn next_value(&mut self) -> f32 {
+    pub(super) fn next_value(&mut self) -> f32 {
         if self.elapsed < self.rise_samples {
             let t = self.elapsed as f32 / self.rise_samples as f32;
             self.value = self.start + (self.peak - self.start) * t;
@@ -292,7 +294,7 @@ impl KickPitchEnvelope {
     }
 }
 
-pub(crate) struct DrumVoice {
+pub(super) struct DrumVoice {
     pub(super) envelope: DrumEnvelope,
     pub(super) kick_pitch: KickPitchEnvelope,
     pub(super) phase: f32,
@@ -314,7 +316,7 @@ pub(crate) struct DrumVoice {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct DrumControls {
+pub(super) struct DrumControls {
     pub(super) tune: f32,
     pub(super) tone: f32,
     pub(super) snappy: f32,
@@ -323,7 +325,7 @@ pub(crate) struct DrumControls {
 }
 
 impl DrumVoice {
-    pub(crate) fn new(seed: u32) -> Self {
+    pub(super) fn new(seed: u32) -> Self {
         Self {
             envelope: DrumEnvelope::new(),
             kick_pitch: KickPitchEnvelope::new(),
@@ -345,7 +347,7 @@ impl DrumVoice {
             locks: ParameterLocks::default(),
         }
     }
-    pub(crate) fn noise(&mut self) -> f32 {
+    pub(super) fn noise(&mut self) -> f32 {
         let mut x = self.noise;
         x ^= x << 13;
         x ^= x >> 17;
@@ -355,7 +357,7 @@ impl DrumVoice {
     }
 }
 impl SynthVoice {
-    pub(crate) fn new(sr: f32) -> Self {
+    pub(super) fn new(sr: f32) -> Self {
         Self {
             osc: Default::default(),
             sub_osc: Default::default(),

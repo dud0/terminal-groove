@@ -1,15 +1,21 @@
-#[allow(unused_imports)]
-use super::*;
+use super::{
+    AudioProject, AudioTrack, ParameterSmoothing, Renderer, ScheduledTrackAction, TRACK_COUNT,
+};
+use crate::dsp::Lfo;
+use crate::model::{
+    MAX_STEP_COUNT, ParameterId, ParameterLocks, PatternIndexMap, StepEvent, TriggerCondition,
+};
+use std::sync::atomic::Ordering;
 
 impl Renderer {
-    pub(crate) fn reset_trigger_state(&mut self) {
+    pub(super) fn reset_trigger_state(&mut self) {
         self.scheduled = [None; 32];
         self.preview_scheduled = [None; 24];
         self.cycle_counts = [[0; MAX_STEP_COUNT]; TRACK_COUNT];
         self.condition_rng =
             std::array::from_fn(|i| 0x8a5c_9d31 ^ (i as u32).wrapping_mul(0x9e37_79b9));
     }
-    pub(crate) fn condition_passes(
+    pub(super) fn condition_passes(
         &mut self,
         track: usize,
         step: usize,
@@ -29,12 +35,12 @@ impl Renderer {
             }
         }
     }
-    pub(crate) fn enqueue(&mut self, action: ScheduledTrackAction) {
+    pub(super) fn enqueue(&mut self, action: ScheduledTrackAction) {
         if let Some(slot) = self.scheduled.iter_mut().find(|slot| slot.is_none()) {
             *slot = Some(action);
         }
     }
-    pub(crate) fn prune_scheduled_actions(&mut self) {
+    pub(super) fn prune_scheduled_actions(&mut self) {
         for action in &mut self.scheduled {
             let Some(pending) = *action else { continue };
             let valid = self
@@ -48,7 +54,7 @@ impl Renderer {
             }
         }
     }
-    pub(crate) fn invalidate_replaced_scheduled_actions(
+    pub(super) fn invalidate_replaced_scheduled_actions(
         scheduled: &mut [Option<ScheduledTrackAction>; 32],
         old: &AudioProject,
         old_active_pattern: usize,
@@ -74,7 +80,7 @@ impl Renderer {
             }
         }
     }
-    pub(crate) fn advance_scheduled(&mut self) {
+    pub(super) fn advance_scheduled(&mut self) {
         self.prune_scheduled_actions();
         let mut ready = [None; 32];
         for (index, action) in self.scheduled.iter_mut().enumerate() {
@@ -96,7 +102,7 @@ impl Renderer {
             );
         }
     }
-    pub(crate) fn advance_preview_scheduled(&mut self) {
+    pub(super) fn advance_preview_scheduled(&mut self) {
         let mut ready = [None; 24];
         for (index, action) in self.preview_scheduled.iter_mut().enumerate() {
             let Some(mut pending) = *action else {
@@ -115,7 +121,7 @@ impl Renderer {
         }
     }
 
-    pub(crate) fn replace_project(
+    pub(super) fn replace_project(
         &mut self,
         project: Box<AudioProject>,
         smoothing: ParameterSmoothing,
@@ -168,7 +174,7 @@ impl Renderer {
         self.refresh_active_parameters(smoothing_samples);
     }
 
-    pub(crate) fn apply_pending(&mut self) -> bool {
+    pub(super) fn apply_pending(&mut self) -> bool {
         let Some((project, smoothing, map)) = self.pending.take() else {
             return true;
         };
@@ -176,7 +182,7 @@ impl Renderer {
         self.pending.is_none()
     }
 
-    pub(crate) fn activate_pattern(&mut self, pattern: usize) {
+    pub(super) fn activate_pattern(&mut self, pattern: usize) {
         self.active_pattern = pattern;
         self.queued_pattern = None;
         self.next_steps = [0; TRACK_COUNT];
@@ -187,7 +193,7 @@ impl Renderer {
         self.status.queued_pattern.store(u8::MAX, Ordering::Release);
     }
 
-    pub(crate) fn reset_lfos(&mut self) {
+    pub(super) fn reset_lfos(&mut self) {
         for lfo in self.lfos.iter_mut().flatten() {
             lfo.reset();
         }
@@ -198,7 +204,7 @@ impl Renderer {
         self.preview_lfo_offsets = [[0.0; ParameterId::ALL.len()]; TRACK_COUNT];
     }
 
-    pub(crate) fn reconcile_lfos(&mut self, next: &AudioProject) {
+    pub(super) fn reconcile_lfos(&mut self, next: &AudioProject) {
         for track in 0..TRACK_COUNT {
             for parameter in ParameterId::ALL {
                 let old_enabled = self.project.tracks[track]
@@ -237,7 +243,7 @@ impl Renderer {
         }
     }
 
-    pub(crate) fn advance_lfos(&mut self) {
+    pub(super) fn advance_lfos(&mut self) {
         let tempo = self.project.globals.tempo_bpm;
         for track in 0..TRACK_COUNT {
             Self::advance_lfo_bank(
@@ -250,7 +256,7 @@ impl Renderer {
         }
     }
 
-    pub(crate) fn advance_preview_lfos(&mut self) {
+    pub(super) fn advance_preview_lfos(&mut self) {
         let tempo = self.project.globals.tempo_bpm;
         for track in 0..TRACK_COUNT {
             Self::advance_lfo_bank(
@@ -263,7 +269,7 @@ impl Renderer {
         }
     }
 
-    pub(crate) fn reset_preview_lfos(&mut self, track: usize) {
+    pub(super) fn reset_preview_lfos(&mut self, track: usize) {
         for lfo in &mut self.preview_lfos[track] {
             lfo.reset();
         }
@@ -276,7 +282,7 @@ impl Renderer {
         );
     }
 
-    pub(crate) fn locks_at(&self, track: usize, step: usize) -> ParameterLocks {
+    pub(super) fn locks_at(&self, track: usize, step: usize) -> ParameterLocks {
         let t = self.project.patterns[self.active_pattern].tracks[track];
         let Some(event) = t.steps[step] else {
             return ParameterLocks::default();

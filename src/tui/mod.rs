@@ -1,35 +1,38 @@
+use crate::audio::Audio;
+use crate::model::Project;
+use anyhow::Result;
+use crossterm::{
+    event::{self, Event},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
+use ratatui::{Terminal, backend::CrosstermBackend};
+use std::{
+    io::stdout,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
+
+#[cfg(test)]
+#[allow(unused_imports)]
 use crate::{
-    audio::{Audio, AudioCommand, ParameterSmoothing},
+    audio::{AudioCommand, ParameterSmoothing},
     generator::{Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
         ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, DelayDivision, GlobalParameterId,
         LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue,
-        Percent, Project, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
+        Percent, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
         TriggerCondition, Waveform,
     },
     persistence,
     reducer::{Editor, Scope},
 };
-use anyhow::Result;
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
-use ratatui::{
-    Terminal,
-    backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Row, Table, Wrap},
-};
-use std::{
-    io::stdout,
-    path::PathBuf,
-    sync::atomic::Ordering,
-    time::{Duration, Instant},
-};
+#[cfg(test)]
+#[allow(unused_imports)]
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+#[cfg(test)]
+#[allow(unused_imports)]
+use ratatui::{layout::Rect, style::Color};
 
 const DIRECT_PARAMETER_RAMP: Duration = Duration::from_millis(30);
 const DIRECT_PERCENTAGE_HINT: &str = "[`/1–9/0] 0/10–90/100%";
@@ -55,14 +58,52 @@ mod overlays;
 mod render;
 mod state;
 
-pub(crate) use controller::*;
-pub(crate) use input::*;
-pub(crate) use overlays::*;
-pub(crate) use render::*;
 pub use state::App;
 #[cfg(test)]
-pub(crate) use state::FaderAnimation;
+use state::FaderAnimation;
+#[allow(unused_imports)]
 pub(crate) use state::{ChordField, FileAction, GeneratorDialog, LfoField, Mode, TriggerField};
+
+#[cfg(test)]
+#[allow(unused_imports)]
+use controller::{
+    adjusted_octave, change_octave, edit_global, enter_error, enter_global_edit, global_id,
+    global_name, global_shortcut, handle_file_input, handle_global_key, handle_new_confirm,
+    handle_open_confirm, handle_tempo_input, new_project, open_project, refresh_audio_status,
+    request_new_project, reset_project_ui, resolved_path, save, sync_project,
+    sync_project_with_smoothing,
+};
+#[cfg(test)]
+#[allow(unused_imports)]
+use input::{
+    adjacent_pattern_in_count, apply, coalesce_key, commit_pattern, duplicate_selected_track,
+    enter_parameter_edit, flipped_waveform, handle_chord_key, handle_generator_dialog, handle_key,
+    handle_lfo_key, handle_parameter_key, handle_pattern_dialog, handle_swing_key,
+    handle_track_length_input, handle_trigger_key, lfo_choice_index, move_chord_editor_step,
+    move_parameter_editor, move_step, move_step_bank, move_step_page, move_step_vertical,
+    normalize_cursor, open_chord_editor, open_lfo_editor, parameter_edit_passthrough,
+    parameter_shortcut, parameter_supports_direct_percentage, pattern_edit_at, select_track,
+    set_lfo_config, set_parameter, set_selected_track_length, switch_parameter_editor,
+    track_jump_index,
+};
+#[cfg(test)]
+#[allow(unused_imports)]
+use overlays::{
+    lfo_inactive_style, lfo_popup_rect, pattern_is_empty, popup, popup_at, popup_rect,
+    quit_popup_rect, render_chord_control, render_chord_popup, render_generator_popup,
+    render_lfo_control, render_lfo_fader, render_lfo_popup, render_lfo_selector, render_lfo_switch,
+    render_pattern_popup, render_trigger_popup,
+};
+#[cfg(test)]
+#[allow(unused_imports)]
+use render::{
+    GLOBAL_IDS, ParameterDescriptor, ParameterGroup, ValueOrigin, articulation_title,
+    displayed_parameter, draw_with_device, fader_segments, global_control_text,
+    global_display_name, global_shortcut_text, global_value_text, help_available,
+    lock_has_parameter, mode_name, parameter_descriptors, physical_parameter_readout,
+    render_centered, render_global_cards, render_parameter_bank, render_pitch_lfo_card, scope_name,
+    selected_accent, selected_chord_shape, step_cell, track_label,
+};
 
 pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
@@ -75,14 +116,14 @@ pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut app = App::new(project, path);
     while !app.quit {
-        refresh_audio_status(&mut app, audio);
+        controller::refresh_audio_status(&mut app, audio);
         app.fader_animations
             .retain(|animation| !animation.is_complete(Instant::now()));
-        terminal.draw(|f| draw(f, &app, audio))?;
+        terminal.draw(|f| render::draw(f, &app, audio))?;
         if event::poll(Duration::from_millis(8))? {
             if let Event::Key(k) = event::read()? {
                 if k.kind == event::KeyEventKind::Press {
-                    handle_key(&mut app, audio, k)?
+                    input::handle_key(&mut app, audio, k)?
                 }
             }
         }

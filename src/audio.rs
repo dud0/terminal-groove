@@ -1,26 +1,19 @@
 pub use crate::model::PatternIndexMap;
 use crate::{
-    dsp::{
-        Adsr, Biquad, DcBlock, Delay, EnvStage, EnvelopeProfile, LadderFilter, Lfo, MasterLimiter,
-        PolyBlepOsc, Reverb, Smoother, StereoChorus, equal_power_pan, exp_map_f32,
-    },
-    engine::{GateAction, StepClock, synth_action},
+    dsp::{DcBlock, Delay, Lfo, MasterLimiter, Reverb, Smoother},
+    engine::StepClock,
     model::{
-        ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, Globals, Instrument,
-        LfoAssignments, MAX_STEP_COUNT, ParameterId, ParameterLocks, Percent, Project, StepEvent,
-        TRACK_COUNT, TriggerCondition, Waveform,
+        ArpeggioConfig, ChordShape, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT,
+        ParameterId, Percent, Project, StepEvent, TRACK_COUNT,
     },
 };
 use anyhow::{Context, Result, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, Stream, StreamConfig};
-use rtrb::{Consumer, Producer, RingBuffer};
-use std::{
-    f32::consts::TAU,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU8, Ordering},
-    },
+use cpal::{Device, SampleFormat, StreamConfig};
+use rtrb::{Producer, RingBuffer};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 #[derive(Clone, Copy, Debug)]
 struct AudioTrack {
@@ -108,6 +101,54 @@ impl AudioProject {
     }
 }
 
+struct Renderer {
+    project: Box<AudioProject>,
+    retire: Producer<Box<AudioProject>>,
+    pending: Option<(Box<AudioProject>, ParameterSmoothing, PatternIndexMap)>,
+    clock: StepClock,
+    next_steps: [usize; TRACK_COUNT],
+    active_pattern: usize,
+    queued_pattern: Option<usize>,
+    playing: bool,
+    sr: f32,
+    status: Arc<AudioStatus>,
+    drums: [DrumVoice; 3],
+    preview_drums: [DrumVoice; 3],
+    synth: [SynthVoice; 3],
+    preview: [SynthVoice; 3],
+    chord: ChordVoicePool,
+    preview_chord: ChordVoicePool,
+    delay: Delay,
+    reverb: Reverb,
+    dc: DcBlock,
+    limiter: MasterLimiter,
+    mute: [Smoother; TRACK_COUNT],
+    lfos: [[Lfo; ParameterId::ALL.len()]; TRACK_COUNT],
+    preview_lfos: [[Lfo; ParameterId::ALL.len()]; TRACK_COUNT],
+    lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
+    preview_lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
+    scheduled: [Option<ScheduledTrackAction>; 32],
+    cycle_counts: [[u32; MAX_STEP_COUNT]; TRACK_COUNT],
+    condition_rng: [u32; TRACK_COUNT],
+    preview_scheduled: [Option<PreviewAction>; 24],
+}
+
+#[derive(Clone, Copy)]
+struct ScheduledTrackAction {
+    remaining: u32,
+    track: u8,
+    step: u8,
+    retrigger: bool,
+    trigger_allowed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PreviewAction {
+    remaining: u32,
+    track: u8,
+    step: u8,
+}
+
 mod command;
 mod effects;
 mod queue;
@@ -116,11 +157,18 @@ mod scheduler;
 mod synthesis;
 mod voices;
 
+#[cfg(test)]
+use crate::dsp::exp_map_f32;
+#[cfg(test)]
+use crate::model::{ArpeggioRate, ArpeggioType, ParameterLocks};
 pub use command::AudioCommand;
-pub(crate) use effects::{modulated_percent, pitch_modulated_frequency, render};
+use effects::render;
+#[cfg(test)]
+use effects::{modulated_percent, pitch_modulated_frequency};
 pub use queue::{Audio, QueueFull};
-pub(crate) use renderer::{PreviewAction, Renderer, ScheduledTrackAction};
-pub(crate) use voices::*;
+#[cfg(test)]
+use voices::{ArpeggioState, CHORD_GROUP_SIZE, DRUM_SILENCE, DrumEnvelope, KickPitchEnvelope};
+use voices::{ChordVoicePool, DrumVoice, SynthVoice};
 
 pub struct AudioStatus {
     pub running: AtomicBool,
@@ -212,13 +260,7 @@ pub fn open(requested: Option<&str>, project: &Project) -> Result<Audio> {
     stream
         .play()
         .with_context(|| format!("could not start audio output `{name}`"))?;
-    Ok(Audio {
-        stream,
-        device_name: name,
-        status,
-        producer,
-        retired,
-    })
+    Ok(Audio::new(stream, name, status, producer, retired))
 }
 
 fn mark_failed(status: &AudioStatus) {
