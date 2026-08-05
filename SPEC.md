@@ -6,11 +6,9 @@ Application and executable name: `terminal-groove`
 
 ## 1. Product definition
 
-`terminal-groove` is a real-time groovebox operated entirely from a terminal. Its primary design goals are a fast keyboard workflow, predictable state transitions, and a transparent interface: the selected section and step, transport state, active editing mode, parameter values, triggers, notes, ties, locks, available shortcuts, dirty state, and audio errors must remain visible.
+`terminal-groove` is a real-time terminal groovebox with a fast keyboard workflow, predictable state transitions, and visible selection, transport, editing state, parameters, events, locks, shortcuts, dirty state, and audio errors. It has six independently looping 1–64-step tracks on a shared sixteenth-note clock; all sound is synthesized and tracks default to 16 steps.
 
-The project has six independently looping track sequences on a shared sixteenth-note clock. Each track contains 1 through 64 steps and defaults to 16 steps, allowing polymetric patterns while retaining a fixed 4/4 timing reference.
-
-There are exactly six tracks in this fixed order:
+The fixed track order is:
 
 1. Kick drum
 2. Snare drum
@@ -19,21 +17,9 @@ There are exactly six tracks in this fixed order:
 5. Chord
 6. Lead
 
-All sound is synthesized in real time. The application contains no audio samples.
-
 ### 1.1 MVP capabilities
 
-- Start, pause, resume, stop, and reset pattern playback.
-- Edit the pattern while it is playing. An edit affects playback the next time the affected step is reached.
-- Add drum triggers, synth notes, synth ties, and per-step parameter locks.
-- Set per-track level, mute, delay send, and reverb send.
-- Add independent LFO modulation to eligible instrument parameters and track level.
-- Configure tempo, delay time and feedback, reverb time, musical key, and major or natural-minor scale.
-- Audition sounds without modifying the pattern.
-- Edit and navigate up to 100 independent patterns.
-- Undo and redo project edits within the current session.
-- Save and load versioned, human-readable JSON projects.
-- Select the system default audio output or an explicit output device from the command line.
+Playback supports start, pause, resume, stop, reset, live editing, drum triggers, synth notes and ties, per-step locks, per-track mixing and sends, eligible parameter LFOs, tempo/effects/key/scale configuration, non-destructive audition, up to 100 patterns, session undo/redo, versioned human-readable JSON, and default or explicitly selected audio output.
 
 ### 1.2 Explicitly excluded from the MVP
 
@@ -517,60 +503,11 @@ Top-level tracks contain shared configuration only. Sequence data is stored unde
 
 Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. `spread` accepts `off`, `narrow`, or `wide`. Lead stores the same percentage controls except `chorus` and `spread`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
 
-An empty step is JSON `null`. Populated step shapes are:
-
-```json
-{
-  "type": "trigger",
-  "accent": true,
-  "locks": {
-    "tune": 70
-  }
-}
-```
-
-```json
-{
-  "type": "bass_note",
-  "degree": 5,
-  "octave": 3,
-  "accent": false,
-  "slide": true,
-  "locks": {
-    "cutoff": 40,
-    "waveform": "square"
-  }
-}
-```
-
-`accent` is required and Boolean on triggers, `bass_note`, and `note`. `slide` is additionally required and Boolean on `bass_note`. Both are invalid on ties.
+An empty step is JSON `null`. Populated steps use tagged `trigger`, `bass_note`, `note`, or `tie` objects with a required `locks` object. `accent` is required and Boolean on triggers, `bass_note`, and `note`; `slide` is additionally required on `bass_note`; both are invalid on ties.
 
 Chord notes may include an optional `chord_shape` string. Omitted values mean `triad_root` (`1-3-5`). They may also include `arpeggio` with `enabled`, `type`, and `rate`; omitted arpeggio means disabled, Up, and `1/16`, while non-default type/rate values remain stored when disabled. The stable shape names are `triad_root`, `triad_first_inversion`, `triad_second_inversion`, `seventh_root`, `seventh_first_inversion`, `seventh_second_inversion`, `seventh_third_inversion`, `sixth_root`, `sixth_first_inversion`, `sixth_second_inversion`, `sixth_third_inversion`, `sus2_root`, `sus2_first_inversion`, `sus2_second_inversion`, `sus4_root`, `sus4_first_inversion`, and `sus4_second_inversion`. Chord data is invalid on Lead notes.
 
-```json
-{
-  "type": "note",
-  "degree": 1,
-  "octave": 3,
-  "accent": false,
-  "chord_shape": "triad_root",
-  "arpeggio": {
-    "enabled": true,
-    "type": "up_down",
-    "rate": "sixteenth"
-  },
-  "locks": {}
-}
-```
-
-```json
-{
-  "type": "tie",
-  "locks": {
-    "filter_envelope": 80
-  }
-}
-```
+For example, a Chord note may contain `degree`, `octave`, `accent`, `chord_shape`, `arpeggio`, and `locks`; a tie contains only `locks`.
 
 The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. `pitch` is not a lock key. Chord chorus values are `off`, `i`, and `ii`; arpeggio settings are note-trigger values, not lock values. `mute`, `accent`, and `slide` are invalid in a lock object.
 
@@ -606,28 +543,7 @@ The pitch assignment's `depth` is percentage control; its physical range is `±(
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 
-### 8.3 Model types
-
-The Rust model should express and validate the schema through these domain concepts rather than untyped maps:
-
-- `Project`
-- `Globals`
-- `Track` with fixed `TrackKind`
-- `KickParameters`, `SnareParameters`, `HatParameters`, `BassParameters`, `ChordParameters`, and `LeadParameters`
-- `Step`
-- `StepEvent::{Trigger, BassNote, Note, Tie}`
-- `ChordShape`
-- `ParameterLocks`
-- `ParameterId`
-- `LfoAssignments`, `LfoConfig`, `LfoWaveform`, `LfoRate`, and `LfoDivision`
-- bounded `Percent`
-- `PitchClass`
-- `Scale::{Major, NaturalMinor}`
-- `Waveform::{Square, Saw}`
-- `ChorusMode::{Off, I, Ii}`
-- `DelayDivision`
-
-There is no stable public Rust library API in the MVP. The public compatibility interfaces are the CLI, keyboard behavior, and JSON schema.
+The Rust model must validate these domain concepts rather than untyped maps. There is no stable public Rust API in the MVP; the compatibility interfaces are the CLI, keyboard behavior, and JSON schema.
 
 ## 9. Command-line interface
 
@@ -663,12 +579,6 @@ Baseline:
 - Clap 4 derive API for CLI parsing
 - A structured error crate such as `thiserror`; application-level context may use `anyhow`
 
-Ratatui documents backend compatibility and provides a test backend, CPAL documents the Linux ALSA requirement, and `rtrb` provides a wait-free fixed-capacity SPSC queue:
-
-- <https://ratatui.rs/concepts/backends/>
-- <https://github.com/RustAudio/cpal>
-- <https://docs.rs/crate/rtrb/latest>
-
 Linux setup documentation must include Rust installation and:
 
 - Debian/Ubuntu: `libasound2-dev`
@@ -678,17 +588,7 @@ Install Rust and the ALSA development package before building on a new Linux sys
 
 ### 10.2 Package organization
 
-Use one binary package with testable library modules grouped by behavior:
-
-- Model and validation
-- Reducer, command handling, undo/redo
-- Project serialization and atomic file I/O
-- TUI rendering and terminal lifecycle
-- Sequencer and transport
-- DSP primitives, instruments, effects, and offline renderer
-- CPAL host/stream integration
-
-Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be tested without a terminal or audio device.
+Use one binary package with testable modules for model/validation, reducer and history, persistence, TUI, sequencing, DSP/offline rendering, and CPAL integration. Keep the model, reducer, and DSP independent of Ratatui and CPAL.
 
 ### 10.3 Threading and real-time rules
 
@@ -722,86 +622,32 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 
 ## 12. Testing and acceptance
 
-### 12.1 Unit tests
+### 12.1 Unit and reducer tests
 
-- Major and natural-minor degree mapping in all 12 keys
-- Degree 8 octave behavior and input-octave limits
-- Frequency conversion with A4 = 440 Hz
-- Tie creation, wrapped resolution, all-tie rejection, and dependent-tie cleanup
-- Bass/Lead gate transitions and Chord shape generation, eight-voice overlap, retrigger, tie, and release behavior
-- Trigger/note accent defaults, empty-step input-accent inheritance and audition, tie inheritance, engine-specific timbre response, and latched tail behavior
-- Bass slide arming through ties, fixed 60 ms glide time, and legato envelope behavior
-- One-step lock overlay and restoration
-- Lock compatibility by track and event type
-- Number-row percentage mapping and arrow clamping
-- Undo/redo ordering, coalescing, redo invalidation, and dirty-revision restoration
-- Tempo step-length accumulation without cumulative drift
-- Independent track cycles, live resizing, and reset/resume positions
-- Resizing and exact sequence doubling at valid boundaries, including undo and rejection above 32 steps
-- Delay-division duration at representative tempos and sample rates
-- LFO destination compatibility, free/synchronized rates, phase reset/freeze, and lock-centered clamping
-- Chord/Lead pitch LFO eligibility, strict JSON round trips, bipolar ±2-semitone mapping, continuous ties/release tails, and uniform Chord voice modulation
+Cover musical degree/frequency mapping, input limits, tie creation/resolution/cleanup, Bass and Lead gates, Chord shapes and eight-voice overlap, retriggers, ties, releases, accents, audition, and Bass slide behavior. Cover lock overlay/compatibility, percentage editing, undo/redo/coalescing, dirty revisions, tempo accumulation, independent cycles, resize/doubling, delay divisions, and LFO compatibility, rates, phase, clamping, pitch range, ties, and release tails.
 
 ### 12.2 Persistence tests
 
-- Golden JSON for every track/event/lock and LFO rate/waveform variant
-- Default-project and populated-project round trips
-- Rejection of unknown versions/fields, bad ranges, wrong track order/count, step counts outside 1–64, invalid locks/LFO assignments, and invalid ties
-- Strict version 12 round trips, v11 import with default condition/retrigger/swing fields, and rejection of all other versions
-- Failed loads preserve the active project
-- Atomic saves leave the previous file intact on failure
-- Successful save/load resets dirty state and load resets history
+Round-trip default and populated version-12 projects, including every event, lock, LFO, effect, and articulation variant. Reject unknown versions/fields, invalid ranges/layouts/events/locks/LFOs/ties, and malformed sequences; import version 11 with defaults; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, and history reset on load.
 
-### 12.3 TUI and reducer tests
+### 12.3 TUI tests
 
-- Ratatui `TestBackend` rendering at `120x34` and larger
-- Fixed-width 32-cell rows, 16-step bank divider, continuation rows, and track-block scrolling
-- Physical-row vertical navigation, bank navigation, length input, and doubling shortcut
-- Small-terminal resize screen
-- Ten-segment fader fill, waveform/chorus switches, active-parameter styling, and local shortcut labels
-- Effective `LOCK` values with explicit/inherited origin labels
-- Global detail cards and physical active-parameter readouts
-- Independent playhead and cursor styling
-- Non-color event and lock indicators
-- Every documented shortcut in its valid and invalid contexts
-- BASE/LOCK scope persistence and reset rules
-- Parameter-mode precedence over normal up/down navigation
-- Accent and Bass-slide editing, source-note articulation readout on ties, and BASE/LOCK independence
-- LFO modal navigation, immediate edits, assignment badges, removal, and minimum-size rendering
-- Pitch LFO card order/shortcut, LFO-only BASE/LOCK behavior, physical range display, and minimum-size rendering
-- Chord editor navigation, per-note/default editing, inversion display, disabled remembered arpeggio fields, and minimum-size rendering
-- File prompts, dirty confirmations, error dialogs, and help overlay
-- Terminal restoration on normal and simulated failure paths
+Use Ratatui `TestBackend` at `120x34` and larger to cover fixed-width grids, continuation rows, scrolling, navigation, length/doubling controls, small terminals, faders, switches, readouts, shortcuts, cursor/playhead styling, non-color indicators, BASE/LOCK scope, parameter precedence, event articulation, LFO/pitch-LFO/Chord editors, dialogs, confirmations, help, and terminal restoration.
 
 ### 12.4 DSP tests
 
-- Oscillator pitch and alias-reduced bounded output
-- ADSR stage durations within tolerance at multiple sample rates
-- Stable filter output at all cutoff/resonance extremes
-- Finite drum output and expected decay ordering at 0%, 50%, and 100%
-- Step-lock changes and smoothing without discontinuity spikes
-- Bounded LFO waveforms, deterministic sample-and-hold, synchronized/free rate accuracy, transport phase behavior, and discontinuity smoothing
-- Zero-depth pitch identity, finite frequency modulation, bipolar ±2-semitone mapping, and continuous pitch modulation through ties and release tails
-- Delay timing, feedback decay, maximum-delay allocation, and click-free time changes
-- Reverb decay-time monotonicity and bounded output
-- Limiter ceiling, fixed makeup gain, representative-groove RMS, and sample-format conversion bounds
-- Deterministic offline rendering from a fixed project and PRNG seed
-- A callback-path allocation test or equivalent instrumentation proving no real-time heap activity
+Cover bounded oscillator pitch, ADSR timing, filter stability, finite drum output, lock smoothing, LFO waveform/rate/phase behavior, pitch modulation, delay/reverb timing and decay, limiter ceiling and makeup gain, sample conversion, deterministic offline rendering, and callback-path allocation safety.
 
 ### 12.5 Manual acceptance scenarios
 
-1. Start an untitled project in a `120x34` terminal, move to each row, enter events, and see all state and local shortcuts without opening help.
-2. Build and hear a drum loop using Enter; edit the Kick tune/decay/attack, Snare tune/tone/snappy, and Hi-hat tune/decay; add accents; mute tracks; and use both effect sends.
-3. Enter Bass degrees and octave changes, toggle accent and slide, create ordinary and loop-wrapped ties, and hear the fixed-time 303-style glide, mono envelope, and inherited-accent behavior.
-4. Add base values and locks while stopped and playing; verify locks apply only on their step and live edits take effect on the next pass.
-5. Edit each track parameter and confirm its fader fills, shortcut, active highlight, exact percentage, and physical readout. Add synced and free LFOs, verify their badges and modal values, and hear locks remain the modulation center.
-6. Audition empty and occupied drum/pitched steps with `o`, including Chord shapes and inversions while transport is running, without pattern changes.
-7. Change key and scale and verify existing degree data follows the new harmony on future triggers.
-8. Undo and redo compound tie cleanup and repeated parameter edits, including returning to the saved clean revision.
-9. Save, inspect, reopen, and compare a version 12 project with conditions, retriggers, swing, accents, Bass slides, trigger-owned Chord shapes/arpeggiator settings, ordinary locks, effects, mute states, and input octaves; verify v11 imports with defaults and all other versions are rejected without altering the active project.
-10. List audio devices, use the default device, and select a unique explicit device.
-11. Play for at least ten minutes at a supported 48 kHz low-latency configuration without stream errors, non-finite output, timing drift, or audible clicks from normal parameter edits.
-12. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored.
+1. Start an untitled project in a `120x34` terminal; navigate every row, enter events, and verify visible state, local shortcuts, playhead/cursor styling, and small-terminal behavior.
+2. Build a drum loop; edit all drum parameters, accents, mute, sends, conditions, retriggers, swing, and locks while stopped and playing.
+3. Enter Bass, Chord, and Lead notes with octave changes, shapes, inversions, arpeggiation, accents, slide, ordinary and wrapped ties; verify gates, releases, inherited articulation, and the fixed-time Bass glide.
+4. Edit base values, locks, and synced/free LFOs; verify faders, readouts, badges, modulation centers, smoothing, and next-pass live updates.
+5. Audition empty and occupied steps with `o` while stopped and playing, including Chord shapes; change key and scale and verify existing degrees are reinterpreted on future triggers.
+6. Exercise undo/redo, tie cleanup, coalesced parameter edits, dirty restoration, and version-12 save/load with all event, lock, LFO, effect, mixer, articulation, and input settings; verify v11 defaults and rejection of other versions.
+7. List devices, use the default output, select a unique explicit device, and play for at least ten minutes at a supported low-latency configuration without stream errors, non-finite output, timing drift, or audible edit clicks.
+8. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored and project editing remains safe where supported.
 
 ## 13. MVP completion criteria
 
