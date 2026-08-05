@@ -701,6 +701,8 @@ pub struct LfoAssignments {
     pub sustain: Option<LfoConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<LfoConfig>,
 }
 
 impl LfoAssignments {
@@ -721,6 +723,7 @@ impl LfoAssignments {
             ParameterId::Attack => self.attack,
             ParameterId::Sustain => self.sustain,
             ParameterId::Release => self.release,
+            ParameterId::Pitch => self.pitch,
             ParameterId::DelaySend
             | ParameterId::ReverbSend
             | ParameterId::Waveform
@@ -746,6 +749,7 @@ impl LfoAssignments {
             ParameterId::Attack => &mut self.attack,
             ParameterId::Sustain => &mut self.sustain,
             ParameterId::Release => &mut self.release,
+            ParameterId::Pitch => &mut self.pitch,
             ParameterId::DelaySend
             | ParameterId::ReverbSend
             | ParameterId::Waveform
@@ -785,6 +789,7 @@ impl ParameterLocks {
             ParameterId::Attack => self.attack.map(ParameterValue::Percent),
             ParameterId::Sustain => self.sustain.map(ParameterValue::Percent),
             ParameterId::Release => self.release.map(ParameterValue::Percent),
+            ParameterId::Pitch => None,
         }
     }
 
@@ -843,6 +848,7 @@ impl ParameterLocks {
             ParameterId::Attack => self.attack = None,
             ParameterId::Sustain => self.sustain = None,
             ParameterId::Release => self.release = None,
+            ParameterId::Pitch => {}
         }
     }
 
@@ -1422,6 +1428,7 @@ pub enum ParameterId {
     Attack,
     Sustain,
     Release,
+    Pitch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1433,7 +1440,7 @@ pub enum ParameterValue {
 }
 
 impl ParameterId {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Level,
         Self::Pan,
         Self::DelaySend,
@@ -1454,6 +1461,7 @@ impl ParameterId {
         Self::Attack,
         Self::Sustain,
         Self::Release,
+        Self::Pitch,
     ];
 
     pub const fn is_valid_for(self, kind: TrackKind) -> bool {
@@ -1480,6 +1488,7 @@ impl ParameterId {
                 matches!(kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead)
             }
             Self::Sustain | Self::Release => matches!(kind, TrackKind::Chord | TrackKind::Lead),
+            Self::Pitch => false,
         }
     }
 
@@ -1492,11 +1501,16 @@ impl ParameterId {
     }
 
     pub const fn supports_lfo(self, kind: TrackKind) -> bool {
-        self.is_valid_for(kind)
-            && !matches!(
-                self,
-                Self::DelaySend | Self::ReverbSend | Self::Waveform | Self::Chorus | Self::Spread
-            )
+        (matches!(self, Self::Pitch) && matches!(kind, TrackKind::Chord | TrackKind::Lead))
+            || (self.is_valid_for(kind)
+                && !matches!(
+                    self,
+                    Self::DelaySend
+                        | Self::ReverbSend
+                        | Self::Waveform
+                        | Self::Chorus
+                        | Self::Spread
+                ))
     }
 
     pub const fn name(self) -> &'static str {
@@ -1521,6 +1535,7 @@ impl ParameterId {
             Self::Attack => "attack",
             Self::Sustain => "sustain",
             Self::Release => "release",
+            Self::Pitch => "pitch",
         }
     }
 
@@ -1628,6 +1643,7 @@ impl Track {
                 Instrument::Lead(p) => ParameterValue::Percent(p.release),
                 _ => return None,
             },
+            ParameterId::Pitch => return None,
         };
         Some(value)
     }
@@ -1727,6 +1743,7 @@ impl Track {
                 Instrument::Lead(p) => p.release = v,
                 _ => return false,
             },
+            (ParameterId::Pitch, _) => return false,
             _ => return false,
         }
         true
@@ -1965,6 +1982,12 @@ mod tests {
         let percent = ParameterValue::Percent(p(42));
         let mut locks = ParameterLocks::default();
         for parameter in ParameterId::ALL {
+            if parameter == ParameterId::Pitch {
+                assert!(!locks.set(parameter, percent));
+                assert_eq!(locks.get(parameter), None);
+                locks.clear(parameter);
+                continue;
+            }
             let value = if parameter.is_waveform() {
                 ParameterValue::Waveform(Waveform::Square)
             } else if parameter.is_chorus() {
@@ -2051,5 +2074,21 @@ mod tests {
         project.tracks[3].lfos.tone = None;
         project.tracks[4].lfos.release = Some(LfoConfig::default());
         project.validate().unwrap();
+        assert!(ParameterId::Pitch.supports_lfo(TrackKind::Chord));
+        assert!(ParameterId::Pitch.supports_lfo(TrackKind::Lead));
+        assert!(!ParameterId::Pitch.supports_lfo(TrackKind::Bass));
+        assert!(!ParameterId::Pitch.is_valid_for(TrackKind::Chord));
+        assert!(!project.tracks[4].set_parameter(
+            ParameterId::Pitch,
+            ParameterValue::Percent(Percent::new(50).unwrap())
+        ));
+        assert!(!ParameterLocks::default().set(
+            ParameterId::Pitch,
+            ParameterValue::Percent(Percent::new(50).unwrap())
+        ));
+        project.tracks[4].lfos.pitch = Some(LfoConfig::default());
+        project.validate().unwrap();
+        project.tracks[3].lfos.pitch = Some(LfoConfig::default());
+        assert_eq!(project.validate(), Err(ValidationError::Lfo(3, "pitch")));
     }
 }

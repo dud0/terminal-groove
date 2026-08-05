@@ -287,6 +287,11 @@ mod tests {
             enabled: true,
         });
         project.tracks[3].lfos.cutoff = Some(crate::model::LfoConfig::default());
+        project.tracks[4].lfos.pitch = Some(crate::model::LfoConfig {
+            depth: crate::model::Percent::new(100).unwrap(),
+            ..Default::default()
+        });
+        project.tracks[5].lfos.pitch = Some(crate::model::LfoConfig::default());
         save_atomic(&path, &project).unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded, project);
@@ -294,6 +299,7 @@ mod tests {
         assert!(json.contains("sample_and_hold"));
         assert!(json.contains("rate_percent"));
         assert!(json.contains("quarter"));
+        assert!(json.contains("\"pitch\""));
     }
 
     #[test]
@@ -310,6 +316,23 @@ mod tests {
         value["tracks"][0].as_object_mut().unwrap().remove("lfos");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+    }
+
+    #[test]
+    fn pitch_lfo_is_rejected_on_non_pitched_tracks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invalid-pitch-lfo.groove.json");
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["tracks"][3]["lfos"]["pitch"] =
+            serde_json::to_value(crate::model::LfoConfig::default()).unwrap();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            load(&path),
+            Err(ProjectIoError::Validation {
+                source: crate::model::ValidationError::Lfo(3, "pitch"),
+                ..
+            })
+        ));
     }
 
     #[test]

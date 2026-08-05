@@ -1065,7 +1065,7 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
 fn parameter_supports_direct_percentage(parameter: ParameterId) -> bool {
     !matches!(
         parameter,
-        ParameterId::Waveform | ParameterId::Chorus | ParameterId::Spread
+        ParameterId::Waveform | ParameterId::Chorus | ParameterId::Spread | ParameterId::Pitch
     )
 }
 
@@ -2195,7 +2195,7 @@ const BASS_PARAMETERS: [ParameterDescriptor; 9] = [
     },
 ];
 
-const CHORD_PARAMETERS: [ParameterDescriptor; 16] = [
+const CHORD_PARAMETERS: [ParameterDescriptor; 17] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
@@ -2228,6 +2228,12 @@ const CHORD_PARAMETERS: [ParameterDescriptor; 16] = [
         id: ParameterId::Spread,
         label: "Spread",
         shortcut: "e",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Pitch,
+        label: "Pitch",
+        shortcut: "i",
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
@@ -2274,7 +2280,7 @@ const CHORD_PARAMETERS: [ParameterDescriptor; 16] = [
     },
 ];
 
-const LEAD_PARAMETERS: [ParameterDescriptor; 14] = [
+const LEAD_PARAMETERS: [ParameterDescriptor; 15] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
@@ -2282,6 +2288,7 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 14] = [
     CHORD_PARAMETERS[4],
     CHORD_PARAMETERS[5],
     CHORD_PARAMETERS[6],
+    CHORD_PARAMETERS[16],
     CHORD_PARAMETERS[9],
     CHORD_PARAMETERS[10],
     CHORD_PARAMETERS[11],
@@ -2371,6 +2378,19 @@ fn physical_parameter_readout(
     step: usize,
     parameter: ParameterId,
 ) -> String {
+    if parameter == ParameterId::Pitch {
+        return a.editor.project.tracks[track]
+            .lfos
+            .get(parameter)
+            .map(|config| {
+                format!(
+                    "{}% · ±{:.1} semitones · LFO",
+                    config.depth.get(),
+                    config.depth.get() as f32 * 0.02
+                )
+            })
+            .unwrap_or_else(|| "unassigned · LFO".into());
+    }
     let Some((value, origin)) = displayed_parameter(a, track, step, parameter) else {
         return "unavailable".into();
     };
@@ -2717,6 +2737,10 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
                 .fg(group_color)
                 .add_modifier(Modifier::BOLD)
         };
+        if descriptor.id == ParameterId::Pitch {
+            render_pitch_lfo_card(f, content, t, descriptor, active, group_color, style);
+            continue;
+        }
         let Some((value, origin)) = displayed_parameter(a, track, a.step, descriptor.id) else {
             continue;
         };
@@ -2857,6 +2881,96 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
             shortcut_area,
         );
     }
+}
+
+fn render_pitch_lfo_card(
+    f: &mut ratatui::Frame,
+    content: Rect,
+    track: &crate::model::Track,
+    descriptor: &ParameterDescriptor,
+    active: bool,
+    group_color: Color,
+    style: Style,
+) {
+    let config = track.lfos.get(ParameterId::Pitch);
+    let value_label = config
+        .map(|config| {
+            format!(
+                "{}%±{:.0}st",
+                config.depth.get(),
+                config.depth.get() as f32 * 0.02
+            )
+        })
+        .unwrap_or_else(|| "—".into());
+    render_centered(f, &value_label, content, style);
+    for segment in 0..10 {
+        let segment_area = Rect {
+            x: content.x,
+            y: content.y + 1 + segment,
+            width: content.width,
+            height: 1,
+        };
+        let symbol = config.map_or("···", |config| {
+            if usize::from(segment) >= 10 - fader_segments(config.depth.get()) {
+                "███"
+            } else {
+                "···"
+            }
+        });
+        let segment_style = if active {
+            Style::default()
+                .fg(group_color)
+                .reversed()
+                .add_modifier(Modifier::BOLD)
+        } else if symbol == "···" {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default()
+                .fg(group_color)
+                .add_modifier(Modifier::BOLD)
+        };
+        render_centered(f, symbol, segment_area, segment_style);
+    }
+    render_centered(
+        f,
+        descriptor.label,
+        Rect {
+            x: content.x,
+            y: content.y + 11,
+            width: content.width,
+            height: 1,
+        },
+        style,
+    );
+    let shortcut_style = if active {
+        Style::default()
+            .fg(group_color)
+            .reversed()
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(group_color)
+            .add_modifier(Modifier::BOLD)
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("[{}]", descriptor.shortcut), shortcut_style),
+            Span::styled("LFO", shortcut_style),
+            Span::styled(
+                if config.is_some() { "~" } else { "" },
+                Style::default()
+                    .fg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]))
+        .alignment(Alignment::Center),
+        Rect {
+            x: content.x,
+            y: content.y + 12,
+            width: content.width,
+            height: 1,
+        },
+    );
 }
 
 fn render_centered(f: &mut ratatui::Frame, text: &str, area: Rect, style: Style) {
@@ -3155,7 +3269,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: Shift+A toggles accent; Shift+G toggles Bass slide.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nTracks: l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C shape.\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or Chord-shape editing. Esc or ? closes Help.",
+            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: Shift+A toggles accent; Shift+G toggles Bass slide.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nTracks: l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C shape.\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or Chord-shape editing. Esc or ? closes Help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3393,6 +3507,7 @@ fn render_lfo_popup(
             f,
             columns[index],
             config,
+            parameter,
             *field,
             selected == *field,
             tempo_bpm,
@@ -3419,6 +3534,7 @@ fn render_lfo_control(
     f: &mut ratatui::Frame,
     area: Rect,
     config: LfoConfig,
+    parameter: ParameterId,
     field: LfoField,
     active: bool,
     tempo_bpm: u16,
@@ -3537,9 +3653,18 @@ fn render_lfo_control(
             }
         },
         LfoField::Depth => {
+            let depth_label = if parameter == ParameterId::Pitch {
+                format!(
+                    "{}% · ±{:.1} st",
+                    config.depth.get(),
+                    config.depth.get() as f32 * 0.02
+                )
+            } else {
+                format!("±{} pp", config.depth.get())
+            };
             render_centered(
                 f,
-                &format!("±{} pp", config.depth.get()),
+                &depth_label,
                 Rect {
                     height: 1,
                     ..content
@@ -3770,14 +3895,16 @@ mod tests {
         assert_eq!(drum[4].shortcut, "u");
         assert_eq!(drum[4].group, ParameterGroup::Instrument);
         let synth = parameter_descriptors(TrackKind::Chord);
-        assert_eq!(synth.len(), 16);
+        assert_eq!(synth.len(), 17);
         assert_eq!(synth[4].id, ParameterId::OscillatorMix);
         assert_eq!(synth[4].group, ParameterGroup::Instrument);
         assert_eq!(synth[5].id, ParameterId::PulseWidth);
         assert_eq!(synth[7].id, ParameterId::Chorus);
-        assert_eq!(synth[9].group, ParameterGroup::Filter);
-        assert_eq!(synth[10].shortcut, "R");
-        assert_eq!(synth[12].group, ParameterGroup::Envelope);
+        assert_eq!(synth[9].id, ParameterId::Pitch);
+        assert_eq!(synth[9].shortcut, "i");
+        assert_eq!(synth[10].group, ParameterGroup::Filter);
+        assert_eq!(synth[11].shortcut, "R");
+        assert_eq!(synth[13].group, ParameterGroup::Envelope);
         assert_ne!(
             ParameterGroup::Mixer.color(),
             ParameterGroup::Filter.color()
@@ -3911,6 +4038,30 @@ mod tests {
         assert!(!parameter_supports_direct_percentage(ParameterId::Waveform));
         assert!(!parameter_supports_direct_percentage(ParameterId::Chorus));
         assert!(!parameter_supports_direct_percentage(ParameterId::Spread));
+        assert!(!parameter_supports_direct_percentage(ParameterId::Pitch));
+    }
+
+    #[test]
+    fn pitch_lfo_card_is_visible_for_chord_and_lead_only() {
+        let mut project = Project::new();
+        project.tracks[4].lfos.pitch = Some(LfoConfig {
+            depth: Percent::new(100).unwrap(),
+            ..Default::default()
+        });
+        let mut app = App::new(project, None);
+        app.row = 5;
+        let chord = rendered(&app, 220, 34);
+        assert!(chord.contains("Pitch"));
+        assert!(chord.contains("[i]"));
+        assert!(chord.contains("100%"));
+        assert!(chord.contains("±2st"));
+
+        app.row = 6;
+        let lead = rendered(&app, 220, 34);
+        assert!(lead.contains("Pitch"));
+        app.row = 1;
+        let kick = rendered(&app, 220, 34);
+        assert!(!kick.contains("Pitch"));
     }
 
     #[test]
@@ -4202,6 +4353,24 @@ mod tests {
         let free = rendered(&app, 120, 34);
         assert!(free.contains("100%"));
         assert!(free.contains("20.000 Hz"));
+    }
+
+    #[test]
+    fn pitch_lfo_modal_shows_physical_depth_range() {
+        let mut project = Project::new();
+        project.tracks[4].lfos.pitch = Some(LfoConfig {
+            depth: Percent::new(100).unwrap(),
+            ..Default::default()
+        });
+        let mut app = App::new(project, None);
+        app.row = 5;
+        app.mode = Mode::LfoEdit {
+            parameter: ParameterId::Pitch,
+            field: LfoField::Depth,
+        };
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("Track LFO · pitch"));
+        assert!(screen.contains("100% · ±2.0 st"));
     }
 
     #[test]

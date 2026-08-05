@@ -156,11 +156,11 @@ All continuous DSP parameters use short smoothing ramps. A default ramp of appro
 
 ### 3.2 Per-parameter LFOs
 
-Each track may attach one independent LFO to each eligible continuous instrument parameter, track level, and pan. Waveform, mute, delay send, reverb send, pitch, accent, slide, Chord spread, and global parameters are not eligible.
+Each track may attach one independent LFO to each eligible continuous instrument parameter, track level, and pan. Chord and Lead additionally support the LFO-only `pitch` destination. Waveform, mute, delay send, reverb send, accent, slide, Chord spread, and global parameters are not eligible.
 
 Each assignment stores enabled state, waveform, rate, and depth. Waveforms are sine, triangle, square, rising saw, and deterministic sample-and-hold. Sine and triangle begin at the center and rise, square begins high, saw begins at -1 and rises, and sample-and-hold selects one deterministic pseudorandom bipolar value per cycle.
 
-Depth is 0–100 percentage points and is bipolar. The engine adds `waveform * depth` to the current effective base-or-lock percentage, clamps to 0–100, and only then maps the percentage to its physical value. Discontinuous waveforms receive an approximately 5 ms smoothing stage.
+Depth is 0–100 percentage points and is bipolar. For ordinary destinations, the engine adds `waveform * depth` to the current effective base-or-lock percentage, clamps to 0–100, and only then maps the percentage to its physical value. `pitch` is LFO-only: it has no base value or step lock, and converts `waveform * depth` to `offset_percent / 100 * 2` semitones around every triggered Chord or Lead note. Thus 100% depth is bipolar ±2 semitones. The frequency multiplier is `2^(semitones/12)`. Discontinuous waveforms receive an approximately 5 ms smoothing stage.
 
 Free rate uses an exponential 0–100 control mapping from 0.01 Hz through 20 Hz. Tempo-synchronized cycle lengths, from slowest to fastest, are four bars, two bars, one bar, half, dotted quarter, quarter, quarter triplet, dotted eighth, eighth, eighth triplet, sixteenth, sixteenth triplet, and thirty-second.
 
@@ -335,6 +335,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Chord/Lead | `a` / `d` / `s` / `r` | Edit ADSR |
 | Chord | `h` | Edit chorus Off/I/II mode |
 | Chord | `e` | Edit spread Off/Narrow/Wide |
+| Chord/Lead | `i` | Select the LFO-only pitch card |
 | Chord | `C` | Edit the selected Chord note's shape, or the Chord input shape on an empty step |
 | Global | `t` | Edit tempo |
 | Global | `y` | Edit delay division |
@@ -360,6 +361,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - Mute remains a discrete immediate action; Bass waveform and Chord chorus use discrete persistent editors.
 - `C` opens a compact Chord-shape selector over the selected track's parameter section, keeping the sequencer visible. It reuses the LFO selector's vertical list: Up/Down selects a recipe and stops at the first or last value, PageUp/PageDown moves between steps and updates the selector to that step's shape, while Enter/Esc closes without reverting edits. On an existing Chord note only that note changes; on an empty step the track's future input shape changes. Ties display their source shape and must be edited at the source note.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
+- Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
 - `Shift+A` toggles accent immediately on a trigger or note. `Shift+G` toggles slide on a Bass note. Both are undoable and reject incompatible or empty steps visibly.
 
@@ -388,9 +390,9 @@ At `120x34` or larger, the normal screen contains:
 4. A selected-control panel: vertical parameter faders for the selected track, or six global detail cards when the global row is selected.
 5. Status line: current mode, last successful operation or actionable error, and active-editor guidance. While a track parameter is being edited in `LOCK` scope, the selected-control panel and status line prominently show `LOCK PARAMETER EDITING` using contrasting styling.
 
-Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows accent state, inherited accent/source on ties, and Bass slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, and envelope groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout. A `~` badge marks parameters with an LFO assignment, including disabled assignments.
+Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows accent state, inherited accent/source on ties, and Bass slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, and envelope groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.
 
-The compact, centered track-level LFO modal arranges enabled, waveform, rate mode, rate, and depth as five control columns from left to right, matching left/right field selection and up/down value adjustment. Its size is capped rather than expanding with larger terminals, and control names occupy their card borders to avoid duplicated labels and empty space. Enabled and rate mode use two-position switches, waveform and synchronized rate use multi-value selectors that fill all available rows, and free rate and depth use ten-segment faders. Up selects the displayed option above and Down selects the option below; both two-position switches and multi-value selectors stop at their first and last values instead of cycling. For faders, Up increases and Down decreases. The selected column uses the same heavy outline, reverse styling, and bold labeling as an active parameter. Rate shows its synchronized division or free percentage together with the resulting physical Hz value; depth is labeled in bipolar percentage points. The Chord-shape selector uses the same vertical-list treatment but is anchored over the selected track's parameter section so the sequencer remains visible while PageUp/PageDown changes the selected step.
+The compact, centered track-level LFO modal arranges enabled, waveform, rate mode, rate, and depth as five control columns from left to right, matching left/right field selection and up/down value adjustment. Its size is capped rather than expanding with larger terminals, and control names occupy their card borders to avoid duplicated labels and empty space. Enabled and rate mode use two-position switches, waveform and synchronized rate use multi-value selectors that fill all available rows, and free rate and depth use ten-segment faders. Up selects the displayed option above and Down selects the option below; both two-position switches and multi-value selectors stop at their first and last values instead of cycling. For faders, Up increases and Down decreases. The selected column uses the same heavy outline, reverse styling, and bold labeling as an active parameter. Rate shows its synchronized division or free percentage together with the resulting physical Hz value; ordinary depth is labeled in bipolar percentage points, while pitch depth also shows its ±semitone range. The Chord-shape selector uses the same vertical-list treatment but is anchored over the selected track's parameter section so the sequencer remains visible while PageUp/PageDown changes the selected step.
 
 Shortcuts are displayed beside the controls they operate: global keys in the global row/cards, event and navigation keys in the pattern title, track keys in the selected-track title, and parameter keys below their faders. The help overlay remains available for the complete key map; there is no persistent bottom instruction panel.
 
@@ -536,9 +538,9 @@ Chord notes may include an optional `chord_shape` string. Omitted values mean `t
 }
 ```
 
-The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. Chord chorus values are `off`, `i`, and `ii`. `mute`, `accent`, and `slide` are invalid in a lock object.
+The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. `pitch` is not a lock key. Chord chorus values are `off`, `i`, and `ii`. `mute`, `accent`, and `slide` are invalid in a lock object.
 
-An empty LFO collection is `{}`. Assignment keys are the compatible continuous instrument parameters plus `level`; Bass waveform, Chord chorus, and mixer sends are excluded. A synchronized assignment is:
+An empty LFO collection is `{}`. Assignment keys are the compatible continuous instrument parameters plus `level`; Chord and Lead may additionally use the LFO-only `pitch` key. Bass waveform, Chord chorus, and mixer sends are excluded. A synchronized assignment is:
 
 ```json
 "lfos": {
@@ -550,6 +552,23 @@ An empty LFO collection is `{}`. Assignment keys are the compatible continuous i
   }
 }
 ```
+
+For Chord or Lead pitch:
+
+```json
+{
+  "lfos": {
+    "pitch": {
+      "enabled": true,
+      "waveform": "triangle",
+      "rate": { "mode": "synced", "division": "quarter" },
+      "depth": 100
+    }
+  }
+}
+```
+
+The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 8; no migration is needed.
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 
@@ -687,6 +706,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Resizing and exact sequence doubling at valid boundaries, including undo and rejection above 32 steps
 - Delay-division duration at representative tempos and sample rates
 - LFO destination compatibility, free/synchronized rates, phase reset/freeze, and lock-centered clamping
+- Chord/Lead pitch LFO eligibility, strict JSON round trips, bipolar ±2-semitone mapping, continuous ties/release tails, and uniform Chord voice modulation
 
 ### 12.2 Persistence tests
 
@@ -714,6 +734,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Parameter-mode precedence over normal up/down navigation
 - Accent and Bass-slide editing, source-note articulation readout on ties, and BASE/LOCK independence
 - LFO modal navigation, immediate edits, assignment badges, removal, and minimum-size rendering
+- Pitch LFO card order/shortcut, LFO-only BASE/LOCK behavior, physical range display, and minimum-size rendering
 - Chord-shape selector navigation, per-note/default editing, inversion display, and minimum-size rendering
 - File prompts, dirty confirmations, error dialogs, and help overlay
 - Terminal restoration on normal and simulated failure paths
@@ -726,6 +747,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Finite drum output and expected decay ordering at 0%, 50%, and 100%
 - Step-lock changes and smoothing without discontinuity spikes
 - Bounded LFO waveforms, deterministic sample-and-hold, synchronized/free rate accuracy, transport phase behavior, and discontinuity smoothing
+- Zero-depth pitch identity, finite frequency modulation, bipolar ±2-semitone mapping, and continuous pitch modulation through ties and release tails
 - Delay timing, feedback decay, maximum-delay allocation, and click-free time changes
 - Reverb decay-time monotonicity and bounded output
 - Limiter ceiling, fixed makeup gain, representative-groove RMS, and sample-format conversion bounds

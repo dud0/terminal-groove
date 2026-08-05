@@ -1616,7 +1616,10 @@ impl Renderer {
                 v.active = false;
             }
         }
-        let frequency = v.freq.next_value();
+        let mut frequency = v.freq.next_value();
+        if !v.bass {
+            frequency = pitch_modulated_frequency(frequency, offsets[ParameterId::Pitch as usize]);
+        }
         let env = v.env.next_sample_modulated(
             offsets[ParameterId::Attack as usize],
             offsets[ParameterId::Decay as usize],
@@ -1975,6 +1978,10 @@ fn modulated_percent(center: f32, offset: f32) -> f32 {
     (center + offset).clamp(0.0, 100.0)
 }
 
+fn pitch_modulated_frequency(base_frequency: f32, offset_percent: f32) -> f32 {
+    base_frequency * 2.0_f32.powf((offset_percent / 100.0 * 2.0) / 12.0)
+}
+
 /// Deterministic, device-independent rendering used by tests and diagnostics.
 pub fn render_offline(project: &Project, sample_rate: u32, frames: usize) -> Vec<(f32, f32)> {
     let status = Arc::new(AudioStatus::default());
@@ -2168,7 +2175,14 @@ mod tests {
             let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
             renderer.boundary();
             (0..400)
-                .map(|_| Renderer::render_synth(&mut renderer.synth[0], renderer.sr, &[0.0; 20]).0)
+                .map(|_| {
+                    Renderer::render_synth(
+                        &mut renderer.synth[0],
+                        renderer.sr,
+                        &[0.0; ParameterId::ALL.len()],
+                    )
+                    .0
+                })
                 .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
         }
 
@@ -2234,7 +2248,11 @@ mod tests {
 
         renderer.boundary();
         for _ in 0..80 {
-            Renderer::render_synth(&mut renderer.synth[0], renderer.sr, &[0.0; 20]);
+            Renderer::render_synth(
+                &mut renderer.synth[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
         }
         let stage_before_slide = renderer.synth[0].env.stage;
         let starting_frequency = renderer.synth[0].freq.next_value();
@@ -2705,5 +2723,16 @@ mod tests {
         assert_eq!(modulated_percent(90.0, 25.0), 100.0);
         assert_eq!(modulated_percent(10.0, -25.0), 0.0);
         assert_eq!(modulated_percent(40.0, 15.0), 55.0);
+    }
+
+    #[test]
+    fn pitch_lfo_offset_maps_to_two_bipolar_semitones() {
+        let base = 440.0;
+        assert!((pitch_modulated_frequency(base, 0.0) - base).abs() < 0.0001);
+        let up = pitch_modulated_frequency(base, 100.0);
+        let down = pitch_modulated_frequency(base, -100.0);
+        assert!((up - base * 2.0_f32.powf(2.0 / 12.0)).abs() < 0.0001);
+        assert!((down - base * 2.0_f32.powf(-2.0 / 12.0)).abs() < 0.0001);
+        assert!(up.is_finite() && down.is_finite());
     }
 }

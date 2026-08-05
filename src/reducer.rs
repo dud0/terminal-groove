@@ -1203,6 +1203,40 @@ mod tests {
             editor.set_lfo(0, ParameterId::Cutoff, Some(config), None),
             Err(EditError::InvalidParameter)
         );
+        editor
+            .set_lfo(4, ParameterId::Pitch, Some(config), None)
+            .unwrap();
+        assert_eq!(editor.lfo(4, ParameterId::Pitch), Ok(Some(config)));
+        assert!(editor.undo());
+        assert_eq!(editor.lfo(4, ParameterId::Pitch), Ok(None));
+        assert!(editor.redo());
+        assert_eq!(editor.lfo(4, ParameterId::Pitch), Ok(Some(config)));
+        assert_eq!(
+            editor.set_lfo(3, ParameterId::Pitch, Some(config), None),
+            Err(EditError::InvalidParameter)
+        );
+        assert_eq!(
+            editor.set_parameter(
+                4,
+                0,
+                Scope::Base,
+                ParameterId::Pitch,
+                ParameterValue::Percent(crate::model::Percent::new(50).unwrap()),
+                None
+            ),
+            Err(EditError::InvalidParameter)
+        );
+        assert_eq!(
+            editor.set_parameter(
+                4,
+                0,
+                Scope::Lock,
+                ParameterId::Pitch,
+                ParameterValue::Percent(crate::model::Percent::new(50).unwrap()),
+                None
+            ),
+            Err(EditError::InvalidParameter)
+        );
     }
 
     #[test]
