@@ -883,6 +883,7 @@ where
     match f(&mut a.editor, a.pattern_cursor) {
         Ok((true, cursor)) if sync_project(a, audio) => {
             a.pattern_cursor = cursor;
+            normalize_cursor(a);
             a.status = format!("{message}: {}", cursor + 1);
         }
         Ok((true, _)) => {}
@@ -1217,6 +1218,20 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
             a.editor.end_coalescing();
             a.mode = Mode::Navigation;
             a.status = "Parameter editing finished".into();
+            Ok(true)
+        }
+        KeyCode::Backspace | KeyCode::Delete if parameter == ParameterId::Pitch => {
+            let has_lfo = a.editor.lfo(track, parameter).ok().flatten().is_some();
+            if has_lfo {
+                if set_lfo_config(a, audio, parameter, None, None) {
+                    a.editor.end_coalescing();
+                    a.mode = Mode::Navigation;
+                    a.status = format!("Removed {} LFO", parameter.display_name());
+                }
+            } else {
+                a.mode = Mode::Navigation;
+                a.status = format!("No {} LFO to remove", parameter.display_name());
+            }
             Ok(true)
         }
         KeyCode::Backspace | KeyCode::Delete if a.scope == Scope::Lock => {
@@ -1957,6 +1972,14 @@ fn change_octave(a: &mut App, audio: &mut Audio, d: i8) {
 fn adjusted_octave(octave: u8, delta: i8) -> u8 {
     (octave as i8 + delta).clamp(0, 7) as u8
 }
+
+fn enter_error(a: &mut App, message: impl Into<String>) {
+    a.pending_open = None;
+    a.pending_new = false;
+    a.pending_quit = false;
+    a.mode = Mode::Error(message.into());
+}
+
 fn save(a: &mut App) -> Result<()> {
     if let Some(path) = a.path.clone() {
         match persistence::save_atomic(&path, &a.editor.project) {
@@ -2022,7 +2045,7 @@ fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> 
                                     a.quit = true
                                 }
                             }
-                            Err(e) => a.mode = Mode::Error(e.to_string()),
+                            Err(e) => enter_error(a, e.to_string()),
                         }
                     }
                     FileAction::Open => {
@@ -2033,7 +2056,7 @@ fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> 
                         }
                     }
                 },
-                Err(e) => a.mode = Mode::Error(e.to_string()),
+                Err(e) => enter_error(a, e.to_string()),
             }
         }
         _ => {}
@@ -2112,13 +2135,13 @@ fn reset_project_ui(a: &mut App) {
 
 fn new_project(a: &mut App, audio: &mut Audio) {
     if audio.available_commands() < 2 {
-        a.mode = Mode::Error("Audio command queue full; new project was not created".into());
+        enter_error(a, "Audio command queue full; new project was not created");
         return;
     }
     let project = Project::new();
     let _ = audio.send(AudioCommand::Stop);
     if audio.send(Audio::snapshot(&project)).is_err() {
-        a.mode = Mode::Error("Audio command queue full; new project was not created".into());
+        enter_error(a, "Audio command queue full; new project was not created");
         return;
     }
     a.editor.replace_loaded(project);
@@ -2131,12 +2154,12 @@ fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
     match persistence::load(&path) {
         Ok(project) => {
             if audio.available_commands() < 2 {
-                a.mode = Mode::Error("Audio command queue full; project was not opened".into());
+                enter_error(a, "Audio command queue full; project was not opened");
                 return;
             }
             let _ = audio.send(AudioCommand::Stop);
             if audio.send(Audio::snapshot(&project)).is_err() {
-                a.mode = Mode::Error("Audio command queue full; project was not opened".into());
+                enter_error(a, "Audio command queue full; project was not opened");
                 return;
             }
             a.editor.replace_loaded(project);
@@ -2144,7 +2167,7 @@ fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
             reset_project_ui(a);
             a.status = format!("Opened {}", path.display());
         }
-        Err(e) => a.mode = Mode::Error(e.to_string()),
+        Err(e) => enter_error(a, e.to_string()),
     }
 }
 
@@ -2954,7 +2977,7 @@ fn physical_parameter_readout(
                     45.0 + value as f32 * 0.25
                 ),
                 (TrackKind::Kick, ParameterId::Decay) => {
-                    format!("{:.0} ms", 80.0 + value as f32 * 7.5)
+                    format!("{:.0} ms", crate::dsp::exp_map(value, 80.0, 1_200.0))
                 }
                 (TrackKind::Snare, ParameterId::Tone) => format!(
                     "body {:.0} Hz · noise {:.0} Hz",
@@ -3813,13 +3836,15 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         } else {
             ""
         };
-        let lock_hint = if a.scope == Scope::Lock {
+        let removal_hint = if parameter == ParameterId::Pitch {
+            "  [Backspace/Del] remove LFO"
+        } else if a.scope == Scope::Lock {
             "  [Backspace/Del] remove lock"
         } else {
             ""
         };
         status_lines.push(Line::from(format!(
-            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..6] track{percentage_hint}{lfo_hint}  [Enter/Esc] finish{lock_hint}",
+            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..6] track{percentage_hint}{lfo_hint}  [Enter/Esc] finish{removal_hint}",
             physical_parameter_readout(a, track, a.step, parameter),
         )));
     } else if matches!(a.mode, Mode::LfoEdit { .. }) {
@@ -4789,6 +4814,24 @@ mod tests {
     }
 
     #[test]
+    fn pattern_delete_normalizes_step_for_the_new_active_pattern() {
+        let mut project = Project::new();
+        let mut short_pattern = project.patterns[0].clone();
+        short_pattern.tracks[0].steps.resize(4, None);
+        project.patterns.push(short_pattern);
+        let mut app = App::new(project, None);
+        app.row = 1;
+        app.step = 15;
+        app.pattern_cursor = 0;
+
+        app.editor.delete_pattern_at(0).unwrap();
+        normalize_cursor(&mut app);
+
+        assert_eq!(app.step, 3);
+        let _ = rendered(&app, 120, 34);
+    }
+
+    #[test]
     fn pattern_dialog_renders_horizontal_plain_numbered_states() {
         let mut project = Project::new();
         project.patterns.push(project.patterns[0].clone());
@@ -4873,6 +4916,18 @@ mod tests {
         assert!(!parameter_supports_direct_percentage(ParameterId::Chorus));
         assert!(!parameter_supports_direct_percentage(ParameterId::Spread));
         assert!(!parameter_supports_direct_percentage(ParameterId::Pitch));
+    }
+
+    #[test]
+    fn pitch_lfo_parameter_card_advertises_assignment_removal() {
+        let mut project = Project::new();
+        project.tracks[4].lfos.pitch = Some(LfoConfig::default());
+        let mut app = App::new(project, None);
+        app.row = 5;
+        app.mode = Mode::ParameterEdit(ParameterId::Pitch);
+
+        let screen = rendered(&app, 220, 34);
+        assert!(screen.contains("[Backspace/Del] remove LFO"));
     }
 
     #[test]
@@ -5359,6 +5414,35 @@ mod tests {
     }
 
     #[test]
+    fn kick_decay_readout_matches_exponential_dsp_mapping() {
+        let mut app = App::new(Project::new(), None);
+        app.editor.project.tracks[0]
+            .set_parameter(ParameterId::Decay, ParameterValue::Percent(Percent::ZERO));
+        assert_eq!(
+            physical_parameter_readout(&app, 0, 0, ParameterId::Decay),
+            "80 ms · BASE"
+        );
+
+        app.editor.project.tracks[0].set_parameter(
+            ParameterId::Decay,
+            ParameterValue::Percent(Percent::new(50).unwrap()),
+        );
+        assert_eq!(
+            physical_parameter_readout(&app, 0, 0, ParameterId::Decay),
+            "310 ms · BASE"
+        );
+
+        app.editor.project.tracks[0].set_parameter(
+            ParameterId::Decay,
+            ParameterValue::Percent(Percent::new(100).unwrap()),
+        );
+        assert_eq!(
+            physical_parameter_readout(&app, 0, 0, ParameterId::Decay),
+            "1200 ms · BASE"
+        );
+    }
+
+    #[test]
     fn lock_parameter_editing_has_a_prominent_banner() {
         let mut app = App::new(Project::new(), None);
         app.row = 4;
@@ -5523,6 +5607,21 @@ mod tests {
             .unwrap();
         assert!(!request_new_project(&mut app));
         assert_eq!(app.mode, Mode::NewConfirm);
+    }
+
+    #[test]
+    fn entering_error_clears_pending_project_continuations() {
+        let mut app = App::new(Project::new(), None);
+        app.pending_open = Some("next.groove.json".into());
+        app.pending_new = true;
+        app.pending_quit = true;
+
+        enter_error(&mut app, "save failed");
+
+        assert!(matches!(app.mode, Mode::Error(ref message) if message == "save failed"));
+        assert!(app.pending_open.is_none());
+        assert!(!app.pending_new);
+        assert!(!app.pending_quit);
     }
 
     #[test]

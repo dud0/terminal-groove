@@ -906,6 +906,32 @@ impl Renderer {
             }
         }
     }
+    fn invalidate_replaced_scheduled_actions(
+        scheduled: &mut [Option<ScheduledTrackAction>; 32],
+        old: &AudioProject,
+        old_active_pattern: usize,
+        next: &AudioProject,
+        next_active_pattern: usize,
+    ) {
+        for action in scheduled {
+            let Some(pending) = *action else { continue };
+            let track = usize::from(pending.track);
+            let step = usize::from(pending.step);
+            let old_event = old
+                .patterns
+                .get(old_active_pattern)
+                .and_then(|pattern| pattern.tracks.get(track))
+                .and_then(|sequence| sequence.steps.get(step).copied().flatten());
+            let next_event = next
+                .patterns
+                .get(next_active_pattern)
+                .and_then(|pattern| pattern.tracks.get(track))
+                .and_then(|sequence| sequence.steps.get(step).copied().flatten());
+            if old_event != next_event {
+                *action = None;
+            }
+        }
+    }
     fn advance_scheduled(&mut self) {
         self.prune_scheduled_actions();
         let mut ready = [None; 32];
@@ -1040,11 +1066,19 @@ impl Renderer {
             self.pending = Some((project, smoothing, pattern_map));
             return;
         }
+        let old_active_pattern = self.active_pattern;
         let active_pattern = pattern_map.rebase(self.active_pattern, project.patterns.len());
         let queued_pattern = self
             .queued_pattern
             .map(|index| pattern_map.rebase(index, project.patterns.len()));
         self.reconcile_lfos(&project);
+        Self::invalidate_replaced_scheduled_actions(
+            &mut self.scheduled,
+            &self.project,
+            old_active_pattern,
+            &project,
+            active_pattern,
+        );
         let old = std::mem::replace(&mut self.project, project);
         debug_assert!(self.retire.push(old).is_ok());
         self.active_pattern = active_pattern;
@@ -1279,6 +1313,7 @@ impl Renderer {
         voice
             .reverb_send
             .set(locks.reverb_send.unwrap_or(t.reverb_send).normalized(), 0);
+        voice.pan.set(locks.pan.unwrap_or(t.pan).get() as f32, 0);
         voice.locks = locks;
     }
     fn start_drum_voice(
@@ -2684,6 +2719,38 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_actions_for_replaced_events_are_discarded() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 4,
+            locks: Default::default(),
+        });
+        project.tracks[0].swing = Percent::new(75).unwrap();
+
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary(1);
+        assert!(renderer.scheduled.iter().any(|action| {
+            matches!(action, Some(action) if action.track == 0 && action.step == 0 && action.retrigger)
+        }));
+
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: true,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        renderer.command(Audio::snapshot(&project));
+
+        assert!(!renderer.scheduled.iter().any(|action| {
+            matches!(action, Some(action) if action.track == 0 && action.step == 0)
+        }));
+    }
+
+    #[test]
     fn swung_retriggers_are_offset_from_the_swung_start() {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
@@ -2771,6 +2838,30 @@ mod tests {
         renderer.audition_once(0, 0);
 
         assert!(renderer.preview_drums[0].accent);
+    }
+
+    #[test]
+    fn preview_drum_audition_uses_effective_pan() {
+        let mut project = Project::new();
+        project.tracks[0].pan = Percent::new(100).unwrap();
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+
+        renderer.audition_once(0, 0);
+        assert_eq!(renderer.preview_drums[0].pan.next_value(), 100.0);
+
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: ParameterLocks {
+                pan: Percent::new(25),
+                ..Default::default()
+            },
+        });
+        renderer.command(Audio::snapshot(&project));
+        renderer.audition_once(0, 0);
+        assert_eq!(renderer.preview_drums[0].pan.next_value(), 25.0);
     }
     #[test]
     fn offline_render_is_deterministic_and_finite() {

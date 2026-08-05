@@ -429,7 +429,7 @@ The current mode is always named on screen. Modes are:
 
 File prompts accept literal absolute paths or paths relative to the directory from which the process was launched. The MVP does not expand `~`, environment variables, or globs. The resolved path is shown before confirmation.
 
-Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice. Save failure leaves the confirmation open and never discards data. Opening a project stops and resets playback, clears effects, loads the new engine state, resets undo/redo history, selects the global row, and marks the project clean.
+Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice. Save failure leaves the current project dirty, shows an error, and clears any pending open/new/quit continuation so a later unrelated Save As cannot trigger it. Opening a project stops and resets playback, clears effects, loads the new engine state, resets undo/redo history, selects the global row, and marks the project clean.
 
 `Ctrl+N` creates a new untitled project without restarting. When the current project is clean, it happens immediately. When it is dirty, the application shows `Save`, `Discard`, and `Cancel`; `Save` uses the current path or opens Save As for an untitled project. Creating a new project stops and resets playback, clears effects, loads the default project, resets undo/redo history, selects the global row, clears the project path, and marks the project clean.
 
