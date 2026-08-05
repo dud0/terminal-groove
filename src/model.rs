@@ -9,6 +9,62 @@ pub const TRACK_COUNT: usize = 6;
 pub const MIN_PATTERN_COUNT: usize = 1;
 pub const MAX_PATTERN_COUNT: usize = 100;
 
+/// Deterministic old-pattern-index to new-pattern-index transform.
+///
+/// `u8::MAX` represents a removed index and is resolved to the nearest valid
+/// index by the consumer.  This belongs to the project/model layer because it
+/// is used to keep editor and transport pattern selections aligned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PatternIndexMap {
+    forward: [u8; MAX_PATTERN_COUNT],
+}
+
+impl PatternIndexMap {
+    pub fn identity() -> Self {
+        Self {
+            forward: std::array::from_fn(|i| i as u8),
+        }
+    }
+
+    pub fn insert(after: usize) -> Self {
+        Self {
+            forward: std::array::from_fn(|i| if i > after { (i + 1) as u8 } else { i as u8 }),
+        }
+    }
+
+    pub fn insert_at(at: usize) -> Self {
+        Self {
+            forward: std::array::from_fn(|i| if i >= at { (i + 1) as u8 } else { i as u8 }),
+        }
+    }
+
+    pub fn delete(at: usize) -> Self {
+        Self {
+            forward: std::array::from_fn(|i| {
+                if i == at {
+                    u8::MAX
+                } else if i > at {
+                    (i - 1) as u8
+                } else {
+                    i as u8
+                }
+            }),
+        }
+    }
+
+    pub(crate) fn rebase(self, index: usize, next_count: usize) -> usize {
+        if next_count == 0 {
+            return 0;
+        }
+        let mapped = self.forward.get(index).copied().unwrap_or(u8::MAX);
+        if mapped == u8::MAX {
+            index.min(next_count - 1)
+        } else {
+            usize::from(mapped).min(next_count - 1)
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ValidationError {
     #[error("unsupported format_version {0}")]
@@ -1405,14 +1461,6 @@ impl Project {
             .map(|track| track.steps.as_slice())
     }
 
-    pub fn pattern_steps_mut(&mut self, pattern: usize, track: usize) -> Option<&mut Vec<Step>> {
-        self.patterns
-            .get_mut(pattern)?
-            .tracks
-            .get_mut(track)
-            .map(|track| &mut track.steps)
-    }
-
     /// Synchronize the non-persisted editor cache from a canonical pattern.
     pub fn activate_pattern(&mut self, pattern: usize) -> bool {
         let Some(source) = self.patterns.get(pattern) else {
@@ -1649,7 +1697,7 @@ fn validate_locks(
 
 fn validate_lfos(ti: usize, track: &Track) -> Result<(), ValidationError> {
     for parameter in ParameterId::ALL {
-        if track.lfos.get(parameter).is_some() && !parameter.supports_lfo(track.kind) {
+        if track.lfos.get(parameter).is_some() && !track.supports_lfo(parameter) {
             return Err(ValidationError::Lfo(ti, parameter.name()));
         }
     }
@@ -1927,6 +1975,35 @@ impl Track {
             ParameterId::Pitch => return None,
         };
         Some(value)
+    }
+
+    /// Return the value that applies to a parameter after a step lock has
+    /// been overlaid on the track's base value.
+    pub fn effective_parameter(
+        &self,
+        parameter: ParameterId,
+        locks: ParameterLocks,
+    ) -> Option<ParameterValue> {
+        locks.get(parameter).or_else(|| self.parameter(parameter))
+    }
+
+    /// Read an LFO assignment only when its destination is compatible with
+    /// this track.  Keeping this check beside the assignment access prevents
+    /// callers from duplicating the model's compatibility rules.
+    pub const fn supports_lfo(&self, parameter: ParameterId) -> bool {
+        parameter.supports_lfo(self.kind)
+    }
+
+    pub fn lfo(&self, parameter: ParameterId) -> Option<LfoConfig> {
+        self.supports_lfo(parameter)
+            .then(|| self.lfos.get(parameter))
+            .flatten()
+    }
+
+    /// Set an LFO assignment when its destination is compatible with this
+    /// track.
+    pub fn set_lfo(&mut self, parameter: ParameterId, config: Option<LfoConfig>) -> bool {
+        self.supports_lfo(parameter) && self.lfos.set(parameter, config)
     }
 
     pub fn set_parameter(&mut self, parameter: ParameterId, value: ParameterValue) -> bool {

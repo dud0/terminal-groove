@@ -1,9 +1,8 @@
-use crate::audio::PatternIndexMap;
 use crate::generator::{self, Config as GeneratorConfig, Target as GeneratorTarget};
 use crate::model::{
     ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, LfoConfig, MAX_STEP_COUNT,
-    MIN_STEP_COUNT, ParameterId, ParameterValue, Pattern, Percent, Project, StepEvent, TrackKind,
-    TriggerCondition, Waveform, tie_source,
+    MIN_STEP_COUNT, ParameterId, ParameterValue, Pattern, PatternIndexMap, Percent, Project,
+    StepEvent, TrackKind, TriggerCondition, Waveform, tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -78,6 +77,79 @@ pub struct Editor {
     clipboard: Option<Pattern>,
     pending_pattern_map: PatternIndexMap,
 }
+
+fn read_parameter(
+    track: &crate::model::Track,
+    step: usize,
+    scope: Scope,
+    parameter: ParameterId,
+) -> Result<ParameterValue, EditError> {
+    let base = track
+        .parameter(parameter)
+        .ok_or(EditError::InvalidParameter)?;
+    if scope == Scope::Base {
+        return Ok(base);
+    }
+    let event = track
+        .steps
+        .get(step)
+        .ok_or(EditError::InvalidStep)?
+        .as_ref()
+        .ok_or(EditError::EmptyLock)?;
+    Ok(track
+        .effective_parameter(parameter, *event.locks())
+        .unwrap_or(base))
+}
+
+fn write_parameter(
+    track: &mut crate::model::Track,
+    step: usize,
+    scope: Scope,
+    parameter: ParameterId,
+    value: ParameterValue,
+) -> Result<(), EditError> {
+    if track.parameter(parameter).is_none() {
+        return Err(EditError::InvalidParameter);
+    }
+    match scope {
+        Scope::Base => track
+            .set_parameter(parameter, value)
+            .then_some(())
+            .ok_or(EditError::InvalidParameter),
+        Scope::Lock => {
+            let event = track
+                .steps
+                .get_mut(step)
+                .ok_or(EditError::InvalidStep)?
+                .as_mut()
+                .ok_or(EditError::EmptyLock)?;
+            event
+                .locks_mut()
+                .set(parameter, value)
+                .then_some(())
+                .ok_or(EditError::InvalidParameter)
+        }
+    }
+}
+
+fn clear_parameter_lock(
+    track: &mut crate::model::Track,
+    step: usize,
+    parameter: ParameterId,
+) -> Result<(), EditError> {
+    if track.parameter(parameter).is_none() {
+        return Err(EditError::InvalidParameter);
+    }
+    let event = track
+        .steps
+        .get_mut(step)
+        .ok_or(EditError::InvalidStep)?
+        .as_mut()
+        .ok_or(EditError::EmptyLock)?;
+    event.locks_mut().clear(parameter);
+    Ok(())
+}
+
 impl Editor {
     pub fn new(mut project: Project) -> Self {
         project.activate_pattern(0);
@@ -95,6 +167,7 @@ impl Editor {
         self.project != self.saved
     }
     pub fn mark_saved(&mut self) {
+        self.commit_active_pattern();
         self.saved = self.project.clone();
     }
     pub fn end_coalescing(&mut self) {
@@ -103,6 +176,8 @@ impl Editor {
         }
     }
     pub fn replace_loaded(&mut self, p: Project) {
+        let mut p = p;
+        p.activate_pattern(0);
         self.project = p.clone();
         self.saved = p;
         self.undo.clear();
@@ -118,11 +193,47 @@ impl Editor {
         std::mem::replace(&mut self.pending_pattern_map, PatternIndexMap::identity())
     }
     pub fn select_pattern(&mut self, pattern: usize) -> bool {
-        if pattern >= self.project.patterns.len() || !self.project.activate_pattern(pattern) {
+        if pattern >= self.project.patterns.len() {
+            return false;
+        }
+        self.commit_active_pattern();
+        if !self.project.activate_pattern(pattern) {
             return false;
         }
         self.pattern = pattern;
         true
+    }
+
+    /// Return a project snapshot with the active transient workspace committed
+    /// to its canonical pattern.  Audio and persistence callers should use
+    /// this boundary instead of cloning `project` directly.
+    pub fn synchronized_project(&mut self) -> Project {
+        self.commit_active_pattern();
+        self.project.clone()
+    }
+
+    /// Read-only access to the active editor workspace.
+    pub fn active_steps(&self, track: usize) -> Option<&[crate::model::Step]> {
+        self.project
+            .tracks
+            .get(track)
+            .map(|track| track.steps.as_slice())
+    }
+
+    /// Read one active workspace step without exposing a mutable dual-state
+    /// handle to callers.
+    pub fn active_step(&self, track: usize, step: usize) -> Option<crate::model::Step> {
+        self.active_steps(track)?.get(step).copied()
+    }
+
+    fn commit_active_pattern(&mut self) {
+        debug_assert!(self.pattern < self.project.patterns.len());
+        let _ = self.project.store_active_pattern(self.pattern);
+    }
+
+    fn activate_current_pattern(&mut self) {
+        debug_assert!(self.pattern < self.project.patterns.len());
+        let _ = self.project.activate_pattern(self.pattern);
     }
     fn empty_pattern() -> Pattern {
         Pattern {
@@ -144,13 +255,13 @@ impl Editor {
     where
         F: FnOnce(&mut Project, usize) -> Result<usize, EditError>,
     {
-        self.project.store_active_pattern(self.pattern);
+        self.commit_active_pattern();
         let before = self.project.clone();
         let before_count = before.patterns.len();
         let before_pattern = self.pattern;
         let next_pattern = f(&mut self.project, self.pattern)?;
         self.pattern = next_pattern;
-        self.project.activate_pattern(self.pattern);
+        self.activate_current_pattern();
         if before == self.project {
             return Ok(false);
         }
@@ -186,13 +297,13 @@ impl Editor {
         if cursor >= self.project.patterns.len() {
             return Ok((false, self.pattern));
         }
-        self.project.store_active_pattern(self.pattern);
+        self.commit_active_pattern();
         let before = self.project.clone();
         let before_count = before.patterns.len();
         let before_pattern = self.pattern;
         let (next_cursor, next_active) = f(&mut self.project, cursor, before_pattern)?;
         self.pattern = next_active;
-        self.project.activate_pattern(self.pattern);
+        self.activate_current_pattern();
         if before == self.project {
             return Ok((false, next_cursor));
         }
@@ -424,9 +535,10 @@ impl Editor {
     where
         F: FnOnce(&mut Project) -> Result<(), EditError>,
     {
+        self.commit_active_pattern();
         let before = self.project.clone();
         f(&mut self.project)?;
-        self.project.store_active_pattern(self.pattern);
+        self.commit_active_pattern();
         if before == self.project {
             return Ok(false);
         }
@@ -459,9 +571,11 @@ impl Editor {
         Ok(true)
     }
     pub fn undo(&mut self) -> bool {
+        self.commit_active_pattern();
         if let Some(r) = self.undo.pop_back() {
             self.project = r.before.clone();
             self.pattern = r.before_pattern;
+            self.activate_current_pattern();
             self.pending_pattern_map = r.inverse_pattern_map;
             self.redo.push(r);
             true
@@ -470,9 +584,11 @@ impl Editor {
         }
     }
     pub fn redo(&mut self) -> bool {
+        self.commit_active_pattern();
         if let Some(r) = self.redo.pop() {
             self.project = r.after.clone();
             self.pattern = r.after_pattern;
+            self.activate_current_pattern();
             self.pending_pattern_map = r.pattern_map;
             self.undo.push_back(r);
             true
@@ -1087,28 +1203,7 @@ impl Editor {
     ) -> Result<bool, EditError> {
         self.edit(key, move |p| {
             let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
-            if !parameter.is_valid_for(t.kind) {
-                return Err(EditError::InvalidParameter);
-            }
-            match scope {
-                Scope::Base => t
-                    .set_parameter(parameter, value)
-                    .then_some(())
-                    .ok_or(EditError::InvalidParameter),
-                Scope::Lock => {
-                    let event = t
-                        .steps
-                        .get_mut(step)
-                        .ok_or(EditError::InvalidStep)?
-                        .as_mut()
-                        .ok_or(EditError::EmptyLock)?;
-                    event
-                        .locks_mut()
-                        .set(parameter, value)
-                        .then_some(())
-                        .ok_or(EditError::InvalidParameter)
-                }
-            }
+            write_parameter(t, step, scope, parameter, value)
         })
     }
 
@@ -1124,20 +1219,7 @@ impl Editor {
             .tracks
             .get(track)
             .ok_or(EditError::InvalidTrack)?;
-        if !parameter.is_valid_for(t.kind) {
-            return Err(EditError::InvalidParameter);
-        }
-        let base = t.parameter(parameter).ok_or(EditError::InvalidParameter)?;
-        if scope == Scope::Base {
-            return Ok(base);
-        }
-        let event = t
-            .steps
-            .get(step)
-            .ok_or(EditError::InvalidStep)?
-            .as_ref()
-            .ok_or(EditError::EmptyLock)?;
-        Ok(event.locks().get(parameter).unwrap_or(base))
+        read_parameter(t, step, scope, parameter)
     }
 
     pub fn clear_parameter_lock(
@@ -1148,17 +1230,7 @@ impl Editor {
     ) -> Result<bool, EditError> {
         self.edit(None, move |p| {
             let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
-            if !parameter.is_valid_for(t.kind) {
-                return Err(EditError::InvalidParameter);
-            }
-            let event = t
-                .steps
-                .get_mut(step)
-                .ok_or(EditError::InvalidStep)?
-                .as_mut()
-                .ok_or(EditError::EmptyLock)?;
-            event.locks_mut().clear(parameter);
-            Ok(())
+            clear_parameter_lock(t, step, parameter)
         })
     }
 
@@ -1195,10 +1267,10 @@ impl Editor {
             .tracks
             .get(track)
             .ok_or(EditError::InvalidTrack)?;
-        if !parameter.supports_lfo(track.kind) {
+        if !track.supports_lfo(parameter) {
             return Err(EditError::InvalidParameter);
         }
-        Ok(track.lfos.get(parameter))
+        Ok(track.lfo(parameter))
     }
 
     pub fn set_lfo(
@@ -1213,7 +1285,7 @@ impl Editor {
                 .tracks
                 .get_mut(track)
                 .ok_or(EditError::InvalidTrack)?;
-            if !parameter.supports_lfo(track.kind) || !track.lfos.set(parameter, config) {
+            if !track.set_lfo(parameter, config) {
                 return Err(EditError::InvalidParameter);
             }
             Ok(())

@@ -1,0 +1,470 @@
+#[allow(unused_imports)]
+use super::*;
+
+pub(crate) struct Renderer {
+    pub(super) project: Box<AudioProject>,
+    pub(super) retire: Producer<Box<AudioProject>>,
+    pub(super) pending: Option<(Box<AudioProject>, ParameterSmoothing, PatternIndexMap)>,
+    pub(super) clock: StepClock,
+    pub(super) next_steps: [usize; TRACK_COUNT],
+    pub(super) active_pattern: usize,
+    pub(super) queued_pattern: Option<usize>,
+    pub(super) playing: bool,
+    pub(super) sr: f32,
+    pub(super) status: Arc<AudioStatus>,
+    pub(super) drums: [DrumVoice; 3],
+    pub(super) preview_drums: [DrumVoice; 3],
+    pub(super) synth: [SynthVoice; 3],
+    pub(super) preview: [SynthVoice; 3],
+    pub(super) chord: ChordVoicePool,
+    pub(super) preview_chord: ChordVoicePool,
+    pub(super) delay: Delay,
+    pub(super) reverb: Reverb,
+    pub(super) dc: DcBlock,
+    pub(super) limiter: MasterLimiter,
+    pub(super) mute: [Smoother; TRACK_COUNT],
+    pub(super) lfos: [[Lfo; ParameterId::ALL.len()]; TRACK_COUNT],
+    pub(super) preview_lfos: [[Lfo; ParameterId::ALL.len()]; TRACK_COUNT],
+    pub(super) lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
+    pub(super) preview_lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
+    pub(super) scheduled: [Option<ScheduledTrackAction>; 32],
+    pub(super) cycle_counts: [[u32; MAX_STEP_COUNT]; TRACK_COUNT],
+    pub(super) condition_rng: [u32; TRACK_COUNT],
+    pub(super) preview_scheduled: [Option<PreviewAction>; 24],
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ScheduledTrackAction {
+    pub(super) remaining: u32,
+    pub(super) track: u8,
+    pub(super) step: u8,
+    pub(super) retrigger: bool,
+    pub(super) trigger_allowed: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PreviewAction {
+    pub(super) remaining: u32,
+    pub(super) track: u8,
+    pub(super) step: u8,
+}
+impl Renderer {
+    pub(crate) fn new(project: AudioProject, sr: u32, status: Arc<AudioStatus>) -> Self {
+        let (retire, _discarded) = RingBuffer::new(32);
+        Self::new_with_retirement(Box::new(project), sr, status, retire)
+    }
+
+    pub(crate) fn new_with_retirement(
+        project: Box<AudioProject>,
+        sr: u32,
+        status: Arc<AudioStatus>,
+        retire: Producer<Box<AudioProject>>,
+    ) -> Self {
+        let tempo_bpm = project.globals.tempo_bpm;
+        let muted: [bool; TRACK_COUNT] = std::array::from_fn(|i| project.tracks[i].muted);
+        let mut r = Self {
+            project,
+            retire,
+            pending: None,
+            clock: StepClock::new(sr, tempo_bpm),
+            next_steps: [0; TRACK_COUNT],
+            active_pattern: 0,
+            queued_pattern: None,
+            playing: false,
+            sr: sr as f32,
+            status,
+            drums: std::array::from_fn(|i| {
+                DrumVoice::new([0x1234_abcd, 0x9137_2468, 0xdead_beef][i])
+            }),
+            preview_drums: std::array::from_fn(|i| {
+                DrumVoice::new([0x4a31_27dd, 0xa187_4c29, 0x6d2b_f193][i])
+            }),
+            synth: std::array::from_fn(|_| SynthVoice::new(sr as f32)),
+            preview: std::array::from_fn(|_| SynthVoice::new(sr as f32)),
+            chord: ChordVoicePool::new(sr),
+            preview_chord: ChordVoicePool::new(sr),
+            delay: Delay::new(sr),
+            reverb: Reverb::new(sr),
+            dc: Default::default(),
+            limiter: MasterLimiter::new(sr),
+            mute: std::array::from_fn(|i| Smoother::new((!muted[i]) as u8 as f32)),
+            lfos: std::array::from_fn(|track| {
+                std::array::from_fn(|parameter| {
+                    Lfo::new(0x51f0_0001 ^ ((track as u32) << 12) ^ parameter as u32)
+                })
+            }),
+            preview_lfos: std::array::from_fn(|track| {
+                std::array::from_fn(|parameter| {
+                    Lfo::new(0xa7d1_0001 ^ ((track as u32) << 12) ^ parameter as u32)
+                })
+            }),
+            lfo_offsets: [[0.0; ParameterId::ALL.len()]; TRACK_COUNT],
+            preview_lfo_offsets: [[0.0; ParameterId::ALL.len()]; TRACK_COUNT],
+            scheduled: [None; 32],
+            cycle_counts: [[0; MAX_STEP_COUNT]; TRACK_COUNT],
+            condition_rng: std::array::from_fn(|i| {
+                0x8a5c_9d31 ^ (i as u32).wrapping_mul(0x9e37_79b9)
+            }),
+            preview_scheduled: [None; 24],
+        };
+        r.configure_effects(0);
+        r
+    }
+
+    pub(crate) fn render_synth(
+        v: &mut SynthVoice,
+        sr: f32,
+        offsets: &[f32; ParameterId::ALL.len()],
+    ) -> (f32, f32, f32) {
+        // Chord pools keep a spare group for released notes.  Once an
+        // envelope is idle there is no signal to render, so avoid running
+        // oscillators and filters for those voices on every callback sample.
+        if v.env.stage == EnvStage::Idle {
+            return (0.0, 0.0, 0.0);
+        }
+        if v.remaining > 0 {
+            v.remaining -= 1;
+            if v.remaining == 0 {
+                v.env.gate_off();
+                v.active = false;
+            }
+        }
+        let mut frequency = v.freq.next_value();
+        if !v.bass {
+            frequency = pitch_modulated_frequency(frequency, offsets[ParameterId::Pitch as usize]);
+        }
+        let env = v.env.next_sample_modulated(
+            offsets[ParameterId::Attack as usize],
+            offsets[ParameterId::Decay as usize],
+            offsets[ParameterId::Sustain as usize],
+            offsets[ParameterId::Release as usize],
+        );
+        let cutoff_percent = modulated_percent(
+            v.cutoff_percent.next_value(),
+            offsets[ParameterId::Cutoff as usize],
+        );
+        let filter_env = modulated_percent(
+            v.filter_env_percent.next_value(),
+            offsets[ParameterId::FilterEnvelope as usize],
+        ) / 100.0;
+        let accent_filter = v.accent_filter.next_value();
+        let (minimum_cutoff, maximum_cutoff, envelope_octaves) = if v.bass {
+            (80.0, 8_000.0_f32.min(sr * 0.45), 5.0)
+        } else {
+            (20.0, 20_000.0_f32.min(sr * 0.45), 6.0)
+        };
+        let cutoff = (exp_map_f32(cutoff_percent, minimum_cutoff, maximum_cutoff)
+            * 2.0_f32.powf(env * (filter_env * envelope_octaves + accent_filter)))
+        .min(maximum_cutoff);
+        let resonance_percent = modulated_percent(
+            v.resonance_percent.next_value(),
+            offsets[ParameterId::Resonance as usize],
+        );
+        let level_percent =
+            modulated_percent(v.level.next_value(), offsets[ParameterId::Level as usize]);
+        let level = (level_percent / 100.0).powi(2);
+        let accent_gain = v.accent_gain.next_value();
+        let delay_send = v.delay_send.next_value();
+        let reverb_send = v.reverb_send.next_value();
+        let oversampled_rate = sr * 2.0;
+        let mut filtered = 0.0;
+        for _ in 0..2 {
+            let osc = if v.bass {
+                match v.wave {
+                    Waveform::Saw => v.osc.next_saw(frequency, oversampled_rate),
+                    Waveform::Square => v.osc.next_square(frequency, oversampled_rate),
+                }
+            } else {
+                let mix = modulated_percent(
+                    v.oscillator_mix.next_value(),
+                    offsets[ParameterId::OscillatorMix as usize],
+                ) / 100.0;
+                let width = 0.05
+                    + modulated_percent(
+                        v.pulse_width.next_value(),
+                        offsets[ParameterId::PulseWidth as usize],
+                    ) / 100.0
+                        * 0.90;
+                let sub = modulated_percent(
+                    v.sub_oscillator.next_value(),
+                    offsets[ParameterId::SubOscillator as usize],
+                ) / 100.0;
+                let (saw, pulse) = v.osc.next_saw_pulse(frequency, width, oversampled_rate);
+                let angle = mix * std::f32::consts::FRAC_PI_2;
+                pulse * angle.cos()
+                    + saw * angle.sin()
+                    + v.sub_osc.next_square(frequency * 0.5, oversampled_rate) * sub
+            };
+            filtered += if v.bass {
+                let driven = (osc * 1.35).tanh();
+                v.bass_filter
+                    .lowpass(driven, cutoff, resonance_percent / 100.0, oversampled_rate)
+            } else {
+                let driven = (osc * if v.chord { 1.10 } else { 1.35 }).tanh();
+                v.roland_filter.lowpass(
+                    driven,
+                    cutoff,
+                    (resonance_percent / 100.0) * if v.chord { 0.95 } else { 1.0 },
+                    oversampled_rate,
+                )
+            };
+        }
+        filtered *= 0.5 / (1.0 + resonance_percent * 0.0035);
+        (
+            filtered
+                * env
+                * accent_gain
+                * level
+                * if v.bass {
+                    5.0
+                } else if v.chord {
+                    1.15 * std::f32::consts::FRAC_1_SQRT_2
+                } else {
+                    2.0
+                },
+            delay_send,
+            reverb_send,
+        )
+    }
+    pub(crate) fn render_drum(
+        voice: &mut DrumVoice,
+        track: usize,
+        sr: f32,
+        level_offset: f32,
+        pan_offset: f32,
+    ) -> (f32, f32, f32, f32) {
+        let raw = match track {
+            0 => {
+                let hz = voice.kick_pitch.next_value();
+                let body = (TAU * voice.phase).sin();
+                voice.phase = (voice.phase + hz / sr).fract();
+                let click_env = (-(voice.envelope.elapsed as f32) / (sr * 0.003)).exp();
+                body + voice.noise() * click_env * voice.attack * 0.35
+            }
+            1 => {
+                let hz = 150.0 + voice.tune * 150.0;
+                let lower = 1.0 - 4.0 * (voice.phase - 0.5).abs();
+                let upper = 1.0 - 4.0 * (voice.phase2 - 0.5).abs();
+                voice.phase = (voice.phase + hz / sr).fract();
+                voice.phase2 = (voice.phase2 + hz * 1.72 / sr).fract();
+                let noise = voice.noise();
+                let noise = voice.filter.process(voice.filter2.process(noise));
+                let body = lower * (0.42 - voice.tone * 0.12) + upper * (0.12 + voice.tone * 0.18);
+                body + noise * (0.25 + voice.snappy * 0.72)
+            }
+            _ => {
+                const RATIOS: [f32; 6] = [1.0, 1.447, 1.617, 1.926, 2.502, 2.663];
+                let base = 310.0 + voice.tune * 360.0;
+                let mut metal = 0.0;
+                for (osc, ratio) in voice.metallic.iter_mut().zip(RATIOS) {
+                    metal += osc.next_square(base * ratio, sr);
+                }
+                metal /= RATIOS.len() as f32;
+                let source = metal * 0.82 + voice.noise() * 0.18;
+                let bright = voice.filter.process(source);
+                bright * 0.75 + voice.filter2.process(source) * 0.25
+            }
+        };
+        let level = modulated_percent(voice.level.next_value(), level_offset) / 100.0;
+        let sample = (raw * 1.15).tanh() * voice.envelope.next_value() * level.powi(2) * 1.40;
+        (
+            sample,
+            voice.delay_send.next_value(),
+            voice.reverb_send.next_value(),
+            modulated_percent(voice.pan.next_value(), pan_offset),
+        )
+    }
+    pub(crate) fn next(&mut self) -> (f32, f32) {
+        if self.playing {
+            self.advance_lfos();
+        }
+        self.advance_preview_lfos();
+        self.advance_preview_scheduled();
+        if self.playing
+            && let Some(global_step) = self.clock.tick()
+        {
+            self.boundary(global_step)
+        }
+        if self.playing {
+            self.advance_scheduled();
+        }
+        self.advance_chord_arpeggios();
+        let mut dry_l = 0.0;
+        let mut dry_r = 0.0;
+        let mut delay_l = 0.0;
+        let mut delay_r = 0.0;
+        let mut reverb_l = 0.0;
+        let mut reverb_r = 0.0;
+        for i in 0..3 {
+            let (x, delay_send, reverb_send, pan) = Self::render_drum(
+                &mut self.drums[i],
+                i,
+                self.sr,
+                self.lfo_offsets[i][ParameterId::Level as usize],
+                self.lfo_offsets[i][ParameterId::Pan as usize],
+            );
+            let (pl, pr) = equal_power_pan(pan);
+            let gain = self.mute[i].next_value();
+            dry_l += x * pl * gain;
+            dry_r += x * pr * gain;
+            delay_l += x * pl * delay_send * gain;
+            delay_r += x * pr * delay_send * gain;
+            reverb_l += x * pl * reverb_send * gain;
+            reverb_r += x * pr * reverb_send * gain;
+        }
+        for i in 0..3 {
+            let (x, delay_send, reverb_send, pan) = Self::render_drum(
+                &mut self.preview_drums[i],
+                i,
+                self.sr,
+                self.preview_lfo_offsets[i][ParameterId::Level as usize],
+                self.preview_lfo_offsets[i][ParameterId::Pan as usize],
+            );
+            let (pl, pr) = equal_power_pan(pan);
+            dry_l += x * pl;
+            dry_r += x * pr;
+            delay_l += x * pl * delay_send;
+            delay_r += x * pr * delay_send;
+            reverb_l += x * pl * reverb_send;
+            reverb_r += x * pr * reverb_send;
+        }
+        for i in [0, 2] {
+            let (x, ds, rs) =
+                Self::render_synth(&mut self.synth[i], self.sr, &self.lfo_offsets[i + 3]);
+            let (pl, pr) = equal_power_pan(modulated_percent(
+                self.synth[i].pan.next_value(),
+                self.lfo_offsets[i + 3][ParameterId::Pan as usize],
+            ));
+            let gain = self.mute[i + 3].next_value();
+            dry_l += x * pl * gain;
+            dry_r += x * pr * gain;
+            delay_l += x * pl * ds * gain;
+            delay_r += x * pr * ds * gain;
+            reverb_l += x * pl * rs * gain;
+            reverb_r += x * pr * rs * gain;
+            let (x, ds, rs) = Self::render_synth(
+                &mut self.preview[i],
+                self.sr,
+                &self.preview_lfo_offsets[i + 3],
+            );
+            let (pl, pr) = equal_power_pan(modulated_percent(
+                self.preview[i].pan.next_value(),
+                self.preview_lfo_offsets[i + 3][ParameterId::Pan as usize],
+            ));
+            dry_l += x * pl;
+            dry_r += x * pr;
+            delay_l += x * pl * ds;
+            delay_r += x * pr * ds;
+            reverb_l += x * pl * rs;
+            reverb_r += x * pr * rs;
+        }
+        let mut chord_left = 0.0;
+        let mut chord_right = 0.0;
+        let mut chord_ds = 0.0;
+        let mut chord_rs = 0.0;
+        let chord_start = self.chord.group * CHORD_GROUP_SIZE;
+        let chord_end = chord_start + self.chord.voice_count;
+        let mut chord_has_active_send = false;
+        let mut chord_tail_send = None;
+        for (index, voice) in self.chord.voices.iter_mut().enumerate() {
+            let (x, ds, rs) = Self::render_synth(voice, self.sr, &self.lfo_offsets[4]);
+            let (pl, pr) = equal_power_pan(modulated_percent(
+                voice.pan.next_value(),
+                self.lfo_offsets[4][ParameterId::Pan as usize],
+            ));
+            chord_left += x * pl;
+            chord_right += x * pr;
+            if voice.env.stage != EnvStage::Idle {
+                if self.chord.active && (chord_start..chord_end).contains(&index) {
+                    chord_ds = ds;
+                    chord_rs = rs;
+                    chord_has_active_send = true;
+                } else if chord_tail_send.is_none() {
+                    chord_tail_send = Some((ds, rs));
+                }
+            }
+        }
+        if !chord_has_active_send {
+            (chord_ds, chord_rs) = chord_tail_send.unwrap_or((0.0, 0.0));
+        }
+        let (chord_l, chord_r) = self.chord.chorus.process_stereo(chord_left, chord_right);
+        let chord_gain = self.mute[4].next_value();
+        dry_l += chord_l * chord_gain;
+        dry_r += chord_r * chord_gain;
+        delay_l += chord_l * chord_ds * chord_gain;
+        delay_r += chord_r * chord_ds * chord_gain;
+        reverb_l += chord_l * chord_rs * chord_gain;
+        reverb_r += chord_r * chord_rs * chord_gain;
+
+        let mut preview_left = 0.0;
+        let mut preview_right = 0.0;
+        let mut preview_ds = 0.0;
+        let mut preview_rs = 0.0;
+        let preview_start = self.preview_chord.group * CHORD_GROUP_SIZE;
+        let preview_end = preview_start + self.preview_chord.voice_count;
+        let mut preview_has_active_send = false;
+        let mut preview_tail_send = None;
+        for (index, voice) in self.preview_chord.voices.iter_mut().enumerate() {
+            let (x, ds, rs) = Self::render_synth(voice, self.sr, &self.preview_lfo_offsets[4]);
+            let (pl, pr) = equal_power_pan(modulated_percent(
+                voice.pan.next_value(),
+                self.preview_lfo_offsets[4][ParameterId::Pan as usize],
+            ));
+            preview_left += x * pl;
+            preview_right += x * pr;
+            if voice.env.stage != EnvStage::Idle {
+                if self.preview_chord.active && (preview_start..preview_end).contains(&index) {
+                    preview_ds = ds;
+                    preview_rs = rs;
+                    preview_has_active_send = true;
+                } else if preview_tail_send.is_none() {
+                    preview_tail_send = Some((ds, rs));
+                }
+            }
+        }
+        if !preview_has_active_send {
+            (preview_ds, preview_rs) = preview_tail_send.unwrap_or((0.0, 0.0));
+        }
+        let (preview_l, preview_r) = self
+            .preview_chord
+            .chorus
+            .process_stereo(preview_left, preview_right);
+        dry_l += preview_l;
+        dry_r += preview_r;
+        delay_l += preview_l * preview_ds;
+        delay_r += preview_r * preview_ds;
+        reverb_l += preview_l * preview_rs;
+        reverb_r += preview_r * preview_rs;
+
+        let (dl, dr) = self.delay.process(delay_l, delay_r);
+        let (rl, rr) = self
+            .reverb
+            .process(reverb_l + dl * 0.25, reverb_r + dr * 0.25);
+        let (l, r) = self.dc.process(
+            dry_l + dl * 0.45 + rl * REVERB_RETURN_GAIN,
+            dry_r + dr * 0.45 + rr * REVERB_RETURN_GAIN,
+        );
+        if !(l.is_finite() && r.is_finite()) {
+            self.status.non_finite.store(true, Ordering::Release);
+            return (0.0, 0.0);
+        }
+        self.limiter.process(l, r)
+    }
+
+    pub(crate) fn advance_chord_arpeggios(&mut self) {
+        let bpm = self.project.globals.tempo_bpm;
+        if self.chord.arpeggiated && self.chord.active && self.chord.arpeggio.tick(self.sr, bpm) {
+            Self::trigger_arpeggio_tone(&self.project, self.sr, &mut self.chord);
+        }
+        if self.preview_chord.arpeggiated && self.preview_chord.active {
+            if self.preview_chord.preview_remaining > 0 {
+                self.preview_chord.preview_remaining -= 1;
+            }
+            if self.preview_chord.preview_remaining == 0 {
+                Self::release_chord(&mut self.preview_chord);
+            } else if self.preview_chord.arpeggio.tick(self.sr, bpm) {
+                Self::trigger_arpeggio_tone(&self.project, self.sr, &mut self.preview_chord);
+            }
+        }
+    }
+}
