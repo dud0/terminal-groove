@@ -1798,7 +1798,11 @@ impl Renderer {
         let mut chord_right = 0.0;
         let mut chord_ds = 0.0;
         let mut chord_rs = 0.0;
-        for voice in &mut self.chord.voices {
+        let chord_start = self.chord.group * CHORD_GROUP_SIZE;
+        let chord_end = chord_start + self.chord.voice_count;
+        let mut chord_has_active_send = false;
+        let mut chord_tail_send = None;
+        for (index, voice) in self.chord.voices.iter_mut().enumerate() {
             let (x, ds, rs) = Self::render_synth(voice, self.sr, &self.lfo_offsets[4]);
             let (pl, pr) = equal_power_pan(modulated_percent(
                 voice.pan.next_value(),
@@ -1806,8 +1810,18 @@ impl Renderer {
             ));
             chord_left += x * pl;
             chord_right += x * pr;
-            chord_ds = ds;
-            chord_rs = rs;
+            if voice.env.stage != EnvStage::Idle {
+                if self.chord.active && (chord_start..chord_end).contains(&index) {
+                    chord_ds = ds;
+                    chord_rs = rs;
+                    chord_has_active_send = true;
+                } else if chord_tail_send.is_none() {
+                    chord_tail_send = Some((ds, rs));
+                }
+            }
+        }
+        if !chord_has_active_send {
+            (chord_ds, chord_rs) = chord_tail_send.unwrap_or((0.0, 0.0));
         }
         let (chord_l, chord_r) = self.chord.chorus.process_stereo(chord_left, chord_right);
         let chord_gain = self.mute[4].next_value();
@@ -1822,7 +1836,11 @@ impl Renderer {
         let mut preview_right = 0.0;
         let mut preview_ds = 0.0;
         let mut preview_rs = 0.0;
-        for voice in &mut self.preview_chord.voices {
+        let preview_start = self.preview_chord.group * CHORD_GROUP_SIZE;
+        let preview_end = preview_start + self.preview_chord.voice_count;
+        let mut preview_has_active_send = false;
+        let mut preview_tail_send = None;
+        for (index, voice) in self.preview_chord.voices.iter_mut().enumerate() {
             let (x, ds, rs) = Self::render_synth(voice, self.sr, &self.preview_lfo_offsets[4]);
             let (pl, pr) = equal_power_pan(modulated_percent(
                 voice.pan.next_value(),
@@ -1830,8 +1848,18 @@ impl Renderer {
             ));
             preview_left += x * pl;
             preview_right += x * pr;
-            preview_ds = ds;
-            preview_rs = rs;
+            if voice.env.stage != EnvStage::Idle {
+                if self.preview_chord.active && (preview_start..preview_end).contains(&index) {
+                    preview_ds = ds;
+                    preview_rs = rs;
+                    preview_has_active_send = true;
+                } else if preview_tail_send.is_none() {
+                    preview_tail_send = Some((ds, rs));
+                }
+            }
+        }
+        if !preview_has_active_send {
+            (preview_ds, preview_rs) = preview_tail_send.unwrap_or((0.0, 0.0));
         }
         let (preview_l, preview_r) = self
             .preview_chord
@@ -2505,6 +2533,41 @@ mod tests {
             let expected = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
             assert!((frequency - expected).abs() < 0.001);
         }
+    }
+
+    #[test]
+    fn chord_reverb_send_survives_the_first_voice_group() {
+        fn rms(samples: &[(f32, f32)]) -> f32 {
+            (samples
+                .iter()
+                .map(|(l, r)| (l * l + r * r) * 0.5)
+                .sum::<f32>()
+                / samples.len() as f32)
+                .sqrt()
+        }
+
+        let mut dry_project = ProjectV6::new();
+        for (index, track) in dry_project.tracks.iter_mut().enumerate() {
+            track.muted = index != 4;
+        }
+        dry_project.tracks[4].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            chord_shape: None,
+            locks: Default::default(),
+        });
+        let mut wet_project = dry_project.clone();
+        wet_project.tracks[4].reverb_send = Percent::new(100).unwrap();
+
+        let dry = render_offline(&dry_project, 8_000, 12_000);
+        let wet = render_offline(&wet_project, 8_000, 12_000);
+        let dry_tail = rms(&dry[8_000..12_000]);
+        let wet_tail = rms(&wet[8_000..12_000]);
+        assert!(
+            wet_tail > dry_tail * 2.0,
+            "dry chord tail RMS {dry_tail}, wet chord tail RMS {wet_tail}"
+        );
     }
 
     #[test]
