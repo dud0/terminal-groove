@@ -486,6 +486,98 @@ pub enum ChordShape {
     Sus4SecondInversion,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArpeggioType {
+    #[default]
+    Up,
+    Down,
+    UpDown,
+    DownUp,
+    Random,
+}
+
+impl ArpeggioType {
+    pub const ALL: [Self; 5] = [
+        Self::Up,
+        Self::Down,
+        Self::UpDown,
+        Self::DownUp,
+        Self::Random,
+    ];
+}
+
+impl fmt::Display for ArpeggioType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Up => "Up",
+                Self::Down => "Down",
+                Self::UpDown => "Up-Down",
+                Self::DownUp => "Down-Up",
+                Self::Random => "Random",
+            }
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArpeggioRate {
+    ThirtySecond,
+    SixteenthTriplet,
+    #[default]
+    Sixteenth,
+    EighthTriplet,
+    Eighth,
+    QuarterTriplet,
+    Quarter,
+}
+
+impl ArpeggioRate {
+    pub const ALL: [Self; 7] = [
+        Self::ThirtySecond,
+        Self::SixteenthTriplet,
+        Self::Sixteenth,
+        Self::EighthTriplet,
+        Self::Eighth,
+        Self::QuarterTriplet,
+        Self::Quarter,
+    ];
+
+    pub const fn beats(self) -> f64 {
+        match self {
+            Self::ThirtySecond => 0.125,
+            Self::SixteenthTriplet => 1.0 / 6.0,
+            Self::Sixteenth => 0.25,
+            Self::EighthTriplet => 1.0 / 3.0,
+            Self::Eighth => 0.5,
+            Self::QuarterTriplet => 2.0 / 3.0,
+            Self::Quarter => 1.0,
+        }
+    }
+}
+
+impl fmt::Display for ArpeggioRate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::ThirtySecond => "1/32",
+                Self::SixteenthTriplet => "1/16T",
+                Self::Sixteenth => "1/16",
+                Self::EighthTriplet => "1/8T",
+                Self::Eighth => "1/8",
+                Self::QuarterTriplet => "1/4T",
+                Self::Quarter => "1/4",
+            }
+        )
+    }
+}
+
 impl ChordShape {
     pub const ALL: [Self; 17] = [
         Self::TriadRoot,
@@ -587,6 +679,9 @@ pub struct ChordParameters {
     pub decay: Percent,
     pub sustain: Percent,
     pub release: Percent,
+    pub arpeggio_enabled: bool,
+    pub arpeggio_type: ArpeggioType,
+    pub arpeggio_rate: ArpeggioRate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -654,6 +749,14 @@ pub struct ParameterLocks {
     pub chorus: Option<ChorusMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spread: Option<ChordSpread>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chord_shape: Option<ChordShape>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arpeggio_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arpeggio_type: Option<ArpeggioType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arpeggio_rate: Option<ArpeggioRate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -859,6 +962,18 @@ impl ParameterLocks {
                 debug_assert!(set);
             }
         }
+        if overlay.chord_shape.is_some() {
+            self.chord_shape = overlay.chord_shape;
+        }
+        if overlay.arpeggio_enabled.is_some() {
+            self.arpeggio_enabled = overlay.arpeggio_enabled;
+        }
+        if overlay.arpeggio_type.is_some() {
+            self.arpeggio_type = overlay.arpeggio_type;
+        }
+        if overlay.arpeggio_rate.is_some() {
+            self.arpeggio_rate = overlay.arpeggio_rate;
+        }
     }
 }
 
@@ -1031,7 +1146,7 @@ impl Project {
             input_chord_shape: (kind == TrackKind::Chord).then_some(ChordShape::default()),
         };
         Self {
-            format_version: 8,
+            format_version: 9,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1087,6 +1202,9 @@ impl Project {
                         decay: p(45),
                         sustain: p(75),
                         release: p(65),
+                        arpeggio_enabled: false,
+                        arpeggio_type: ArpeggioType::default(),
+                        arpeggio_rate: ArpeggioRate::default(),
                     }),
                 ),
                 synth(
@@ -1145,7 +1263,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 8 {
+        if self.format_version != 9 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -1360,6 +1478,23 @@ fn validate_locks(
     kind: TrackKind,
     l: &ParameterLocks,
 ) -> Result<(), ValidationError> {
+    if kind != TrackKind::Chord
+        && (l.chord_shape.is_some()
+            || l.arpeggio_enabled.is_some()
+            || l.arpeggio_type.is_some()
+            || l.arpeggio_rate.is_some())
+    {
+        let name = if l.chord_shape.is_some() {
+            "chord_shape"
+        } else if l.arpeggio_enabled.is_some() {
+            "arpeggio_enabled"
+        } else if l.arpeggio_type.is_some() {
+            "arpeggio_type"
+        } else {
+            "arpeggio_rate"
+        };
+        return Err(ValidationError::Lock(ti, si, name));
+    }
     let bad = ParameterId::ALL.into_iter().find_map(|parameter| {
         (l.get(parameter).is_some() && !parameter.is_valid_for(kind)).then_some(parameter.name())
     });
@@ -2090,5 +2225,53 @@ mod tests {
         project.validate().unwrap();
         project.tracks[3].lfos.pitch = Some(LfoConfig::default());
         assert_eq!(project.validate(), Err(ValidationError::Lfo(3, "pitch")));
+    }
+
+    #[test]
+    fn arpeggio_defaults_and_json_names_are_stable() {
+        let project = Project::new();
+        let Instrument::Chord(parameters) = project.tracks[4].instrument else {
+            panic!("default Chord instrument missing");
+        };
+        assert!(!parameters.arpeggio_enabled);
+        assert_eq!(parameters.arpeggio_type, ArpeggioType::Up);
+        assert_eq!(parameters.arpeggio_rate, ArpeggioRate::Sixteenth);
+        assert_eq!(
+            serde_json::to_string(&ArpeggioType::UpDown).unwrap(),
+            "\"up_down\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ArpeggioRate::SixteenthTriplet).unwrap(),
+            "\"sixteenth_triplet\""
+        );
+    }
+
+    #[test]
+    fn chord_arpeggio_locks_overlay_and_reject_on_other_tracks() {
+        let mut locks = ParameterLocks {
+            chord_shape: Some(ChordShape::TriadFirstInversion),
+            arpeggio_enabled: Some(true),
+            arpeggio_type: Some(ArpeggioType::Random),
+            arpeggio_rate: Some(ArpeggioRate::QuarterTriplet),
+            ..Default::default()
+        };
+        let overlay = ParameterLocks {
+            chord_shape: Some(ChordShape::TriadRoot),
+            arpeggio_rate: Some(ArpeggioRate::ThirtySecond),
+            ..Default::default()
+        };
+        locks.overlay(overlay);
+        assert_eq!(locks.chord_shape, Some(ChordShape::TriadRoot));
+        assert_eq!(locks.arpeggio_rate, Some(ArpeggioRate::ThirtySecond));
+
+        let mut project = Project::new();
+        project.tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            locks,
+        });
+        assert_eq!(
+            project.validate(),
+            Err(ValidationError::Lock(0, 0, "chord_shape"))
+        );
     }
 }

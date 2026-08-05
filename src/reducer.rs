@@ -1,6 +1,7 @@
 use crate::model::{
-    ChordShape, LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterValue, Pattern,
-    Percent, Project, StepEvent, TrackKind, Waveform, tie_source,
+    ArpeggioRate, ArpeggioType, ChordShape, Instrument, LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT,
+    ParameterId, ParameterValue, Pattern, Percent, Project, StepEvent, TrackKind, Waveform,
+    tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -11,6 +12,13 @@ use std::{
 pub enum Scope {
     Base,
     Lock,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChordLockField {
+    Shape,
+    Enabled,
+    Type,
+    Rate,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditError {
@@ -540,8 +548,309 @@ impl Editor {
                 None => {
                     t.input_chord_shape = (shape != ChordShape::default()).then_some(shape);
                 }
-                Some(StepEvent::Tie { .. }) => return Err(EditError::NoChordShape),
-                Some(_) => return Err(EditError::NoChordShape),
+                Some(StepEvent::Tie { .. }) | Some(_) => return Err(EditError::NoChordShape),
+            }
+            Ok(())
+        })
+    }
+
+    pub fn set_chord_shape_lock(
+        &mut self,
+        track: usize,
+        step: usize,
+        shape: ChordShape,
+    ) -> Result<bool, EditError> {
+        self.edit(None, move |project| {
+            let t = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if t.kind != TrackKind::Chord {
+                return Err(EditError::NoChordShape);
+            }
+            let event = t
+                .steps
+                .get_mut(step)
+                .ok_or(EditError::InvalidStep)?
+                .as_mut()
+                .ok_or(EditError::EmptyLock)?;
+            event.locks_mut().chord_shape = Some(shape);
+            Ok(())
+        })
+    }
+
+    pub fn chord_shape_value(
+        &self,
+        track: usize,
+        step: usize,
+        scope: Scope,
+    ) -> Result<ChordShape, EditError> {
+        let t = self
+            .project
+            .tracks
+            .get(track)
+            .ok_or(EditError::InvalidTrack)?;
+        if t.kind != TrackKind::Chord {
+            return Err(EditError::NoChordShape);
+        }
+        let base = match t.steps.get(step).ok_or(EditError::InvalidStep)?.as_ref() {
+            Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or_default(),
+            Some(StepEvent::Tie { .. }) => {
+                let source = tie_source(&t.steps, step).ok_or(EditError::InvalidTie)?;
+                match t.steps[source] {
+                    Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or_default(),
+                    _ => return Err(EditError::NoChordShape),
+                }
+            }
+            None => t.input_chord_shape.unwrap_or_default(),
+            Some(_) => return Err(EditError::NoChordShape),
+        };
+        if scope == Scope::Base {
+            return Ok(base);
+        }
+        Ok(chord_locks_at(t, step).chord_shape.unwrap_or(base))
+    }
+
+    pub fn set_arpeggio_enabled(
+        &mut self,
+        track: usize,
+        step: usize,
+        scope: Scope,
+        value: bool,
+    ) -> Result<bool, EditError> {
+        self.edit(None, move |project| {
+            let t = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if t.kind != TrackKind::Chord {
+                return Err(EditError::InvalidParameter);
+            }
+            match scope {
+                Scope::Base => {
+                    let Instrument::Chord(parameters) = &mut t.instrument else {
+                        return Err(EditError::InvalidParameter);
+                    };
+                    parameters.arpeggio_enabled = value;
+                }
+                Scope::Lock => {
+                    let event = t
+                        .steps
+                        .get_mut(step)
+                        .ok_or(EditError::InvalidStep)?
+                        .as_mut()
+                        .ok_or(EditError::EmptyLock)?;
+                    event.locks_mut().arpeggio_enabled = Some(value);
+                }
+            }
+            Ok(())
+        })
+    }
+
+    pub fn set_arpeggio_type(
+        &mut self,
+        track: usize,
+        step: usize,
+        scope: Scope,
+        value: ArpeggioType,
+    ) -> Result<bool, EditError> {
+        self.edit(None, move |project| {
+            let t = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if t.kind != TrackKind::Chord {
+                return Err(EditError::InvalidParameter);
+            }
+            match scope {
+                Scope::Base => {
+                    let Instrument::Chord(parameters) = &mut t.instrument else {
+                        return Err(EditError::InvalidParameter);
+                    };
+                    parameters.arpeggio_type = value;
+                }
+                Scope::Lock => {
+                    let event = t
+                        .steps
+                        .get_mut(step)
+                        .ok_or(EditError::InvalidStep)?
+                        .as_mut()
+                        .ok_or(EditError::EmptyLock)?;
+                    event.locks_mut().arpeggio_type = Some(value);
+                }
+            }
+            Ok(())
+        })
+    }
+    pub fn set_arpeggio_rate(
+        &mut self,
+        track: usize,
+        step: usize,
+        scope: Scope,
+        value: ArpeggioRate,
+    ) -> Result<bool, EditError> {
+        self.edit(None, move |project| {
+            let t = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if t.kind != TrackKind::Chord {
+                return Err(EditError::InvalidParameter);
+            }
+            match scope {
+                Scope::Base => {
+                    let Instrument::Chord(parameters) = &mut t.instrument else {
+                        return Err(EditError::InvalidParameter);
+                    };
+                    parameters.arpeggio_rate = value;
+                }
+                Scope::Lock => {
+                    let event = t
+                        .steps
+                        .get_mut(step)
+                        .ok_or(EditError::InvalidStep)?
+                        .as_mut()
+                        .ok_or(EditError::EmptyLock)?;
+                    event.locks_mut().arpeggio_rate = Some(value);
+                }
+            }
+            Ok(())
+        })
+    }
+
+    pub fn arpeggio_enabled_value(
+        &self,
+        track: usize,
+        step: usize,
+        scope: Scope,
+    ) -> Result<bool, EditError> {
+        if scope == Scope::Lock
+            && self
+                .project
+                .tracks
+                .get(track)
+                .ok_or(EditError::InvalidTrack)?
+                .steps
+                .get(step)
+                .ok_or(EditError::InvalidStep)?
+                .is_none()
+        {
+            return Err(EditError::EmptyLock);
+        }
+        let (base, lock) =
+            self.chord_arpeggio_value(track, step, |p| p.arpeggio_enabled, |l| l.arpeggio_enabled)?;
+        Ok(if scope == Scope::Base {
+            base
+        } else {
+            lock.unwrap_or(base)
+        })
+    }
+    pub fn arpeggio_type_value(
+        &self,
+        track: usize,
+        step: usize,
+        scope: Scope,
+    ) -> Result<ArpeggioType, EditError> {
+        if scope == Scope::Lock
+            && self
+                .project
+                .tracks
+                .get(track)
+                .ok_or(EditError::InvalidTrack)?
+                .steps
+                .get(step)
+                .ok_or(EditError::InvalidStep)?
+                .is_none()
+        {
+            return Err(EditError::EmptyLock);
+        }
+        let (base, lock) =
+            self.chord_arpeggio_value(track, step, |p| p.arpeggio_type, |l| l.arpeggio_type)?;
+        Ok(if scope == Scope::Base {
+            base
+        } else {
+            lock.unwrap_or(base)
+        })
+    }
+    pub fn arpeggio_rate_value(
+        &self,
+        track: usize,
+        step: usize,
+        scope: Scope,
+    ) -> Result<ArpeggioRate, EditError> {
+        if scope == Scope::Lock
+            && self
+                .project
+                .tracks
+                .get(track)
+                .ok_or(EditError::InvalidTrack)?
+                .steps
+                .get(step)
+                .ok_or(EditError::InvalidStep)?
+                .is_none()
+        {
+            return Err(EditError::EmptyLock);
+        }
+        let (base, lock) =
+            self.chord_arpeggio_value(track, step, |p| p.arpeggio_rate, |l| l.arpeggio_rate)?;
+        Ok(if scope == Scope::Base {
+            base
+        } else {
+            lock.unwrap_or(base)
+        })
+    }
+
+    fn chord_arpeggio_value<T, P, L>(
+        &self,
+        track: usize,
+        step: usize,
+        base: P,
+        lock: L,
+    ) -> Result<(T, Option<T>), EditError>
+    where
+        T: Copy,
+        P: FnOnce(&crate::model::ChordParameters) -> T,
+        L: FnOnce(&crate::model::ParameterLocks) -> Option<T>,
+    {
+        let t = self
+            .project
+            .tracks
+            .get(track)
+            .ok_or(EditError::InvalidTrack)?;
+        if t.kind != TrackKind::Chord {
+            return Err(EditError::InvalidParameter);
+        }
+        let Instrument::Chord(parameters) = t.instrument else {
+            return Err(EditError::InvalidParameter);
+        };
+        Ok((base(&parameters), lock(&chord_locks_at(t, step))))
+    }
+
+    pub fn clear_chord_lock(
+        &mut self,
+        track: usize,
+        step: usize,
+        field: ChordLockField,
+    ) -> Result<bool, EditError> {
+        self.edit(None, move |project| {
+            let t = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if t.kind != TrackKind::Chord {
+                return Err(EditError::InvalidParameter);
+            }
+            let event = t
+                .steps
+                .get_mut(step)
+                .ok_or(EditError::InvalidStep)?
+                .as_mut()
+                .ok_or(EditError::EmptyLock)?;
+            match field {
+                ChordLockField::Shape => event.locks_mut().chord_shape = None,
+                ChordLockField::Enabled => event.locks_mut().arpeggio_enabled = None,
+                ChordLockField::Type => event.locks_mut().arpeggio_type = None,
+                ChordLockField::Rate => event.locks_mut().arpeggio_rate = None,
             }
             Ok(())
         })
@@ -841,6 +1150,30 @@ impl Editor {
             Ok(())
         })
     }
+}
+fn chord_locks_at(t: &crate::model::Track, step: usize) -> crate::model::ParameterLocks {
+    let Some(Some(event)) = t.steps.get(step) else {
+        return Default::default();
+    };
+    if !matches!(event, StepEvent::Tie { .. }) {
+        return *event.locks();
+    }
+    let Some(source) = tie_source(&t.steps, step) else {
+        return *event.locks();
+    };
+    let mut locks = match t.steps[source] {
+        Some(StepEvent::Note { locks, .. }) => locks,
+        _ => Default::default(),
+    };
+    let mut i = (source + 1) % t.steps.len();
+    while i != step {
+        if let Some(StepEvent::Tie { locks: tie_locks }) = t.steps[i] {
+            locks.overlay(tie_locks);
+        }
+        i = (i + 1) % t.steps.len();
+    }
+    locks.overlay(*event.locks());
+    locks
 }
 fn clear_with_ties(t: &mut crate::model::Track, step: usize) {
     t.steps[step] = None;
@@ -1275,5 +1608,51 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn chord_arpeggio_base_lock_and_tie_inheritance_are_undoable() {
+        let mut editor = Editor::new(Project::new());
+        editor
+            .set_arpeggio_enabled(4, 0, Scope::Base, true)
+            .unwrap();
+        editor
+            .set_arpeggio_type(4, 0, Scope::Base, crate::model::ArpeggioType::Down)
+            .unwrap();
+        editor
+            .set_arpeggio_rate(4, 0, Scope::Base, crate::model::ArpeggioRate::EighthTriplet)
+            .unwrap();
+        assert_eq!(
+            editor.arpeggio_type_value(4, 0, Scope::Base),
+            Ok(crate::model::ArpeggioType::Down)
+        );
+        editor.set_note(4, 0, 1).unwrap();
+        editor
+            .set_chord_shape_lock(4, 0, ChordShape::TriadRoot)
+            .unwrap();
+        editor
+            .set_arpeggio_rate(4, 0, Scope::Lock, crate::model::ArpeggioRate::ThirtySecond)
+            .unwrap();
+        editor.toggle_tie(4, 1).unwrap();
+        assert_eq!(
+            editor.chord_shape_value(4, 1, Scope::Lock),
+            Ok(ChordShape::TriadRoot)
+        );
+        assert_eq!(
+            editor.arpeggio_rate_value(4, 1, Scope::Lock),
+            Ok(crate::model::ArpeggioRate::ThirtySecond)
+        );
+        editor
+            .clear_chord_lock(4, 0, ChordLockField::Shape)
+            .unwrap();
+        assert!(editor.undo());
+        assert_eq!(
+            editor.project.tracks[4].steps[0]
+                .as_ref()
+                .unwrap()
+                .locks()
+                .chord_shape,
+            Some(ChordShape::TriadRoot)
+        );
     }
 }

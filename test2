@@ -1,5 +1,5 @@
 {
-  "format_version": 8,
+  "format_version": 9,
   "globals": {
     "tempo_bpm": 120,
     "delay_division": "eighth",
@@ -275,6 +275,9 @@
         "pulse_width": 50,
         "sub_oscillator": 35,
         "chorus": "i",
+        "arpeggio_enabled": false,
+        "arpeggio_type": "up",
+        "arpeggio_rate": "sixteenth",
         "cutoff": 44,
         "resonance": 10,
         "filter_envelope": 25,

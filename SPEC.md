@@ -97,6 +97,7 @@ Bass and Lead are monophonic. Chord interprets the stored degree as the root of 
 - A Chord note renders its selected shape in close position. The stored octave is the root octave; when an inversion recipe wraps from a higher degree to a lower degree, the wrapped tone rises by one scale octave.
 - Chord has two alternating four-voice groups. A new note releases the previous shape and retriggers all of its tones, including common tones; one released shape may overlap before the oldest group is reused.
 - A following tie keeps the mono voice or complete chord shape open without retriggering pitch, accent, or envelopes. A tie inherits the source note's Chord shape.
+- An arpeggiated tie continues its current sequence and applies new shape, type, rate, or enabled lock values without restarting it. An empty step releases the arpeggio; the next note starts a new cycle.
 - A following empty step closes the gate and begins release.
 - A following note closes/restarts the existing voice at the new pitch, with click-safe envelope handling.
 - Bass notes additionally store a Boolean slide. A slide remains armed through ties and glides to the next Bass note over a fixed 60 ms without retriggering its main envelope. An empty step clears it.
@@ -218,6 +219,8 @@ Chord is a Juno-60-inspired polyphonic engine; Lead is an SH-101-inspired monoph
 Chord additionally has a stereo `chorus` selector with Off, I, and II modes. Mode I uses approximately 15 ms base delay, 1.5 ms modulation depth, and 0.5 Hz; mode II uses 12 ms, 2.5 ms, and 0.8 Hz. Mode changes crossfade over approximately 5 ms. Chorus precedes post-fader stereo sends.
 Chord also has a `spread` selector: Off keeps every voice at the track pan, Narrow uses half stereo width, and Wide uses full width. Three voices are placed left/center/right and four voices left/inner-left/inner-right/right in stored voice order; positions are centered around track pan and clamped at the boundaries. Spread is captured for each chord voice group so release tails retain their layout, is lockable per step, and is not LFO-modulatable. Chorus preserves stereo voice input while remaining centered when spread is Off.
 
+Chord's arpeggiator can be enabled with Up, Down, Up-Down, Down-Up, or Random ordering at `1/32`, `1/16T`, `1/16`, `1/8T`, `1/8`, `1/4T`, or `1/4`. Up-Down and Down-Up omit repeated endpoints. Random uses deterministic shuffled no-repeat cycles, and each arpeggiated tone retains its original Chord voice-position stereo spread.
+
 Chord defaults: 70% Saw mix, pulse width 50%, sub 0%, chorus I, cutoff 55%, resonance 15%, filter envelope 25%, and ADSR 55/45/75/65%. Lead defaults: 75% Saw mix, pulse width 50%, sub 25%, cutoff 50%, resonance 35%, filter envelope 55%, and ADSR 0/35/55/20%.
 
 All pitched tracks default to input degree 1 and octave 3. Their oscillators and filters run at 2x oversampling. Chord uses stable DCO pitch and a smoother resonance-compensated response; Lead uses stronger drive and feedback.
@@ -307,7 +310,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `Ctrl+Q` | Quit, with dirty confirmation |
 | Anywhere | `Ctrl+Z` | Undo |
 | Anywhere | `Ctrl+Y` | Redo |
-| Navigation, parameter, LFO, or Chord-shape editor | `?` | Open the full help overlay |
+| Navigation, parameter, LFO, or Chord editor | `?` | Open the full help overlay |
 | Track | `p` | Toggle visible `BASE`/`LOCK` scope |
 | Track | `Shift+Left` / `Shift+Right` | Move to the previous/next 16-step bank |
 | Track | `PageUp` / `PageDown` | Move to the previous/next step while editing a parameter |
@@ -359,7 +362,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - Enter or Esc returns to navigation without reverting changes already made.
 - A series of repeated arrow changes to one value is coalesced into one undo transaction until the parameter changes, editing ends, or 300 ms elapses without another adjustment.
 - Mute remains a discrete immediate action; Bass waveform and Chord chorus use discrete persistent editors.
-- `C` opens a compact Chord-shape selector over the selected track's parameter section, keeping the sequencer visible. It reuses the LFO selector's vertical list: Up/Down selects a recipe and stops at the first or last value, PageUp/PageDown moves between steps and updates the selector to that step's shape, while Enter/Esc closes without reverting edits. On an existing Chord note only that note changes; on an empty step the track's future input shape changes. Ties display their source shape and must be edited at the source note.
+- `C` opens a compact Chord editor over the selected track's parameter section, keeping the sequencer visible. Left/Right selects Shape, Arp, Type, or Rate; Up/Down changes the selected value and stops at list boundaries; PageUp/PageDown moves between steps. Type and Rate remain remembered but are disabled while Arp is off. BASE edits the input/note shape or Chord base values; LOCK edits step overrides, including on ties.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
@@ -392,7 +395,7 @@ At `120x34` or larger, the normal screen contains:
 
 Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows accent state, inherited accent/source on ties, and Bass slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, and envelope groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.
 
-The compact, centered track-level LFO modal arranges enabled, waveform, rate mode, rate, and depth as five control columns from left to right, matching left/right field selection and up/down value adjustment. Its size is capped rather than expanding with larger terminals, and control names occupy their card borders to avoid duplicated labels and empty space. Enabled and rate mode use two-position switches, waveform and synchronized rate use multi-value selectors that fill all available rows, and free rate and depth use ten-segment faders. Up selects the displayed option above and Down selects the option below; both two-position switches and multi-value selectors stop at their first and last values instead of cycling. For faders, Up increases and Down decreases. The selected column uses the same heavy outline, reverse styling, and bold labeling as an active parameter. Rate shows its synchronized division or free percentage together with the resulting physical Hz value; ordinary depth is labeled in bipolar percentage points, while pitch depth also shows its ±semitone range. The Chord-shape selector uses the same vertical-list treatment but is anchored over the selected track's parameter section so the sequencer remains visible while PageUp/PageDown changes the selected step.
+The compact, centered track-level LFO modal arranges enabled, waveform, rate mode, rate, and depth as five control columns from left to right, matching left/right field selection and up/down value adjustment. Its size is capped rather than expanding with larger terminals, and control names occupy their card borders to avoid duplicated labels and empty space. Enabled and rate mode use two-position switches, waveform and synchronized rate use multi-value selectors that fill all available rows, and free rate and depth use ten-segment faders. Up selects the displayed option above and Down selects the option below; both two-position switches and multi-value selectors stop at their first and last values instead of cycling. For faders, Up increases and Down decreases. The selected column uses the same heavy outline, reverse styling, and bold labeling as an active parameter. Rate shows its synchronized division or free percentage together with the resulting physical Hz value; ordinary depth is labeled in bipolar percentage points, while pitch depth also shows its ±semitone range. The Chord editor uses the same compact treatment, with Shape, Arp, Type, and Rate fields and PageUp/PageDown step navigation.
 
 Shortcuts are displayed beside the controls they operate: global keys in the global row/cards, event and navigation keys in the pattern title, track keys in the selected-track title, and parameter keys below their faders. The help overlay remains available for the complete key map; there is no persistent bottom instruction panel.
 
@@ -448,7 +451,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`, but the application does not silently alter a user-supplied filename.
-- Version 8 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. Versions 1 through 7, missing versions, and unknown future versions are rejected without migration.
+- Version 9 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. Versions 1 through 8, missing versions, and unknown future versions are rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -458,7 +461,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 8,
+  "format_version": 9,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -497,7 +500,7 @@ The top-level object is:
 - A `steps` array containing 1 through 64 elements; its array length is the track length
 - Bass, Chord, and Lead additionally store `input_degree` and `input_octave`. Chord tracks may store `input_chord_shape`; omitted values mean `1-3-5`.
 
-Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. `spread` accepts `off`, `narrow`, or `wide`, and omitted values load as `off`. Lead stores the same percentage controls except `chorus` and `spread`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
+Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, `release`, `arpeggio_enabled`, `arpeggio_type`, and `arpeggio_rate`. `spread` accepts `off`, `narrow`, or `wide`; arpeggio defaults to disabled, `up`, and `1/16`. Lead stores the same percentage controls except `chorus`, `spread`, and arpeggio. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
 
 An empty step is JSON `null`. Populated step shapes are:
 
@@ -538,7 +541,7 @@ Chord notes may include an optional `chord_shape` string. Omitted values mean `t
 }
 ```
 
-The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. `pitch` is not a lock key. Chord chorus values are `off`, `i`, and `ii`. `mute`, `accent`, and `slide` are invalid in a lock object.
+The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `chord_shape`, `arpeggio_enabled`, `arpeggio_type`, `arpeggio_rate`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. `pitch` is not a lock key. Chord chorus values are `off`, `i`, and `ii`; arpeggio types are `up`, `down`, `up_down`, `down_up`, and `random`. `mute`, `accent`, and `slide` are invalid in a lock object.
 
 An empty LFO collection is `{}`. Assignment keys are the compatible continuous instrument parameters plus `level`; Chord and Lead may additionally use the LFO-only `pitch` key. Bass waveform, Chord chorus, and mixer sends are excluded. A synchronized assignment is:
 
@@ -568,7 +571,7 @@ For Chord or Lead pitch:
 }
 ```
 
-The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 8; no migration is needed.
+The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 9; no migration is needed.
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 
@@ -713,7 +716,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Golden JSON for every track/event/lock and LFO rate/waveform variant
 - Default-project and populated-project round trips
 - Rejection of unknown versions/fields, bad ranges, wrong track order/count, step counts outside 1–64, invalid locks/LFO assignments, and invalid ties
-- Strict version 6 round trips, defaulting omitted Chord-shape fields to `1-3-5`, and rejection of versions 1 through 5 without migration
+- Strict version 9 round trips, defaulting omitted Chord-shape fields to `1-3-5`, and rejection of versions 1 through 8 without migration
 - Failed loads preserve the active project
 - Atomic saves leave the previous file intact on failure
 - Successful save/load resets dirty state and load resets history
@@ -735,7 +738,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Accent and Bass-slide editing, source-note articulation readout on ties, and BASE/LOCK independence
 - LFO modal navigation, immediate edits, assignment badges, removal, and minimum-size rendering
 - Pitch LFO card order/shortcut, LFO-only BASE/LOCK behavior, physical range display, and minimum-size rendering
-- Chord-shape selector navigation, per-note/default editing, inversion display, and minimum-size rendering
+- Chord editor navigation, per-note/default editing, inversion display, disabled remembered arpeggio fields, and minimum-size rendering
 - File prompts, dirty confirmations, error dialogs, and help overlay
 - Terminal restoration on normal and simulated failure paths
 
@@ -764,7 +767,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 6. Audition empty and occupied drum/pitched steps with `o`, including Chord shapes and inversions while transport is running, without pattern changes.
 7. Change key and scale and verify existing degree data follows the new harmony on future triggers.
 8. Undo and redo compound tie cleanup and repeated parameter edits, including returning to the saved clean revision.
-9. Save, inspect, reopen, and compare a version 6 project with accents, Bass slides, Chord shapes/inversions, Chord/Lead settings, ties, locks, effects, mute states, and input octaves; verify versions 1 through 5 are rejected without altering the active project.
+9. Save, inspect, reopen, and compare a version 9 project with accents, Bass slides, Chord shapes/inversions, arpeggiator settings and locks, Chord/Lead settings, ties, effects, mute states, and input octaves; verify versions 1 through 8 are rejected without altering the active project.
 10. List audio devices, use the default device, and select a unique explicit device.
 11. Play for at least ten minutes at a supported 48 kHz low-latency configuration without stream errors, non-finite output, timing drift, or audible clicks from normal parameter edits.
 12. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored.

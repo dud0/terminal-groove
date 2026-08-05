@@ -1,12 +1,13 @@
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
     model::{
-        ChordShape, ChorusMode, DelayDivision, GlobalParameterId, LfoConfig, LfoDivision, LfoRate,
-        LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, Project, STEP_BANK_SIZE,
-        STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind, Waveform,
+        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, DelayDivision, GlobalParameterId,
+        LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue,
+        Percent, Project, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
+        Waveform,
     },
     persistence,
-    reducer::{Editor, Scope},
+    reducer::{ChordLockField, Editor, Scope},
 };
 use anyhow::Result;
 use crossterm::{
@@ -79,6 +80,19 @@ enum LfoField {
     Depth,
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChordField {
+    Shape,
+    Arp,
+    Type,
+    Rate,
+}
+
+impl ChordField {
+    const ALL: [Self; 4] = [Self::Shape, Self::Arp, Self::Type, Self::Rate];
+}
+
 impl LfoField {
     const ALL: [Self; 5] = [
         Self::Enabled,
@@ -100,6 +114,7 @@ pub struct App {
     global: usize,
     scope: Scope,
     mode: Mode,
+    chord_field: ChordField,
     status: String,
     path: Option<PathBuf>,
     pending_open: Option<PathBuf>,
@@ -147,6 +162,7 @@ impl App {
             global: 0,
             scope: Scope::Base,
             mode: Mode::Navigation,
+            chord_field: ChordField::Shape,
             status: "Ready".into(),
             path,
             pending_open: None,
@@ -1115,54 +1131,167 @@ fn open_lfo_editor(a: &mut App, audio: &mut Audio, parameter: ParameterId) {
 
 fn open_chord_editor(a: &mut App) {
     if a.row != 5 {
-        a.status = "Chord shape is available on the Chord track only".into();
+        a.status = "Chord editor is available on the Chord track only".into();
         return;
     }
     let track = &a.editor.project.tracks[4];
     let shape = match track.steps[a.step].as_ref() {
         Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or_default(),
-        Some(StepEvent::Tie { .. }) => {
-            a.status = "Select the source Chord note to edit its shape".into();
-            return;
-        }
+        Some(StepEvent::Tie { .. }) => selected_chord_shape(a, 4).unwrap_or_default(),
         None => track.input_chord_shape.unwrap_or_default(),
         _ => return,
     };
+    let shape = a
+        .editor
+        .chord_shape_value(4, a.step, a.scope)
+        .unwrap_or(shape);
+    a.chord_field = ChordField::Shape;
     a.mode = Mode::ChordEdit { shape };
-    a.status = "Editing Chord shape".into();
+    a.status = "Editing Chord".into();
 }
 
 fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::ChordEdit { shape } = a.mode else {
         return Ok(false);
     };
+    let field = a.chord_field;
+    let track = a.row.saturating_sub(1);
+    let scope = a.scope;
     match k.code {
         KeyCode::Enter | KeyCode::Esc | KeyCode::Char('C') => {
             a.mode = Mode::Navigation;
-            a.status = "Chord shape editing finished".into();
+            a.status = "Chord editing finished".into();
         }
         KeyCode::Char('?') => a.mode = Mode::Help,
+        KeyCode::Char('p') => {
+            a.scope = if a.scope == Scope::Base {
+                Scope::Lock
+            } else {
+                Scope::Base
+            };
+            a.status = format!("Scope {}", scope_name(a.scope));
+        }
+        KeyCode::Left | KeyCode::Right => {
+            let index = ChordField::ALL
+                .iter()
+                .position(|value| *value == field)
+                .unwrap();
+            let next = if k.code == KeyCode::Right {
+                (index + 1) % ChordField::ALL.len()
+            } else {
+                (index + ChordField::ALL.len() - 1) % ChordField::ALL.len()
+            };
+            a.chord_field = ChordField::ALL[next];
+        }
         KeyCode::PageUp | KeyCode::PageDown => {
             move_chord_editor_step(a, k.code == KeyCode::PageDown);
-            a.status = format!("Editing Chord shape at step {}", a.step + 1);
+            a.status = format!("Editing Chord at step {}", a.step + 1);
         }
         KeyCode::Up | KeyCode::Down => {
-            let index = ChordShape::ALL
-                .iter()
-                .position(|value| *value == shape)
-                .unwrap();
-            let next = lfo_choice_index(index, ChordShape::ALL.len(), k.code);
-            let next_shape = ChordShape::ALL[next];
-            if next_shape != shape {
-                let track = a.row - 1;
-                let step = a.step;
-                if apply(a, audio, |editor| {
-                    editor.set_chord_shape(track, step, next_shape)
-                }) {
-                    sync_project(a, audio);
-                    a.mode = Mode::ChordEdit { shape: next_shape };
-                    a.status = format!("Chord shape set to {next_shape}");
+            let step = a.step;
+            match field {
+                ChordField::Shape => {
+                    let index = ChordShape::ALL
+                        .iter()
+                        .position(|value| *value == shape)
+                        .unwrap();
+                    let next = lfo_choice_index(index, ChordShape::ALL.len(), k.code);
+                    let next_shape = ChordShape::ALL[next];
+                    if next_shape != shape
+                        && apply(a, audio, |editor| {
+                            if scope == Scope::Base {
+                                editor.set_chord_shape(track, step, next_shape)
+                            } else {
+                                editor.set_chord_shape_lock(track, step, next_shape)
+                            }
+                        })
+                    {
+                        sync_project(a, audio);
+                        a.mode = Mode::ChordEdit { shape: next_shape };
+                        a.status = format!("Chord shape set to {next_shape}");
+                    }
                 }
+                ChordField::Arp => {
+                    let value = a
+                        .editor
+                        .arpeggio_enabled_value(track, step, scope)
+                        .unwrap_or(false);
+                    if apply(a, audio, |editor| {
+                        editor.set_arpeggio_enabled(track, step, scope, !value)
+                    }) {
+                        sync_project(a, audio);
+                    }
+                }
+                ChordField::Type => {
+                    if !a
+                        .editor
+                        .arpeggio_enabled_value(track, step, scope)
+                        .unwrap_or(false)
+                    {
+                        a.status = "Arpeggio type is disabled while Arp is off".into();
+                    } else {
+                        let value = a
+                            .editor
+                            .arpeggio_type_value(track, step, scope)
+                            .unwrap_or_default();
+                        let index = ArpeggioType::ALL.iter().position(|v| *v == value).unwrap();
+                        let next = lfo_choice_index(index, ArpeggioType::ALL.len(), k.code);
+                        if next != index
+                            && apply(a, audio, |editor| {
+                                editor.set_arpeggio_type(
+                                    track,
+                                    step,
+                                    scope,
+                                    ArpeggioType::ALL[next],
+                                )
+                            })
+                        {
+                            sync_project(a, audio);
+                        }
+                    }
+                }
+                ChordField::Rate => {
+                    if !a
+                        .editor
+                        .arpeggio_enabled_value(track, step, scope)
+                        .unwrap_or(false)
+                    {
+                        a.status = "Arpeggio rate is disabled while Arp is off".into();
+                    } else {
+                        let value = a
+                            .editor
+                            .arpeggio_rate_value(track, step, scope)
+                            .unwrap_or_default();
+                        let index = ArpeggioRate::ALL.iter().position(|v| *v == value).unwrap();
+                        let next = lfo_choice_index(index, ArpeggioRate::ALL.len(), k.code);
+                        if next != index
+                            && apply(a, audio, |editor| {
+                                editor.set_arpeggio_rate(
+                                    track,
+                                    step,
+                                    scope,
+                                    ArpeggioRate::ALL[next],
+                                )
+                            })
+                        {
+                            sync_project(a, audio);
+                        }
+                    }
+                }
+            }
+        }
+        KeyCode::Backspace | KeyCode::Delete if a.scope == Scope::Lock => {
+            let lock = match field {
+                ChordField::Shape => ChordLockField::Shape,
+                ChordField::Arp => ChordLockField::Enabled,
+                ChordField::Type => ChordLockField::Type,
+                ChordField::Rate => ChordLockField::Rate,
+            };
+            let step = a.step;
+            if apply(a, audio, |editor| {
+                editor.clear_chord_lock(track, step, lock)
+            }) {
+                sync_project(a, audio);
             }
         }
         _ => {}
@@ -1172,7 +1301,10 @@ fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool>
 
 fn move_chord_editor_step(a: &mut App, forward: bool) {
     move_step_page(a, forward);
-    let shape = selected_chord_shape(a, a.row - 1).unwrap_or_default();
+    let shape = a
+        .editor
+        .chord_shape_value(4, a.step, a.scope)
+        .unwrap_or_else(|_| selected_chord_shape(a, a.row - 1).unwrap_or_default());
     a.mode = Mode::ChordEdit { shape };
 }
 
@@ -1893,7 +2025,7 @@ fn mode_name(mode: &Mode) -> String {
         Mode::LfoEdit { parameter, .. } => {
             format!("Track LFO edit ({})", parameter.display_name())
         }
-        Mode::ChordEdit { shape } => format!("Chord shape edit ({shape})"),
+        Mode::ChordEdit { shape } => format!("Chord edit ({shape})"),
         Mode::GlobalEdit(id) => format!("Global edit ({})", global_name(*id)),
         Mode::TempoInput(_) => "Tempo numeric input".into(),
         Mode::TrackLengthInput(_) => "Track length input".into(),
@@ -2599,8 +2731,12 @@ fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
 fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usize) {
     let t = &a.editor.project.tracks[track];
     let lock_editing = a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_));
-    let chord_shape = selected_chord_shape(a, track)
-        .map(|shape| format!(" · [C] Shape {shape}"))
+    let chord_shape = a
+        .editor
+        .chord_shape_value(track, a.step, a.scope)
+        .ok()
+        .or_else(|| selected_chord_shape(a, track))
+        .map(|shape| format!(" · [C] Chord {shape}"))
         .unwrap_or_default();
     let title = if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
         format!(
@@ -3252,7 +3388,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         ));
     } else if matches!(a.mode, Mode::ChordEdit { .. }) {
         status_lines.push(Line::from(
-            "Chord shape · [↑/↓] select recipe  [PageUp/Down] step  [Enter/Esc] finish",
+            "Chord · [←/→] field  [↑/↓] adjust  [PageUp/Down] step  [p] BASE/LOCK  [Enter/Esc] finish",
         ));
     } else if matches!(a.mode, Mode::GlobalEdit(_) | Mode::TempoInput(_)) {
         status_lines.push(Line::from(
@@ -3269,7 +3405,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: Shift+A toggles accent; Shift+G toggles Bass slide.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nTracks: l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C shape.\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or Chord-shape editing. Esc or ? closes Help.",
+            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: Shift+A toggles accent; Shift+G toggles Bass slide.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nTracks: l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C Chord editor (shape, arp, type, rate).\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or Chord editing. Esc or ? closes Help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3295,7 +3431,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
                 );
             }
         }
-        Mode::ChordEdit { shape } => render_chord_popup(f, chunks[3], *shape, a.step),
+        Mode::ChordEdit { shape } => render_chord_popup(f, chunks[3], *shape, a),
         Mode::TempoInput(input) => popup(
             f,
             area,
@@ -3350,31 +3486,62 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     }
 }
 
-fn render_chord_popup(f: &mut ratatui::Frame, area: Rect, selected: ChordShape, step: usize) {
+fn render_chord_popup(f: &mut ratatui::Frame, area: Rect, selected: ChordShape, a: &App) {
+    let step = a.step;
     let popup_area = lfo_popup_rect(area);
     f.render_widget(Clear, popup_area);
-    let panel = Block::bordered().title(format!("Chord shape · Step {}", step + 1));
+    let panel = Block::bordered().title(format!(
+        "Chord · Step {} · {}",
+        step + 1,
+        scope_name(a.scope)
+    ));
     let inner = panel.inner(popup_area);
     f.render_widget(panel, popup_area);
-    let choices = ChordShape::ALL.map(|shape| shape.to_string());
-    let selected_index = ChordShape::ALL
-        .iter()
-        .position(|shape| *shape == selected)
-        .unwrap();
-    render_lfo_selector(
-        f,
+    let track = a.row.saturating_sub(1);
+    let arp = a
+        .editor
+        .arpeggio_enabled_value(track, step, a.scope)
+        .unwrap_or(false);
+    let arp_type = a
+        .editor
+        .arpeggio_type_value(track, step, a.scope)
+        .unwrap_or_default();
+    let arp_rate = a
+        .editor
+        .arpeggio_rate_value(track, step, a.scope)
+        .unwrap_or_default();
+    let values = [
+        format!("Shape  {selected}"),
+        format!("Arp    {}", if arp { "On" } else { "Off" }),
+        format!("Type   {arp_type}"),
+        format!("Rate   {arp_rate}"),
+    ];
+    let lines = values
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            let style = if ChordField::ALL[i] == a.chord_field {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::LightGreen)
+                    .add_modifier(Modifier::BOLD)
+            } else if !arp && matches!(ChordField::ALL[i], ChordField::Type | ChordField::Rate) {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::LightGreen)
+            };
+            Line::from(Span::styled(format!(" {value:<24}"), style))
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(
+        Paragraph::new(lines),
         Rect {
-            height: inner.height.saturating_sub(2),
+            height: inner.height.saturating_sub(1),
             ..inner
         },
-        &choices,
-        selected_index,
-        Style::default()
-            .fg(Color::LightGreen)
-            .add_modifier(Modifier::BOLD),
     );
     f.render_widget(
-        Paragraph::new("[↑/↓] select   [Enter/Esc] close").alignment(Alignment::Center),
+        Paragraph::new("[←/→] field  [↑/↓] adjust  [Enter/Esc] close").alignment(Alignment::Center),
         Rect {
             y: inner.y + inner.height.saturating_sub(1),
             height: 1.min(inner.height),
@@ -4262,14 +4429,14 @@ mod tests {
         let mut app = App::new(project, None);
         app.row = 5;
         let title_screen = rendered(&app, 120, 34);
-        assert!(title_screen.contains("[C] Shape 3-5-7-1"));
+        assert!(title_screen.contains("[C] Chord 3-5-7-1"));
         app.mode = Mode::ChordEdit {
             shape: ChordShape::SeventhFirstInversion,
         };
         let screen = rendered(&app, 120, 34);
-        assert!(screen.contains("Chord shape · Step 1"));
-        assert!(screen.contains("● 3-5-7-1"));
-        assert!(screen.contains("Chord shape · [↑/↓] select recipe  [PageUp/Down] step"));
+        assert!(screen.contains("Chord · Step 1"));
+        assert!(screen.contains("Shape  3-5-7-1"));
+        assert!(screen.contains("Chord · [←/→] field  [↑/↓] adjust"));
     }
 
     #[test]

@@ -5,8 +5,9 @@ use crate::{
     },
     engine::{GateAction, StepClock, synth_action},
     model::{
-        ChordShape, ChorusMode, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT, ParameterId,
-        ParameterLocks, Percent, Project, StepEvent, TRACK_COUNT, Waveform,
+        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, Globals, Instrument, LfoAssignments,
+        MAX_STEP_COUNT, ParameterId, ParameterLocks, Percent, Project, StepEvent, TRACK_COUNT,
+        Waveform,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -322,12 +323,156 @@ struct SynthTrigger {
 
 const CHORD_GROUP_SIZE: usize = 4;
 
+#[derive(Clone, Copy, Debug)]
+struct ArpeggioState {
+    enabled: bool,
+    kind: ArpeggioType,
+    rate: ArpeggioRate,
+    shape: ChordShape,
+    order: [u8; 8],
+    order_len: u8,
+    position: u8,
+    phase: f64,
+    random: u32,
+}
+
+impl Default for ArpeggioState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            kind: ArpeggioType::default(),
+            rate: ArpeggioRate::default(),
+            shape: ChordShape::default(),
+            order: [0; 8],
+            order_len: 0,
+            position: 0,
+            phase: 0.0,
+            random: 0x6d2b_79f5,
+        }
+    }
+}
+
+impl ArpeggioState {
+    fn reset(
+        &mut self,
+        shape: ChordShape,
+        kind: ArpeggioType,
+        rate: ArpeggioRate,
+        sr: f32,
+        bpm: u16,
+    ) {
+        self.enabled = true;
+        self.kind = kind;
+        self.rate = rate;
+        self.shape = shape;
+        self.position = 0;
+        self.phase = sr as f64 * 60.0 / bpm as f64 * rate.beats();
+        self.rebuild_order();
+    }
+
+    fn rebuild_order(&mut self) {
+        let n = self.shape.degrees().len().min(4);
+        self.order_len = match self.kind {
+            ArpeggioType::Up | ArpeggioType::Down | ArpeggioType::Random => n as u8,
+            ArpeggioType::UpDown | ArpeggioType::DownUp => {
+                if n > 1 {
+                    (n * 2 - 2) as u8
+                } else {
+                    n as u8
+                }
+            }
+        };
+        let length = self.order_len as usize;
+        match self.kind {
+            ArpeggioType::Up | ArpeggioType::Random => {
+                for (i, slot) in self.order[..length].iter_mut().enumerate() {
+                    *slot = i as u8;
+                }
+            }
+            ArpeggioType::Down => {
+                for (i, slot) in self.order[..length].iter_mut().enumerate() {
+                    *slot = (n - i - 1) as u8;
+                }
+            }
+            ArpeggioType::UpDown => {
+                for i in 0..length {
+                    self.order[i] = if i < n { i } else { length - i } as u8;
+                }
+            }
+            ArpeggioType::DownUp => {
+                for i in 0..length {
+                    self.order[i] = if i < n { n - i - 1 } else { i - n + 1 } as u8;
+                }
+            }
+        }
+        if self.kind == ArpeggioType::Random {
+            self.shuffle();
+        }
+    }
+
+    fn shuffle(&mut self) {
+        for i in (1..self.order_len as usize).rev() {
+            self.random ^= self.random << 13;
+            self.random ^= self.random >> 17;
+            self.random ^= self.random << 5;
+            let j = (self.random as usize) % (i + 1);
+            self.order.swap(i, j);
+        }
+    }
+
+    fn current_voice(&self) -> usize {
+        self.order[self.position as usize] as usize
+    }
+
+    fn update_without_restart(
+        &mut self,
+        shape: ChordShape,
+        kind: ArpeggioType,
+        rate: ArpeggioRate,
+    ) {
+        let rebuild = self.shape != shape || self.kind != kind;
+        self.shape = shape;
+        self.kind = kind;
+        self.rate = rate;
+        let old = self.position;
+        if rebuild {
+            self.rebuild_order();
+            self.position = old.min(self.order_len.saturating_sub(1));
+        }
+    }
+
+    fn tick(&mut self, sr: f32, bpm: u16) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        self.phase -= 1.0;
+        if self.phase <= 0.0 {
+            self.phase += sr as f64 * 60.0 / bpm as f64 * self.rate.beats();
+            self.position += 1;
+            if self.position >= self.order_len {
+                self.position = 0;
+                if self.kind == ArpeggioType::Random {
+                    self.shuffle();
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
 struct ChordVoicePool {
     voices: [SynthVoice; CHORD_GROUP_SIZE * 2],
     group: usize,
     voice_count: usize,
     active: bool,
     chorus: StereoChorus,
+    arpeggiated: bool,
+    arpeggio: ArpeggioState,
+    arpeggio_trigger: SynthTrigger,
+    arpeggio_locks: ParameterLocks,
+    preview_remaining: u64,
 }
 
 impl ChordVoicePool {
@@ -338,6 +483,17 @@ impl ChordVoicePool {
             voice_count: 0,
             active: false,
             chorus: StereoChorus::new(sample_rate),
+            arpeggiated: false,
+            arpeggio: ArpeggioState::default(),
+            arpeggio_trigger: SynthTrigger {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                slide: false,
+                chord_shape: None,
+            },
+            arpeggio_locks: ParameterLocks::default(),
+            preview_remaining: 0,
         }
     }
 }
@@ -640,6 +796,7 @@ impl Renderer {
                         v.active = false;
                     }
                     Self::release_chord(&mut self.chord);
+                    self.chord.arpeggio = ArpeggioState::default();
                 }
             }
             AudioCommand::Stop => {
@@ -667,6 +824,8 @@ impl Renderer {
                 }
                 self.chord.active = false;
                 self.preview_chord.active = false;
+                self.chord.arpeggio = ArpeggioState::default();
+                self.preview_chord.arpeggio = ArpeggioState::default();
                 self.chord.chorus.clear();
                 self.preview_chord.chorus.clear();
                 self.delay.clear();
@@ -1230,6 +1389,40 @@ impl Renderer {
         locks: ParameterLocks,
         pool: &mut ChordVoicePool,
     ) {
+        let Instrument::Chord(parameters) = project.tracks[4].instrument else {
+            return;
+        };
+        let shape = locks
+            .chord_shape
+            .unwrap_or(trigger.chord_shape.unwrap_or_default());
+        let arpeggio_enabled = locks
+            .arpeggio_enabled
+            .unwrap_or(parameters.arpeggio_enabled);
+        let arpeggio_type = locks.arpeggio_type.unwrap_or(parameters.arpeggio_type);
+        let arpeggio_rate = locks.arpeggio_rate.unwrap_or(parameters.arpeggio_rate);
+        if arpeggio_enabled {
+            Self::release_chord(pool);
+            pool.group = 1 - pool.group;
+            pool.arpeggiated = true;
+            pool.arpeggio_trigger = SynthTrigger {
+                chord_shape: Some(shape),
+                ..trigger
+            };
+            pool.arpeggio_locks = locks;
+            pool.arpeggio.reset(
+                shape,
+                arpeggio_type,
+                arpeggio_rate,
+                sr,
+                project.globals.tempo_bpm,
+            );
+            pool.voice_count = 1;
+            Self::trigger_arpeggio_tone(project, sr, pool);
+            Self::configure_chorus(&mut pool.chorus, project.tracks[4], locks);
+            pool.active = true;
+            return;
+        }
+        pool.arpeggiated = false;
         if pool.active {
             for voice in &mut pool.voices
                 [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
@@ -1247,7 +1440,6 @@ impl Renderer {
             }
         }
         pool.group = 1 - pool.group;
-        let shape = trigger.chord_shape.unwrap_or_default();
         let (midis, voice_count) =
             Self::chord_midis(project, trigger.degree, trigger.octave, shape);
         for (voice, midi) in pool.voices
@@ -1281,6 +1473,50 @@ impl Renderer {
         pool.active = true;
     }
 
+    fn trigger_arpeggio_tone(project: &AudioProject, sr: f32, pool: &mut ChordVoicePool) {
+        let index = pool.arpeggio.current_voice();
+        let (midis, count) = Self::chord_midis(
+            project,
+            pool.arpeggio_trigger.degree,
+            pool.arpeggio_trigger.octave,
+            pool.arpeggio.shape,
+        );
+        let voice = &mut pool.voices[pool.group * CHORD_GROUP_SIZE];
+        voice.remaining = 0;
+        let frequency = 440.0 * 2.0_f32.powf((midis[index.min(count - 1)] as f32 - 69.0) / 12.0);
+        Self::configure_synth_voice_frequency(
+            project,
+            sr,
+            4,
+            frequency,
+            pool.arpeggio_trigger,
+            pool.arpeggio_locks,
+            voice,
+        );
+        let spread =
+            pool.arpeggio_locks
+                .spread
+                .unwrap_or_else(|| match project.tracks[4].instrument {
+                    Instrument::Chord(p) => p.spread,
+                    _ => crate::model::ChordSpread::Off,
+                });
+        let offsets = match count {
+            3 => [-50.0, 0.0, 50.0, 0.0],
+            4 => [-50.0, -16.6667, 16.6667, 50.0],
+            _ => [0.0; 4],
+        };
+        voice.pan.set(
+            (pool
+                .arpeggio_locks
+                .pan
+                .unwrap_or(project.tracks[4].pan)
+                .get() as f32
+                + offsets[index.min(3)] * spread.percent().normalized())
+            .clamp(0.0, 100.0),
+            0,
+        );
+    }
+
     fn release_chord(pool: &mut ChordVoicePool) {
         if pool.active {
             for voice in &mut pool.voices
@@ -1292,6 +1528,9 @@ impl Renderer {
             pool.active = false;
             pool.voice_count = 0;
         }
+        pool.arpeggiated = false;
+        pool.arpeggio.enabled = false;
+        pool.preview_remaining = 0;
     }
     fn refresh_active_parameters(&mut self, smoothing: u32) {
         for track in 0..3 {
@@ -1385,8 +1624,15 @@ impl Renderer {
                 octave,
                 accent,
                 chord_shape,
-                locks,
-            }) => (degree, octave, accent, false, chord_shape, locks),
+                locks: _,
+            }) => (
+                degree,
+                octave,
+                accent,
+                false,
+                chord_shape,
+                self.locks_at(track, step),
+            ),
             Some(StepEvent::Tie { .. }) => {
                 let Some(source) =
                     crate::model::tie_source(&t.steps[..t.step_count as usize], step)
@@ -1454,6 +1700,12 @@ impl Renderer {
                 ..self.preview_chord.group * CHORD_GROUP_SIZE + self.preview_chord.voice_count]
             {
                 voice.remaining = remaining;
+            }
+            if self.preview_chord.arpeggiated {
+                let interval = self.sr as f64 * 60.0 / self.project.globals.tempo_bpm as f64
+                    * self.preview_chord.arpeggio.rate.beats();
+                self.preview_chord.preview_remaining =
+                    (interval * self.preview_chord.arpeggio.order_len as f64).ceil() as u64;
             }
             return;
         }
@@ -1532,20 +1784,54 @@ impl Renderer {
                         if matches!(sequence.steps[step], Some(StepEvent::Tie { .. })) {
                             let locks = self.locks_at(track, step);
                             if track == 4 {
-                                for voice in &mut self.chord.voices[self.chord.group
-                                    * CHORD_GROUP_SIZE
-                                    ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
-                                {
-                                    Self::apply_synth_params(
-                                        &self.project,
-                                        self.sr,
-                                        track,
-                                        locks,
-                                        voice,
-                                        ParameterSmoothing::Default.samples(self.sr),
-                                    );
+                                if self.chord.arpeggiated {
+                                    let parameters = match t.instrument {
+                                        Instrument::Chord(parameters) => parameters,
+                                        _ => unreachable!(),
+                                    };
+                                    let shape =
+                                        locks.chord_shape.unwrap_or(self.chord.arpeggio.shape);
+                                    let enabled = locks
+                                        .arpeggio_enabled
+                                        .unwrap_or(parameters.arpeggio_enabled);
+                                    if !enabled {
+                                        Self::release_chord(&mut self.chord);
+                                    } else {
+                                        self.chord.arpeggio_locks = locks;
+                                        self.chord.arpeggio.update_without_restart(
+                                            shape,
+                                            locks.arpeggio_type.unwrap_or(parameters.arpeggio_type),
+                                            locks.arpeggio_rate.unwrap_or(parameters.arpeggio_rate),
+                                        );
+                                        let voice = &mut self.chord.voices
+                                            [self.chord.group * CHORD_GROUP_SIZE];
+                                        Self::apply_synth_params(
+                                            &self.project,
+                                            self.sr,
+                                            track,
+                                            locks,
+                                            voice,
+                                            ParameterSmoothing::Default.samples(self.sr),
+                                        );
+                                    }
+                                    Self::configure_chorus(&mut self.chord.chorus, t, locks);
+                                } else {
+                                    for voice in &mut self.chord.voices[self.chord.group
+                                        * CHORD_GROUP_SIZE
+                                        ..self.chord.group * CHORD_GROUP_SIZE
+                                            + self.chord.voice_count]
+                                    {
+                                        Self::apply_synth_params(
+                                            &self.project,
+                                            self.sr,
+                                            track,
+                                            locks,
+                                            voice,
+                                            ParameterSmoothing::Default.samples(self.sr),
+                                        );
+                                    }
+                                    Self::configure_chorus(&mut self.chord.chorus, t, locks);
                                 }
-                                Self::configure_chorus(&mut self.chord.chorus, t, locks);
                             } else {
                                 Self::apply_synth_params(
                                     &self.project,
@@ -1769,6 +2055,7 @@ impl Renderer {
         if self.playing && self.clock.tick().is_some() {
             self.boundary()
         }
+        self.advance_chord_arpeggios();
         let mut dry_l = 0.0;
         let mut dry_r = 0.0;
         let mut delay_l = 0.0;
@@ -1929,6 +2216,23 @@ impl Renderer {
             return (0.0, 0.0);
         }
         self.limiter.process(l, r)
+    }
+
+    fn advance_chord_arpeggios(&mut self) {
+        let bpm = self.project.globals.tempo_bpm;
+        if self.chord.arpeggiated && self.chord.active && self.chord.arpeggio.tick(self.sr, bpm) {
+            Self::trigger_arpeggio_tone(&self.project, self.sr, &mut self.chord);
+        }
+        if self.preview_chord.arpeggiated && self.preview_chord.active {
+            if self.preview_chord.preview_remaining > 0 {
+                self.preview_chord.preview_remaining -= 1;
+            }
+            if self.preview_chord.preview_remaining == 0 {
+                Self::release_chord(&mut self.preview_chord);
+            } else if self.preview_chord.arpeggio.tick(self.sr, bpm) {
+                Self::trigger_arpeggio_tone(&self.project, self.sr, &mut self.preview_chord);
+            }
+        }
     }
 }
 
@@ -2734,5 +3038,73 @@ mod tests {
         assert!((up - base * 2.0_f32.powf(2.0 / 12.0)).abs() < 0.0001);
         assert!((down - base * 2.0_f32.powf(-2.0 / 12.0)).abs() < 0.0001);
         assert!(up.is_finite() && down.is_finite());
+    }
+
+    #[test]
+    fn arpeggio_orders_and_fractional_timing_are_fixed_width() {
+        let expected = [
+            (ArpeggioType::Up, [0, 1, 2, 0, 0, 0, 0, 0], 3),
+            (ArpeggioType::Down, [2, 1, 0, 0, 0, 0, 0, 0], 3),
+            (ArpeggioType::UpDown, [0, 1, 2, 1, 0, 0, 0, 0], 4),
+            (ArpeggioType::DownUp, [2, 1, 0, 1, 0, 0, 0, 0], 4),
+        ];
+        for (kind, order, length) in expected {
+            let mut state = ArpeggioState::default();
+            state.reset(
+                ChordShape::TriadRoot,
+                kind,
+                ArpeggioRate::Sixteenth,
+                44_100.0,
+                123,
+            );
+            assert_eq!(state.order, order);
+            assert_eq!(state.order_len as usize, length);
+        }
+        let mut state = ArpeggioState::default();
+        state.reset(
+            ChordShape::TriadRoot,
+            ArpeggioType::Up,
+            ArpeggioRate::Sixteenth,
+            44_100.0,
+            123,
+        );
+        let interval = 44_100.0_f64 * 60.0 / 123.0 * 0.25;
+        let mut elapsed = 0.0;
+        let mut ticks = 0;
+        for _ in 0..(interval.ceil() as usize * 3) {
+            elapsed += 1.0;
+            if state.tick(44_100.0, 123) {
+                assert!((elapsed - interval * (ticks + 1) as f64).abs() <= 1.0);
+                ticks += 1;
+            }
+        }
+        assert_eq!(ticks, 3);
+    }
+
+    #[test]
+    fn arpeggiated_chord_renders_finite_and_restarts_after_empty_step() {
+        let mut project = Project::new();
+        for (index, track) in project.tracks.iter_mut().enumerate() {
+            track.muted = index != 4;
+        }
+        if let Instrument::Chord(parameters) = &mut project.tracks[4].instrument {
+            parameters.arpeggio_enabled = true;
+            parameters.arpeggio_type = ArpeggioType::UpDown;
+            parameters.arpeggio_rate = ArpeggioRate::ThirtySecond;
+        }
+        project.tracks[4].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            chord_shape: None,
+            locks: Default::default(),
+        });
+        project.tracks[4].steps[1] = None;
+        let output = render_offline(&project, 8_000, 8_000);
+        assert!(
+            output
+                .iter()
+                .all(|(left, right)| left.is_finite() && right.is_finite())
+        );
     }
 }
