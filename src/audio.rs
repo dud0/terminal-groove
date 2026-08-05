@@ -83,6 +83,7 @@ struct AudioTrack {
     lfos: LfoAssignments,
     input_degree: u8,
     input_octave: u8,
+    input_accent: bool,
     input_chord_shape: ChordShape,
     input_chord_arpeggio: ArpeggioConfig,
 }
@@ -133,6 +134,7 @@ impl AudioProject {
                     lfos: t.lfos,
                     input_degree: t.input_degree.unwrap_or(1),
                     input_octave: t.input_octave.unwrap_or(3),
+                    input_accent: t.input_accent,
                     input_chord_shape: t.input_chord_shape.unwrap_or_default(),
                     input_chord_arpeggio: t.input_chord_arpeggio.unwrap_or_default(),
                 }
@@ -1802,7 +1804,7 @@ impl Renderer {
             let accent = match self.project.patterns[self.active_pattern].tracks[track].steps[step]
             {
                 Some(StepEvent::Trigger { accent, .. }) => accent,
-                _ => false,
+                _ => self.project.tracks[track].input_accent,
             };
             self.trigger_preview_drum(track, accent, self.locks_at(track, step));
             return;
@@ -1885,7 +1887,7 @@ impl Renderer {
             _ => (
                 self.project.tracks[track].input_degree,
                 self.project.tracks[track].input_octave,
-                false,
+                self.project.tracks[track].input_accent,
                 false,
                 (track == 4).then_some(self.project.tracks[track].input_chord_shape),
                 if track == 4 {
@@ -2629,6 +2631,18 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn empty_step_audition_uses_the_track_input_accent_default() {
+        let mut project = Project::new();
+        project.tracks[0].input_accent = true;
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+
+        renderer.audition_once(0, 0);
+
+        assert!(renderer.preview_drums[0].accent);
     }
     #[test]
     fn offline_render_is_deterministic_and_finite() {

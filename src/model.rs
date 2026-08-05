@@ -1180,6 +1180,8 @@ pub struct Track {
     pub input_degree: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_octave: Option<u8>,
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    pub input_accent: bool,
     #[serde(default, skip_serializing_if = "chord_shape_is_default")]
     pub input_chord_shape: Option<ChordShape>,
     #[serde(default, skip_serializing_if = "arpeggio_is_default")]
@@ -1238,6 +1240,7 @@ impl PartialEq for Project {
                     && left.lfos == right.lfos
                     && left.input_degree == right.input_degree
                     && left.input_octave == right.input_octave
+                    && left.input_accent == right.input_accent
                     && left.input_chord_shape == right.input_chord_shape
                     && left.input_chord_arpeggio == right.input_chord_arpeggio
             })
@@ -1254,6 +1257,9 @@ fn default_pan() -> Percent {
 }
 fn default_step_cache() -> Vec<Step> {
     vec![None; STEP_BANK_SIZE]
+}
+fn bool_is_false(value: &bool) -> bool {
+    !*value
 }
 fn chord_shape_is_default(value: &Option<ChordShape>) -> bool {
     value.is_none() || value == &Some(ChordShape::default())
@@ -1277,6 +1283,7 @@ impl Project {
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: None,
             input_octave: None,
+            input_accent: false,
             input_chord_shape: None,
             input_chord_arpeggio: None,
         };
@@ -1297,6 +1304,7 @@ impl Project {
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: Some(1),
             input_octave: Some(3),
+            input_accent: false,
             input_chord_shape: None,
             input_chord_arpeggio: None,
         };
@@ -2227,6 +2235,24 @@ mod tests {
             serde_json::from_str::<StepEvent>(r#"{"type":"tie","accent":true,"locks":{}}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn input_accent_omits_false_and_round_trips_true() {
+        let mut project = Project::new();
+        let value = serde_json::to_value(&project).unwrap();
+        assert!(
+            value["tracks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|track| { track.get("input_accent").is_none() })
+        );
+
+        project.tracks[3].input_accent = true;
+        let value = serde_json::to_value(&project).unwrap();
+        assert_eq!(value["tracks"][3]["input_accent"], true);
+        assert_eq!(serde_json::from_value::<Project>(value).unwrap(), project);
     }
     #[test]
     fn lock_compatibility_matches_track_kind() {

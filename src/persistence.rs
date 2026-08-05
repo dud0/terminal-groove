@@ -471,6 +471,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("v11.groove.json");
         let mut project = Project::new();
+        project.tracks[0].input_accent = true;
         project.patterns[0].tracks[0].steps[0] = Some(crate::model::StepEvent::Trigger {
             accent: false,
             condition: crate::model::TriggerCondition::Chance {
@@ -482,6 +483,10 @@ mod tests {
         let mut value = serde_json::to_value(project).unwrap();
         value["format_version"] = 11.into();
         value["tracks"][0].as_object_mut().unwrap().remove("swing");
+        value["tracks"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("input_accent");
         let event = value["patterns"][0]["tracks"][0]["steps"][0]
             .as_object_mut()
             .unwrap();
@@ -491,6 +496,7 @@ mod tests {
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.format_version, 12);
         assert_eq!(loaded.tracks[0].swing, crate::model::Percent::ZERO);
+        assert!(!loaded.tracks[0].input_accent);
         assert_eq!(
             loaded.tracks[0].steps[0]
                 .as_ref()

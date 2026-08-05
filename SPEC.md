@@ -75,7 +75,7 @@ All sound is synthesized in real time. The application contains no audio samples
 
 ### 2.3 Drum events
 
-A drum step is either empty or contains one trigger with a required Boolean `accent`, a trigger `condition`, and a `retrigger_count`. New triggers are unaccented, always trigger, and retrigger once. `condition` is `Always`, `Cycle { position, length }` for all phases of lengths 2–4, or `Chance { probability }` at 0–100%. Counts are 1–4 inclusive, including the first hit. Ties never carry these fields. Pressing `Enter` on an occupied drum step clears the trigger, its articulation, and all locks.
+A drum step is either empty or contains one trigger with a required Boolean `accent`, a trigger `condition`, and a `retrigger_count`. Each track has a persisted input accent default, initially off. New triggers inherit that default; pressing `A` on an empty step toggles the default and leaves the step empty. Pressing `A` on an occupied trigger toggles only that trigger's accent. New triggers otherwise always trigger and retrigger once. `condition` is `Always`, `Cycle { position, length }` for all phases of lengths 2–4, or `Chance { probability }` at 0–100%. Counts are 1–4 inclusive, including the first hit. Ties never carry these fields. Pressing `Enter` on an occupied drum step clears the trigger, its articulation, and all locks.
 
 Each drum track is a single retriggerable synthesized voice. Accent has a fixed engine-specific response: it raises level and also strengthens the kick transient, snare excitation, or hi-hat brightness. Instrument parameters are captured when the hit starts and remain part of that hit's tail. Mixer level and sends continue to follow each sequencer step.
 
@@ -104,7 +104,7 @@ Bass and Lead are monophonic. Chord interprets the stored degree as the root of 
 - A following note closes/restarts the existing voice at the new pitch, with click-safe envelope handling.
 - Bass notes additionally store a Boolean slide. A slide remains armed through ties and glides to the next Bass note over a fixed 60 ms without retriggering its main envelope. An empty step clears it.
 
-Pressing a degree key replaces any existing event on the selected step with that note and preserves compatible locks, articulations, and the Chord shape/arpeggio of an existing Chord note. New notes are unaccented and new Bass notes have slide disabled. Pressing `Enter` on an empty pitched step inserts the track's last-entered degree and octave; empty Chord steps also use the track's last-entered Chord shape and arpeggio configuration. Pressing `Enter` on a note or tie clears it and its locks.
+Pressing a degree key replaces any existing event on the selected step with that note and preserves compatible locks, articulations, and the Chord shape/arpeggio of an existing Chord note. New notes inherit the track's input accent default and new Bass notes have slide disabled; replacing a tie or creating a note on an empty step uses the current default, while replacing an existing compatible note preserves its accent. Pressing `Enter` on an empty pitched step inserts the track's last-entered degree and octave with the input accent default; empty Chord steps also use the track's last-entered Chord shape and arpeggio configuration. Pressing `Enter` on a note or tie clears it and its locks.
 
 ### 2.5 Tie invariants
 
@@ -322,7 +322,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Track | `Shift+1`–`Shift+6` | Jump to the corresponding track |
 | Track | `l` | Edit the selected track length from 1 through 64 steps |
 | Track | `Shift+D` | Double the selected track by appending an exact copy, when its length is at most 32 |
-| Trigger or note | `A` | Toggle accent |
+| Trigger, note, or empty step | `A` | Toggle event accent, or the track's input accent default on an empty step |
 | Bass note | `Shift+G` | Toggle slide |
 | Trigger/note | `Shift+T` | Edit condition, cycle/chance values, and retrigger count |
 | Track | `Shift+S` | Edit 0–75% swing |
@@ -373,7 +373,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
-- `A` toggles accent immediately on a trigger or note. `Shift+G` toggles slide on a Bass note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. These edits are undoable and reject incompatible or empty steps visibly.
+- `A` toggles accent immediately on a trigger or note, or toggles the selected track's persisted input accent default when the step is empty without creating an event. `Shift+G` toggles slide on a Bass note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. These edits are undoable; direct accent editing remains invalid on ties.
 
 ### 5.4 Audition behavior
 
@@ -381,10 +381,10 @@ Adding or replacing a trigger or note automatically auditions it while transport
 
 `o` explicitly auditions at any transport state without changing transport or pattern data:
 
-- A drum row auditions the selected trigger's accent and locks, or an unaccented hit with base values on an empty step.
+- A drum row auditions the selected trigger's accent and locks, or a hit using the track's input accent default with base values on an empty step.
 - A Bass/Lead note auditions its pitch, accent, and locks; a Chord note auditions its complete selected shape.
 - A tie resolves and auditions its source note and accent while applying effective tie-chain locks.
-- An empty pitched step auditions the last-entered note unaccented with base values.
+- An empty pitched step auditions the last-entered note using the track's input accent default with base values.
 - A synth audition holds the gate for one quarter note at the current tempo and then enters release.
 - Explicit audition may overlap normal sequence playback through independent preview voices and chorus state without altering sequenced voice state.
 
@@ -400,7 +400,7 @@ At `120x34` or larger, the normal screen contains:
 4. A selected-control panel: vertical parameter faders for the selected track, or six global detail cards when the global row is selected.
 5. Status line: current mode, last successful operation or actionable error, and active-editor guidance. While a track parameter is being edited in `LOCK` scope, the selected-control panel and status line prominently show `LOCK PARAMETER EDITING` using contrasting styling.
 
-Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows accent state, inherited accent/source on ties, and Bass slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, and envelope groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.
+Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows event accent, the empty-step input accent default, inherited accent/source on ties, and Bass slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, and envelope groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.
 
 The compact, centered track-level LFO modal arranges enabled, waveform, rate mode, rate, and depth as five control columns from left to right, matching left/right field selection and up/down value adjustment. Its size is capped rather than expanding with larger terminals, and control names occupy their card borders to avoid duplicated labels and empty space. Enabled and rate mode use two-position switches, waveform and synchronized rate use multi-value selectors that fill all available rows, and free rate and depth use ten-segment faders. Up selects the displayed option above and Down selects the option below; both two-position switches and multi-value selectors stop at their first and last values instead of cycling. For faders, Up increases and Down decreases. The selected column uses the same heavy outline, reverse styling, and bold labeling as an active parameter. Rate shows its synchronized division or free percentage together with the resulting physical Hz value; ordinary depth is labeled in bipolar percentage points, while pitch depth also shows its ±semitone range. The Chord editor uses the same compact treatment as LFO, with four equal-width Shape, Arp, Type, and Rate fields, disabled Type/Rate styling while Arp is off, trigger-origin indicators, and PageUp/PageDown step navigation.
 
@@ -444,7 +444,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 ## 7. Undo, redo, and dirty state
 
 - Retain up to 256 project-changing transactions in memory.
-- Undoable changes include events, tie cleanup, locks, base parameters, global parameters, waveform, mute, input degree/octave, and project-wide edits.
+- Undoable changes include events, tie cleanup, locks, base parameters, global parameters, waveform, mute, input degree/octave/accent default, and project-wide edits.
 - Transport, cursor position, selected section, active mode, status messages, and audition are not undoable.
 - A new edit after undo clears redo history.
 - Loading a project or creating a new project clears both histories.
@@ -458,7 +458,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`, but the application does not silently alter a user-supplied filename.
-- Version 11 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. Versions 1 through 10, missing versions, and unknown future versions are rejected without migration.
+- Version 12 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. Version 11 is imported with defaults for newer optional fields; versions 1 through 10, missing versions, and unknown future versions are rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -506,6 +506,7 @@ The top-level object is:
 - A required sparse `lfos` object containing compatible per-destination assignments
 - A `steps` array containing 1 through 64 elements; its array length is the track length
 - Bass, Chord, and Lead additionally store `input_degree` and `input_octave`. Chord tracks may store `input_chord_shape` and `input_chord_arpeggio`; omitted values mean `1-3-5` and disabled/Up/`1/16`.
+- Every track may store `input_accent`; omitted means `false`. It is the persisted accent inherited by newly entered triggers and notes and by empty-step audition.
 
 Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. `spread` accepts `off`, `narrow`, or `wide`. Lead stores the same percentage controls except `chorus` and `spread`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
 
@@ -721,7 +722,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Frequency conversion with A4 = 440 Hz
 - Tie creation, wrapped resolution, all-tie rejection, and dependent-tie cleanup
 - Bass/Lead gate transitions and Chord shape generation, eight-voice overlap, retrigger, tie, and release behavior
-- Trigger/note accent defaults, tie inheritance, engine-specific timbre response, and latched tail behavior
+- Trigger/note accent defaults, empty-step input-accent inheritance and audition, tie inheritance, engine-specific timbre response, and latched tail behavior
 - Bass slide arming through ties, fixed 60 ms glide time, and legato envelope behavior
 - One-step lock overlay and restoration
 - Lock compatibility by track and event type

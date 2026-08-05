@@ -493,7 +493,7 @@ impl Editor {
                 StepEvent::BassNote {
                     degree: t.input_degree.unwrap(),
                     octave: t.input_octave.unwrap(),
-                    accent: false,
+                    accent: t.input_accent,
                     slide: false,
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
@@ -503,7 +503,7 @@ impl Editor {
                 StepEvent::Note {
                     degree: t.input_degree.unwrap(),
                     octave: t.input_octave.unwrap(),
-                    accent: false,
+                    accent: t.input_accent,
                     chord_shape: if t.kind == TrackKind::Chord {
                         t.input_chord_shape
                             .filter(|shape| *shape != ChordShape::default())
@@ -521,7 +521,7 @@ impl Editor {
                 }
             } else {
                 StepEvent::Trigger {
-                    accent: false,
+                    accent: t.input_accent,
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
                     locks: Default::default(),
@@ -586,7 +586,7 @@ impl Editor {
                 ),
                 Some(event) => (
                     *event.locks(),
-                    false,
+                    t.input_accent,
                     false,
                     None,
                     ArpeggioConfig::default(),
@@ -596,7 +596,7 @@ impl Editor {
                 ),
                 None => (
                     Default::default(),
-                    false,
+                    t.input_accent,
                     false,
                     None,
                     ArpeggioConfig::default(),
@@ -909,31 +909,30 @@ impl Editor {
     }
 
     pub fn accent_value(&self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.project
+        let t = self
+            .project
             .tracks
             .get(track)
-            .ok_or(EditError::InvalidTrack)?
-            .steps
-            .get(step)
-            .ok_or(EditError::InvalidStep)?
-            .as_ref()
-            .and_then(StepEvent::accent)
-            .ok_or(EditError::NoAccent)
+            .ok_or(EditError::InvalidTrack)?;
+        match t.steps.get(step).ok_or(EditError::InvalidStep)?.as_ref() {
+            Some(event) => event.accent().ok_or(EditError::NoAccent),
+            None => Ok(t.input_accent),
+        }
     }
 
     pub fn toggle_accent(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
         self.edit(None, move |project| {
-            let event = project
+            let t = project
                 .tracks
                 .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?
-                .steps
-                .get_mut(step)
-                .ok_or(EditError::InvalidStep)?
-                .as_mut()
-                .ok_or(EditError::NoAccent)?;
-            let accent = event.accent_mut().ok_or(EditError::NoAccent)?;
-            *accent = !*accent;
+                .ok_or(EditError::InvalidTrack)?;
+            match t.steps.get_mut(step).ok_or(EditError::InvalidStep)? {
+                Some(event) => {
+                    let accent = event.accent_mut().ok_or(EditError::NoAccent)?;
+                    *accent = !*accent;
+                }
+                None => t.input_accent = !t.input_accent,
+            }
             Ok(())
         })
     }
@@ -1386,26 +1385,49 @@ mod tests {
     }
 
     #[test]
-    fn new_events_are_unaccented_and_bass_notes_do_not_slide() {
+    fn new_events_inherit_the_input_accent_and_bass_notes_do_not_slide() {
         let mut editor = Editor::new(Project::new());
+        editor.toggle_accent(0, 0).unwrap();
         editor.toggle_event(0, 0).unwrap();
-        editor.toggle_event(3, 0).unwrap();
+        assert_eq!(editor.accent_value(0, 0), Ok(true));
+
+        editor.toggle_accent(0, 0).unwrap();
         assert_eq!(editor.accent_value(0, 0), Ok(false));
+        editor.clear(0, 0).unwrap();
+
+        editor.toggle_accent(3, 0).unwrap();
+        editor.toggle_event(3, 0).unwrap();
         assert!(matches!(
             editor.project.tracks[3].steps[0],
             Some(StepEvent::BassNote {
-                accent: false,
+                accent: true,
                 slide: false,
                 ..
             })
         ));
+        editor.toggle_accent(3, 0).unwrap();
+        assert!(editor.project.tracks[3].input_accent);
+        editor.clear(3, 0).unwrap();
+        assert_eq!(editor.accent_value(3, 0), Ok(true));
+        editor.set_note(3, 1, 2).unwrap();
+        assert!(matches!(
+            editor.project.tracks[3].steps[1],
+            Some(StepEvent::BassNote { accent: true, .. })
+        ));
     }
 
     #[test]
-    fn accent_and_slide_are_undoable_and_rejected_where_incompatible() {
+    fn empty_accent_defaults_are_undoable_and_ties_reject_direct_editing() {
         let mut editor = Editor::new(Project::new());
-        editor.set_note(3, 0, 1).unwrap();
+        assert_eq!(editor.accent_value(3, 0), Ok(false));
         editor.toggle_accent(3, 0).unwrap();
+        assert_eq!(editor.accent_value(3, 0), Ok(true));
+        assert!(editor.undo());
+        assert_eq!(editor.accent_value(3, 0), Ok(false));
+        assert!(editor.redo());
+        assert_eq!(editor.accent_value(3, 0), Ok(true));
+
+        editor.set_note(3, 0, 1).unwrap();
         editor.toggle_slide(3, 0).unwrap();
         editor.set_note(3, 0, 5).unwrap();
         assert_eq!(editor.accent_value(3, 0), Ok(true));
@@ -1417,6 +1439,27 @@ mod tests {
         assert_eq!(editor.toggle_accent(3, 1), Err(EditError::NoAccent));
         assert_eq!(editor.toggle_slide(4, 0), Err(EditError::NoSlide));
         assert!(editor.undo());
+    }
+
+    #[test]
+    fn replacing_ties_uses_the_current_input_accent_but_existing_notes_keep_theirs() {
+        let mut editor = Editor::new(Project::new());
+        editor.set_note(3, 0, 1).unwrap();
+        editor.toggle_accent(3, 0).unwrap();
+        editor.toggle_tie(3, 1).unwrap();
+
+        editor.toggle_accent(3, 1).unwrap_err();
+        editor.set_note(3, 1, 2).unwrap();
+        assert!(matches!(
+            editor.project.tracks[3].steps[1],
+            Some(StepEvent::BassNote { accent: false, .. })
+        ));
+
+        editor.set_note(3, 0, 5).unwrap();
+        assert!(matches!(
+            editor.project.tracks[3].steps[0],
+            Some(StepEvent::BassNote { accent: true, .. })
+        ));
     }
 
     #[test]
