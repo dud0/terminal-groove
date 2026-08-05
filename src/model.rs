@@ -6,7 +6,8 @@ pub const MAX_STEP_COUNT: usize = 64;
 pub const STEP_BANK_SIZE: usize = 16;
 pub const STEP_ROW_SIZE: usize = 32;
 pub const TRACK_COUNT: usize = 6;
-pub const PATTERN_COUNT: usize = 100;
+pub const MIN_PATTERN_COUNT: usize = 1;
+pub const MAX_PATTERN_COUNT: usize = 100;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ValidationError {
@@ -14,6 +15,8 @@ pub enum ValidationError {
     Version(u32),
     #[error("tracks: expected exactly six tracks")]
     TrackCount,
+    #[error("patterns: expected between 1 and 100 patterns, got {0}")]
+    PatternCount(usize),
     #[error("tracks[{0}]: expected {1}")]
     TrackOrder(usize, &'static str),
     #[error("tracks[{0}].steps: expected between 1 and 64 steps, got {1}")]
@@ -970,7 +973,7 @@ pub struct SongEntry {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectV6 {
+pub struct Project {
     pub format_version: u32,
     pub globals: Globals,
     pub tracks: Vec<Track>,
@@ -986,7 +989,7 @@ fn p(n: u8) -> Percent {
 fn default_pan() -> Percent {
     Percent(50)
 }
-impl ProjectV6 {
+impl Project {
     pub fn new() -> Self {
         let track = |kind: TrackKind, name: &str, instrument: Instrument| Track {
             kind,
@@ -1018,8 +1021,8 @@ impl ProjectV6 {
             input_octave: Some(3),
             input_chord_shape: (kind == TrackKind::Chord).then_some(ChordShape::default()),
         };
-        let mut project = Self {
-            format_version: 7,
+        Self {
+            format_version: 8,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1094,35 +1097,17 @@ impl ProjectV6 {
                     }),
                 ),
             ],
-            patterns: Vec::new(),
-            song: vec![SongEntry {
-                pattern: 1,
-                bars: 1,
-            }],
-        };
-        project.seed_patterns();
-        project
-    }
-    pub fn seed_patterns(&mut self) {
-        if self.patterns.is_empty() {
-            self.patterns.push(Pattern {
-                tracks: self
-                    .tracks
-                    .iter()
-                    .map(|track| PatternTrack {
-                        steps: track.steps.clone(),
-                    })
-                    .collect(),
-            });
-        }
-        while self.patterns.len() < PATTERN_COUNT {
-            self.patterns.push(Pattern {
+            patterns: vec![Pattern {
                 tracks: (0..TRACK_COUNT)
                     .map(|_| PatternTrack {
                         steps: vec![None; STEP_BANK_SIZE],
                     })
                     .collect(),
-            });
+            }],
+            song: vec![SongEntry {
+                pattern: 1,
+                bars: 1,
+            }],
         }
     }
     pub fn activate_pattern(&mut self, pattern: usize) -> bool {
@@ -1150,22 +1135,8 @@ impl ProjectV6 {
         true
     }
 
-    /// Returns the highest-numbered pattern containing events or a non-default
-    /// sequence length. Pattern 1 is the fallback when all patterns are empty.
-    pub fn last_used_pattern(&self) -> usize {
-        self.patterns
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, pattern)| {
-                pattern.tracks.iter().any(|track| {
-                    track.steps.len() != STEP_BANK_SIZE || track.steps.iter().any(Option::is_some)
-                })
-            })
-            .map_or(0, |(pattern, _)| pattern)
-    }
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 7 {
+        if self.format_version != 8 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -1188,11 +1159,14 @@ impl ProjectV6 {
         {
             return Err(ValidationError::TrackOrder(0, "valid globals"));
         }
-        if self.patterns.len() != PATTERN_COUNT || self.song.is_empty() || self.song.len() > 256 {
+        if !(MIN_PATTERN_COUNT..=MAX_PATTERN_COUNT).contains(&self.patterns.len()) {
+            return Err(ValidationError::PatternCount(self.patterns.len()));
+        }
+        if self.song.is_empty() || self.song.len() > 256 {
             return Err(ValidationError::TrackCount);
         }
         for entry in &self.song {
-            if !(1..=PATTERN_COUNT as u8).contains(&entry.pattern)
+            if !(1..=self.patterns.len() as u8).contains(&entry.pattern)
                 || !(1..=64).contains(&entry.bars)
             {
                 return Err(ValidationError::TrackOrder(0, "valid song"));
@@ -1279,6 +1253,31 @@ impl ProjectV6 {
                 }
                 for (si, event) in track.steps.iter().enumerate() {
                     if let Some(event) = event {
+                        let event_ok = matches!(
+                            (track.kind, event),
+                            (
+                                TrackKind::Kick | TrackKind::Snare | TrackKind::Hat,
+                                StepEvent::Trigger { .. }
+                            ) | (TrackKind::Bass, StepEvent::BassNote { .. })
+                                | (TrackKind::Bass, StepEvent::Tie { .. })
+                                | (TrackKind::Chord | TrackKind::Lead, StepEvent::Note { .. })
+                                | (TrackKind::Chord | TrackKind::Lead, StepEvent::Tie { .. })
+                        );
+                        if !event_ok {
+                            return Err(ValidationError::EventKind(ti, si));
+                        }
+                        if let StepEvent::Note { chord_shape, .. } = event {
+                            if track.kind == TrackKind::Lead && chord_shape.is_some() {
+                                return Err(ValidationError::EventKind(ti, si));
+                            }
+                        }
+                        if let StepEvent::Note { degree, octave, .. }
+                        | StepEvent::BassNote { degree, octave, .. } = event
+                        {
+                            if !(1..=8).contains(degree) || *octave > 7 {
+                                return Err(ValidationError::EventKind(ti, si));
+                            }
+                        }
                         validate_locks(ti, si, track.kind, event.locks())?;
                     }
                 }
@@ -1340,7 +1339,7 @@ impl ProjectV6 {
         Some([midis[0], midis[1], midis[2]])
     }
 }
-impl Default for ProjectV6 {
+impl Default for Project {
     fn default() -> Self {
         Self::new()
     }
@@ -1743,30 +1742,20 @@ mod tests {
     use super::*;
     #[test]
     fn default_valid() {
-        let project = ProjectV6::new();
-        assert_eq!(project.patterns.len(), PATTERN_COUNT);
+        let project = Project::new();
+        assert_eq!(project.patterns.len(), MIN_PATTERN_COUNT);
         project.validate().unwrap();
     }
     #[test]
-    fn last_used_pattern_finds_highest_nonempty_or_resized_slot() {
-        let mut project = ProjectV6::new();
-        assert_eq!(project.last_used_pattern(), 0);
-
-        project.patterns[36].tracks[0].steps[0] = Some(StepEvent::Trigger {
-            accent: false,
-            locks: ParameterLocks::default(),
-        });
-        assert_eq!(project.last_used_pattern(), 36);
-
-        project.patterns[99].tracks[2].steps.resize(17, None);
-        assert_eq!(project.last_used_pattern(), 99);
-
-        project.patterns[99].tracks[2].steps = vec![None; STEP_BANK_SIZE];
-        assert_eq!(project.last_used_pattern(), 36);
-    }
-    #[test]
     fn song_entries_accept_pattern_100_and_reject_pattern_101() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
+        project.patterns.resize_with(100, || Pattern {
+            tracks: (0..TRACK_COUNT)
+                .map(|_| PatternTrack {
+                    steps: vec![None; STEP_BANK_SIZE],
+                })
+                .collect(),
+        });
         project.song[0].pattern = 100;
         project.validate().unwrap();
 
@@ -1775,7 +1764,7 @@ mod tests {
     }
     #[test]
     fn reverb_globals_validate_boundaries() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.globals.reverb_tone = p(101);
         assert!(project.validate().is_err());
 
@@ -1788,7 +1777,7 @@ mod tests {
     }
     #[test]
     fn scale_and_frequency() {
-        let mut p = ProjectV6::new();
+        let mut p = Project::new();
         assert_eq!(p.note_midi(8, 3), Some(60));
         p.globals.key = PitchClass::A;
         assert!((p.note_frequency(1, 4).unwrap() - 440.0).abs() < 0.001);
@@ -1797,7 +1786,7 @@ mod tests {
     }
     #[test]
     fn diatonic_triads_are_close_position_and_cross_octaves() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         assert_eq!(project.chord_midis(1, 3), Some([48, 52, 55]));
         assert_eq!(project.chord_midis(7, 3), Some([59, 62, 65]));
         assert_eq!(project.chord_midis(8, 3), Some([60, 64, 67]));
@@ -1810,7 +1799,7 @@ mod tests {
 
     #[test]
     fn chord_shapes_use_diatonic_degrees_and_lift_inversions() {
-        let project = ProjectV6::new();
+        let project = Project::new();
         assert_eq!(ChordShape::SeventhRoot.to_string(), "1-3-5-7");
         assert_eq!(
             project.chord_midis_for(1, 3, ChordShape::SeventhRoot),
@@ -1847,7 +1836,7 @@ mod tests {
     }
     #[test]
     fn variable_step_counts_and_wrapped_ties_validate() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].steps = vec![None; 1];
         project.tracks[1].steps = vec![None; MAX_STEP_COUNT];
         project.tracks[3].steps = vec![None; 3];
@@ -1912,7 +1901,7 @@ mod tests {
     }
     #[test]
     fn lock_compatibility_matches_track_kind() {
-        let mut drum = ProjectV6::new();
+        let mut drum = Project::new();
         drum.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             locks: ParameterLocks {
@@ -1925,7 +1914,7 @@ mod tests {
             Err(ValidationError::Lock(0, 0, "cutoff"))
         ));
 
-        let mut synth = ProjectV6::new();
+        let mut synth = Project::new();
         synth.tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -1944,7 +1933,7 @@ mod tests {
 
     #[test]
     fn shared_parameter_access_matches_track_compatibility() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         for track in &mut project.tracks {
             for parameter in ParameterId::ALL {
                 let current = track.parameter(parameter);
@@ -2007,7 +1996,7 @@ mod tests {
     fn all_keys_map_degrees() {
         for key in PitchClass::ALL {
             for scale in [Scale::Major, Scale::NaturalMinor] {
-                let mut p = ProjectV6::new();
+                let mut p = Project::new();
                 p.globals.key = key;
                 p.globals.scale = scale;
                 for degree in 1..=8 {
@@ -2050,7 +2039,7 @@ mod tests {
                 < 0.001
         );
 
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].lfos.cutoff = Some(LfoConfig::default());
         assert_eq!(project.validate(), Err(ValidationError::Lfo(0, "cutoff")));
         project.tracks[0].lfos.cutoff = None;

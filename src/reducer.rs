@@ -1,6 +1,6 @@
 use crate::model::{
-    ChordShape, LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterValue, Percent,
-    ProjectV6, StepEvent, TrackKind, Waveform, tie_source,
+    ChordShape, LfoConfig, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterValue, Pattern,
+    Percent, Project, StepEvent, TrackKind, Waveform, tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -52,8 +52,10 @@ impl std::fmt::Display for EditError {
 
 #[derive(Clone)]
 struct Revision {
-    before: ProjectV6,
-    after: ProjectV6,
+    before: Project,
+    after: Project,
+    before_pattern: usize,
+    after_pattern: usize,
     coalesce: Option<CoalesceKey>,
     at: Instant,
 }
@@ -61,20 +63,22 @@ struct Revision {
 pub struct CoalesceKey(pub usize, pub usize, pub u8);
 
 pub struct Editor {
-    pub project: ProjectV6,
+    pub project: Project,
     pattern: usize,
-    saved: ProjectV6,
+    saved: Project,
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
+    clipboard: Option<Pattern>,
 }
 impl Editor {
-    pub fn new(project: ProjectV6) -> Self {
+    pub fn new(project: Project) -> Self {
         Self {
             saved: project.clone(),
             project,
             pattern: 0,
             undo: VecDeque::new(),
             redo: Vec::new(),
+            clipboard: None,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -88,46 +92,155 @@ impl Editor {
             revision.coalesce = None;
         }
     }
-    pub fn replace_loaded(&mut self, p: ProjectV6) {
+    pub fn replace_loaded(&mut self, p: Project) {
         self.project = p.clone();
         self.saved = p;
         self.undo.clear();
         self.redo.clear();
         self.pattern = 0;
+        self.clipboard = None;
     }
     pub fn pattern(&self) -> usize {
         self.pattern
     }
     pub fn select_pattern(&mut self, pattern: usize) -> bool {
-        if pattern >= crate::model::PATTERN_COUNT || !self.project.activate_pattern(pattern) {
+        if pattern >= self.project.patterns.len() || !self.project.activate_pattern(pattern) {
             return false;
         }
         self.pattern = pattern;
         true
     }
-    pub fn duplicate_pattern(&mut self, destination: usize) -> Result<bool, EditError> {
-        let source = self.pattern;
-        if destination >= crate::model::PATTERN_COUNT || destination == source {
+    fn empty_pattern() -> Pattern {
+        Pattern {
+            tracks: (0..crate::model::TRACK_COUNT)
+                .map(|_| crate::model::PatternTrack {
+                    steps: vec![None; crate::model::STEP_BANK_SIZE],
+                })
+                .collect(),
+        }
+    }
+    fn current_pattern(&self) -> Pattern {
+        let mut pattern = self.project.patterns[self.pattern].clone();
+        for (dst, track) in pattern.tracks.iter_mut().zip(&self.project.tracks) {
+            dst.steps = track.steps.clone();
+        }
+        pattern
+    }
+    fn pattern_structure_edit<F>(&mut self, f: F) -> Result<bool, EditError>
+    where
+        F: FnOnce(&mut Project, usize) -> Result<usize, EditError>,
+    {
+        self.project.store_active_pattern(self.pattern);
+        let before = self.project.clone();
+        let before_pattern = self.pattern;
+        let next_pattern = f(&mut self.project, self.pattern)?;
+        self.pattern = next_pattern;
+        self.project.activate_pattern(self.pattern);
+        if before == self.project {
             return Ok(false);
         }
-        self.edit(None, move |p| {
-            p.patterns[destination] = p.patterns[source].clone();
-            Ok(())
+        self.push_revision(
+            before,
+            before_pattern,
+            self.project.clone(),
+            self.pattern,
+            None,
+        );
+        Ok(true)
+    }
+    fn push_revision(
+        &mut self,
+        before: Project,
+        before_pattern: usize,
+        after: Project,
+        after_pattern: usize,
+        coalesce: Option<CoalesceKey>,
+    ) {
+        if self.undo.len() == 256 {
+            self.undo.pop_front();
+        }
+        self.undo.push_back(Revision {
+            before,
+            after,
+            before_pattern,
+            after_pattern,
+            coalesce,
+            at: Instant::now(),
+        });
+        self.redo.clear();
+    }
+    pub fn insert_pattern(&mut self) -> Result<bool, EditError> {
+        if self.project.patterns.len() >= crate::model::MAX_PATTERN_COUNT {
+            return Ok(false);
+        }
+        self.pattern_structure_edit(|p, cursor| {
+            p.patterns.insert(cursor + 1, Self::empty_pattern());
+            for entry in &mut p.song {
+                if usize::from(entry.pattern) > cursor + 1 {
+                    entry.pattern += 1;
+                }
+            }
+            Ok(cursor + 1)
+        })
+    }
+    pub fn duplicate_pattern(&mut self) -> Result<bool, EditError> {
+        if self.project.patterns.len() >= crate::model::MAX_PATTERN_COUNT {
+            return Ok(false);
+        }
+        self.pattern_structure_edit(|p, cursor| {
+            p.patterns.insert(cursor + 1, p.patterns[cursor].clone());
+            for entry in &mut p.song {
+                if usize::from(entry.pattern) > cursor + 1 {
+                    entry.pattern += 1;
+                }
+            }
+            Ok(cursor + 1)
+        })
+    }
+    pub fn copy_pattern(&mut self) {
+        self.clipboard = Some(self.current_pattern());
+    }
+    pub fn cut_pattern(&mut self) -> Result<bool, EditError> {
+        self.clipboard = Some(self.current_pattern());
+        self.delete_pattern()
+    }
+    pub fn paste_pattern(&mut self) -> Result<bool, EditError> {
+        let Some(pattern) = self.clipboard.clone() else {
+            return Ok(false);
+        };
+        self.pattern_structure_edit(|p, cursor| {
+            p.patterns[cursor] = pattern;
+            Ok(cursor)
+        })
+    }
+    pub fn delete_pattern(&mut self) -> Result<bool, EditError> {
+        self.pattern_structure_edit(|p, cursor| {
+            if p.patterns.len() == crate::model::MIN_PATTERN_COUNT {
+                p.patterns[cursor] = Self::empty_pattern();
+                return Ok(cursor);
+            }
+            p.patterns.remove(cursor);
+            let fallback = cursor.min(p.patterns.len() - 1) + 1;
+            let removed = cursor + 1;
+            for entry in &mut p.song {
+                if entry.pattern == removed as u8 {
+                    entry.pattern = fallback as u8;
+                } else if entry.pattern > removed as u8 {
+                    entry.pattern -= 1;
+                }
+            }
+            Ok(fallback - 1)
         })
     }
     pub fn clear_pattern(&mut self) -> Result<bool, EditError> {
-        let pattern = self.pattern;
-        self.edit(None, move |p| {
-            for track in &mut p.patterns[pattern].tracks {
-                track.steps = vec![None; crate::model::STEP_BANK_SIZE];
-            }
-            p.activate_pattern(pattern);
-            Ok(())
+        self.pattern_structure_edit(|p, cursor| {
+            p.patterns[cursor] = Self::empty_pattern();
+            Ok(cursor)
         })
     }
     pub fn edit<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
     where
-        F: FnOnce(&mut ProjectV6) -> Result<(), EditError>,
+        F: FnOnce(&mut Project) -> Result<(), EditError>,
     {
         let before = self.project.clone();
         f(&mut self.project)?;
@@ -143,6 +256,7 @@ impl Editor {
         if merge {
             let r = self.undo.back_mut().unwrap();
             r.after = self.project.clone();
+            r.after_pattern = self.pattern;
             r.at = now;
         } else {
             if self.undo.len() == 256 {
@@ -151,6 +265,8 @@ impl Editor {
             self.undo.push_back(Revision {
                 before,
                 after: self.project.clone(),
+                before_pattern: self.pattern,
+                after_pattern: self.pattern,
                 coalesce: key,
                 at: now,
             });
@@ -161,6 +277,7 @@ impl Editor {
     pub fn undo(&mut self) -> bool {
         if let Some(r) = self.undo.pop_back() {
             self.project = r.before.clone();
+            self.pattern = r.before_pattern;
             self.redo.push(r);
             true
         } else {
@@ -170,6 +287,7 @@ impl Editor {
     pub fn redo(&mut self) -> bool {
         if let Some(r) = self.redo.pop() {
             self.project = r.after.clone();
+            self.pattern = r.after_pattern;
             self.undo.push_back(r);
             true
         } else {
@@ -620,7 +738,7 @@ mod tests {
     use super::*;
     #[test]
     fn undo_dirty_redo() {
-        let mut e = Editor::new(ProjectV6::new());
+        let mut e = Editor::new(Project::new());
         e.toggle_event(0, 0).unwrap();
         assert!(e.is_dirty());
         assert!(e.undo());
@@ -628,9 +746,48 @@ mod tests {
         assert!(e.redo());
         assert!(e.is_dirty());
     }
+
+    #[test]
+    fn dynamic_pattern_operations_shift_cursor_and_are_undoable() {
+        let mut editor = Editor::new(Project::new());
+        editor.toggle_event(0, 0).unwrap();
+        assert!(editor.insert_pattern().unwrap());
+        assert_eq!(editor.project.patterns.len(), 2);
+        assert_eq!(editor.pattern(), 1);
+        assert!(editor.project.patterns[0].tracks[0].steps[0].is_some());
+        assert!(editor.project.patterns[1].tracks[0].steps[0].is_none());
+
+        assert!(editor.duplicate_pattern().unwrap());
+        assert_eq!(editor.project.patterns.len(), 3);
+        assert_eq!(editor.pattern(), 2);
+        assert!(editor.delete_pattern().unwrap());
+        assert_eq!(editor.project.patterns.len(), 2);
+        assert_eq!(editor.pattern(), 1);
+        assert!(editor.undo());
+        assert_eq!(editor.project.patterns.len(), 3);
+        assert_eq!(editor.pattern(), 2);
+        assert!(editor.redo());
+        assert_eq!(editor.project.patterns.len(), 2);
+    }
+
+    #[test]
+    fn copy_cut_paste_and_final_pattern_reset() {
+        let mut editor = Editor::new(Project::new());
+        editor.toggle_event(0, 0).unwrap();
+        editor.copy_pattern();
+        editor.clear_pattern().unwrap();
+        assert!(editor.paste_pattern().unwrap());
+        assert!(editor.project.tracks[0].steps[0].is_some());
+        assert!(editor.cut_pattern().unwrap());
+        assert_eq!(editor.project.patterns.len(), 1);
+        assert!(editor.project.tracks[0].steps.iter().all(Option::is_none));
+        assert!(!editor.delete_pattern().unwrap());
+        assert_eq!(editor.project.patterns.len(), 1);
+        assert!(editor.project.tracks[0].steps.iter().all(Option::is_none));
+    }
     #[test]
     fn edit_invalidates_redo() {
-        let mut e = Editor::new(ProjectV6::new());
+        let mut e = Editor::new(Project::new());
         e.toggle_event(0, 0).unwrap();
         e.undo();
         e.toggle_event(0, 1).unwrap();
@@ -638,7 +795,7 @@ mod tests {
     }
     #[test]
     fn tie_cleanup_is_atomic() {
-        let mut e = Editor::new(ProjectV6::new());
+        let mut e = Editor::new(Project::new());
         e.set_note(3, 0, 1).unwrap();
         e.toggle_tie(3, 1).unwrap();
         e.toggle_tie(3, 2).unwrap();
@@ -658,7 +815,7 @@ mod tests {
 
     #[test]
     fn new_events_are_unaccented_and_bass_notes_do_not_slide() {
-        let mut editor = Editor::new(ProjectV6::new());
+        let mut editor = Editor::new(Project::new());
         editor.toggle_event(0, 0).unwrap();
         editor.toggle_event(3, 0).unwrap();
         assert_eq!(editor.accent_value(0, 0), Ok(false));
@@ -674,7 +831,7 @@ mod tests {
 
     #[test]
     fn accent_and_slide_are_undoable_and_rejected_where_incompatible() {
-        let mut editor = Editor::new(ProjectV6::new());
+        let mut editor = Editor::new(Project::new());
         editor.set_note(3, 0, 1).unwrap();
         editor.toggle_accent(3, 0).unwrap();
         editor.toggle_slide(3, 0).unwrap();
@@ -692,7 +849,7 @@ mod tests {
 
     #[test]
     fn edits_all_track_parameter_kinds() {
-        let mut e = Editor::new(ProjectV6::new());
+        let mut e = Editor::new(Project::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
 
         e.set_parameter(0, 0, Scope::Base, ParameterId::Level, p(61), None)
@@ -737,7 +894,7 @@ mod tests {
 
     #[test]
     fn lock_edits_inherit_and_clear_one_parameter() {
-        let mut e = Editor::new(ProjectV6::new());
+        let mut e = Editor::new(Project::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());
         e.toggle_event(0, 0).unwrap();
         assert_eq!(
@@ -779,7 +936,7 @@ mod tests {
 
     #[test]
     fn incompatible_and_empty_locks_are_rejected() {
-        let mut e = Editor::new(ProjectV6::new());
+        let mut e = Editor::new(Project::new());
         let value = ParameterValue::Percent(Percent::new(10).unwrap());
         assert_eq!(
             e.set_parameter(0, 0, Scope::Lock, ParameterId::Cutoff, value, None),
@@ -798,7 +955,7 @@ mod tests {
 
     #[test]
     fn resize_cleans_wrapped_ties_and_undo_restores_them() {
-        let mut e = Editor::new(ProjectV6::new());
+        let mut e = Editor::new(Project::new());
         e.set_track_length(3, 4, None).unwrap();
         e.set_note(3, 3, 1).unwrap();
         e.toggle_tie(3, 0).unwrap();
@@ -819,7 +976,7 @@ mod tests {
 
     #[test]
     fn duplicate_track_copies_events_locks_and_is_one_undo_step() {
-        let mut e = Editor::new(ProjectV6::new());
+        let mut e = Editor::new(Project::new());
         e.set_track_length(3, 4, None).unwrap();
         e.set_note(3, 3, 2).unwrap();
         e.set_parameter(
@@ -843,7 +1000,7 @@ mod tests {
 
     #[test]
     fn duplicate_rejects_lengths_above_32_without_state_change() {
-        let mut e = Editor::new(ProjectV6::new());
+        let mut e = Editor::new(Project::new());
         e.set_track_length(0, 33, None).unwrap();
         e.mark_saved();
         assert_eq!(e.duplicate_track(0), Err(EditError::CannotDouble));
@@ -853,7 +1010,7 @@ mod tests {
 
     #[test]
     fn lfo_assignment_is_validated_and_undoable() {
-        let mut editor = Editor::new(ProjectV6::new());
+        let mut editor = Editor::new(Project::new());
         let config = LfoConfig::default();
         editor
             .set_lfo(3, ParameterId::Cutoff, Some(config), None)
@@ -874,7 +1031,7 @@ mod tests {
 
     #[test]
     fn chord_shape_edits_selected_notes_and_empty_step_defaults() {
-        let mut editor = Editor::new(ProjectV6::new());
+        let mut editor = Editor::new(Project::new());
         editor
             .set_chord_shape(4, 0, ChordShape::SeventhRoot)
             .unwrap();

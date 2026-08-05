@@ -5,8 +5,8 @@ use crate::{
     },
     engine::{GateAction, StepClock, synth_action},
     model::{
-        ChordShape, ChorusMode, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT, PATTERN_COUNT,
-        ParameterId, ParameterLocks, Percent, ProjectV6, StepEvent, TRACK_COUNT, Waveform,
+        ChordShape, ChorusMode, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT, ParameterId,
+        ParameterLocks, Percent, Project, StepEvent, TRACK_COUNT, Waveform,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -34,12 +34,12 @@ struct AudioTrack {
     input_octave: u8,
     input_chord_shape: ChordShape,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct AudioSequence {
     steps: [Option<StepEvent>; MAX_STEP_COUNT],
     step_count: u8,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct AudioPattern {
     tracks: [AudioSequence; TRACK_COUNT],
 }
@@ -65,7 +65,7 @@ impl ParameterSmoothing {
     }
 }
 impl AudioProject {
-    pub fn from_project(project: &ProjectV6) -> Self {
+    pub fn from_project(project: &Project) -> Self {
         Self {
             globals: project.globals,
             tracks: std::array::from_fn(|i| {
@@ -83,8 +83,11 @@ impl AudioProject {
                     input_chord_shape: t.input_chord_shape.unwrap_or_default(),
                 }
             }),
-            patterns: (0..PATTERN_COUNT)
-                .map(|pattern| AudioPattern {
+            patterns: project
+                .patterns
+                .iter()
+                .enumerate()
+                .map(|(pattern, source)| AudioPattern {
                     tracks: std::array::from_fn(|track| {
                         // `tracks` is the editor's current-pattern workspace. Keeping
                         // pattern 1 sourced from it also preserves the public model
@@ -92,7 +95,7 @@ impl AudioProject {
                         let steps = if pattern == 0 {
                             &project.tracks[track].steps
                         } else {
-                            &project.patterns[pattern].tracks[track].steps
+                            &source.tracks[track].steps
                         };
                         AudioSequence {
                             steps: std::array::from_fn(|s| steps.get(s).copied().flatten()),
@@ -162,11 +165,11 @@ impl Audio {
     pub fn available_commands(&self) -> usize {
         self.producer.slots()
     }
-    pub fn snapshot(project: &ProjectV6) -> AudioCommand {
+    pub fn snapshot(project: &Project) -> AudioCommand {
         Self::snapshot_with_smoothing(project, ParameterSmoothing::Default)
     }
     pub fn snapshot_with_smoothing(
-        project: &ProjectV6,
+        project: &Project,
         smoothing: ParameterSmoothing,
     ) -> AudioCommand {
         AudioCommand::ReplaceProject {
@@ -220,7 +223,7 @@ fn choose_device(requested: Option<&str>) -> Result<Device> {
 }
 
 #[allow(deprecated)]
-pub fn open(requested: Option<&str>, project: &ProjectV6) -> Result<Audio> {
+pub fn open(requested: Option<&str>, project: &Project) -> Result<Audio> {
     let device = choose_device(requested)?;
     let name = device.name().unwrap_or_else(|_| "unknown".into());
     let supported = device
@@ -659,7 +662,9 @@ impl Renderer {
                 self.status.active_pattern.store(0, Ordering::Release);
                 self.status.queued_pattern.store(u8::MAX, Ordering::Release);
             }
-            AudioCommand::SelectPattern { pattern } if (pattern as usize) < PATTERN_COUNT => {
+            AudioCommand::SelectPattern { pattern }
+                if (pattern as usize) < self.project.patterns.len() =>
+            {
                 if self.playing {
                     self.queued_pattern = Some(pattern as usize);
                     self.status.queued_pattern.store(pattern, Ordering::Release);
@@ -669,8 +674,23 @@ impl Renderer {
             }
             AudioCommand::SelectPattern { .. } => {}
             AudioCommand::ReplaceProject { project, smoothing } => {
+                let old_active = self.active_pattern;
+                let old_queued = self.queued_pattern;
+                let old_project = &self.project;
+                let active_pattern = rebase_pattern_index(old_project, &project, old_active);
+                let queued_pattern =
+                    old_queued.map(|index| rebase_pattern_index(old_project, &project, index));
                 self.reconcile_lfos(&project);
                 self.project = *project;
+                self.active_pattern = active_pattern;
+                self.queued_pattern = queued_pattern;
+                self.status
+                    .active_pattern
+                    .store(active_pattern as u8, Ordering::Release);
+                self.status.queued_pattern.store(
+                    queued_pattern.map_or(u8::MAX, |pattern| pattern as u8),
+                    Ordering::Release,
+                );
                 let smoothing_samples = smoothing.samples(self.sr);
                 for (track, next) in self.next_steps.iter_mut().enumerate() {
                     if *next
@@ -1888,6 +1908,24 @@ impl Renderer {
     }
 }
 
+fn rebase_pattern_index(old: &AudioProject, next: &AudioProject, index: usize) -> usize {
+    if next.patterns.is_empty() {
+        return 0;
+    }
+    let Some(pattern) = old.patterns.get(index) else {
+        return index.min(next.patterns.len() - 1);
+    };
+    next.patterns
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| **candidate == *pattern)
+        .min_by_key(|(candidate, _)| candidate.abs_diff(index))
+        .map_or_else(
+            || index.min(next.patterns.len() - 1),
+            |(candidate, _)| candidate,
+        )
+}
+
 fn render<T: Copy, F: Fn(f32) -> T>(
     out: &mut [T],
     channels: usize,
@@ -1917,7 +1955,7 @@ fn modulated_percent(center: f32, offset: f32) -> f32 {
 }
 
 /// Deterministic, device-independent rendering used by tests and diagnostics.
-pub fn render_offline(project: &ProjectV6, sample_rate: u32, frames: usize) -> Vec<(f32, f32)> {
+pub fn render_offline(project: &Project, sample_rate: u32, frames: usize) -> Vec<(f32, f32)> {
     let status = Arc::new(AudioStatus::default());
     let mut renderer = Renderer::new(AudioProject::from_project(project), sample_rate, status);
     renderer.command(AudioCommand::PlayPause);
@@ -1947,7 +1985,7 @@ mod tests {
     }
     #[test]
     fn snapshot_contains_all_steps_without_heap_backed_commands() {
-        let mut p = ProjectV6::new();
+        let mut p = Project::new();
         p.tracks[0].steps.resize(MAX_STEP_COUNT, None);
         let AudioCommand::ReplaceProject {
             project: s,
@@ -1964,8 +2002,25 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_preserves_dynamic_pattern_count_and_indexes() {
+        let mut project = Project::new();
+        let extra = project.patterns[0].clone();
+        project.patterns.push(extra.clone());
+        project.patterns.push(extra);
+        project.patterns[2].tracks[1].steps.resize(24, None);
+        let AudioCommand::ReplaceProject {
+            project: snapshot, ..
+        } = Audio::snapshot(&project)
+        else {
+            panic!()
+        };
+        assert_eq!(snapshot.patterns.len(), 3);
+        assert_eq!(snapshot.patterns[2].tracks[1].step_count, 24);
+    }
+
+    #[test]
     fn renderer_reports_independent_track_playheads() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].steps.resize(3, None);
         project.tracks[1].steps.resize(5, None);
         let status = Arc::new(AudioStatus::default());
@@ -1984,7 +2039,7 @@ mod tests {
     }
     #[test]
     fn offline_render_is_deterministic_and_finite() {
-        let mut p = ProjectV6::new();
+        let mut p = Project::new();
         p.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             locks: Default::default(),
@@ -1998,7 +2053,7 @@ mod tests {
 
     #[test]
     fn active_chord_and_lead_render_is_finite_at_44100_hz() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         for track in &mut project.tracks[..3] {
             track.muted = true;
         }
@@ -2036,7 +2091,7 @@ mod tests {
     #[test]
     fn accent_increases_drum_and_bass_peaks() {
         fn drum_peak(accent: bool) -> f32 {
-            let mut project = ProjectV6::new();
+            let mut project = Project::new();
             project.tracks[0].steps[0] = Some(StepEvent::Trigger {
                 accent,
                 locks: Default::default(),
@@ -2050,7 +2105,7 @@ mod tests {
         }
 
         fn bass_peak(accent: bool) -> f32 {
-            let mut project = ProjectV6::new();
+            let mut project = Project::new();
             project.tracks[3].steps[0] = Some(StepEvent::BassNote {
                 degree: 1,
                 octave: 3,
@@ -2072,7 +2127,7 @@ mod tests {
 
     #[test]
     fn active_bass_keeps_latched_accent_through_ties_and_project_edits() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
@@ -2108,7 +2163,7 @@ mod tests {
 
     #[test]
     fn bass_slide_is_legato_and_reaches_pitch_in_sixty_milliseconds() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
@@ -2147,7 +2202,7 @@ mod tests {
 
     #[test]
     fn representative_groove_has_calibrated_rms_and_safe_peak() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         for step in [0, 4, 8, 12] {
             project.tracks[0].steps[step] = Some(StepEvent::Trigger {
                 accent: step == 0,
@@ -2215,7 +2270,7 @@ mod tests {
                 .sqrt()
         }
 
-        let mut dry_project = ProjectV6::new();
+        let mut dry_project = Project::new();
         dry_project.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             locks: Default::default(),
@@ -2238,11 +2293,8 @@ mod tests {
     #[test]
     fn resume_triggers_the_next_step_immediately() {
         let status = Arc::new(AudioStatus::default());
-        let mut renderer = Renderer::new(
-            AudioProject::from_project(&ProjectV6::new()),
-            48_000,
-            status,
-        );
+        let mut renderer =
+            Renderer::new(AudioProject::from_project(&Project::new()), 48_000, status);
         renderer.command(AudioCommand::PlayPause);
         assert_eq!(renderer.clock.next_step, 0);
         renderer.next();
@@ -2258,7 +2310,7 @@ mod tests {
 
     #[test]
     fn drum_mixer_lock_reverts_on_the_following_boundary() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             locks: ParameterLocks {
@@ -2282,7 +2334,7 @@ mod tests {
 
     #[test]
     fn current_step_locks_are_latched_until_the_next_boundary() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].steps.resize(1, None);
         project.tracks[3].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
@@ -2314,7 +2366,7 @@ mod tests {
 
     #[test]
     fn bass_tie_locks_inherit_source_note_and_allow_tie_overrides() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
@@ -2356,7 +2408,7 @@ mod tests {
 
     #[test]
     fn wrapped_bass_tie_locks_inherit_from_wrapped_source_note() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].steps.resize(3, None);
         project.tracks[3].steps[0] = Some(StepEvent::Tie {
             locks: Default::default(),
@@ -2379,7 +2431,7 @@ mod tests {
 
     #[test]
     fn fader_snapshot_ramps_an_active_drum_mixer_value_over_thirty_ms() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].level = Percent::new(100).unwrap();
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
@@ -2403,7 +2455,7 @@ mod tests {
 
     #[test]
     fn synth_filter_mappings_match_the_specified_limits() {
-        let project = AudioProject::from_project(&ProjectV6::new());
+        let project = AudioProject::from_project(&Project::new());
         let mut voice = SynthVoice::new(48_000.0);
         let mut locks = ParameterLocks {
             cutoff: Percent::new(0),
@@ -2441,7 +2493,7 @@ mod tests {
 
     #[test]
     fn chord_track_triggers_close_position_triads_and_alternates_voice_groups() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -2512,7 +2564,7 @@ mod tests {
 
     #[test]
     fn chord_track_renders_four_note_shapes_with_overlap_capacity() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -2546,7 +2598,7 @@ mod tests {
                 .sqrt()
         }
 
-        let mut dry_project = ProjectV6::new();
+        let mut dry_project = Project::new();
         for (index, track) in dry_project.tracks.iter_mut().enumerate() {
             track.muted = index != 4;
         }
@@ -2572,7 +2624,7 @@ mod tests {
 
     #[test]
     fn sequence_lfo_freezes_on_pause_and_resets_on_stop() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].lfos.level = Some(crate::model::LfoConfig {
             rate: crate::model::LfoRate::Free {
                 rate_percent: Percent::new(100).unwrap(),

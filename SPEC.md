@@ -68,10 +68,10 @@ All sound is synthesized in real time. The application contains no audio samples
 
 ### 2.2 Patterns
 
-- A project contains 100 pattern slots, numbered P1 through P100. Each pattern owns the six track sequences; instrument, mixer, global, and effect settings are shared.
-- `Ctrl+PageUp` and `Ctrl+PageDown` select the previous or next pattern and wrap at the ends of the bank. `Home` selects P1. `End` selects the highest-numbered pattern containing an event or a non-default sequence length, falling back to P1 when all patterns are empty.
+- A project contains 1 through 100 dynamic patterns, numbered from P1. Each pattern owns the six track sequences; instrument, mixer, global, and effect settings are shared. New projects contain one empty pattern.
+- `Ctrl+P` opens the pattern dialog. Left/right, `Home`, and `End` select patterns. `N` inserts an empty pattern after the cursor, `D` duplicates it, `C` copies it, `X` cuts it, `V` replaces it from the clipboard, and `Delete` removes it. The final pattern cannot be removed and is reset to empty.
 - Pattern selection while stopped is immediate. While playing, the selected pattern is queued for the next bar.
-- Existing version-7 projects with fewer than 100 patterns are extended with empty pattern slots when loaded. Version 6 projects are migrated to version 7 as before.
+- Pattern insertion, deletion, and replacement rebase active and queued playback indexes so queued playback continues to refer to the same pattern where possible.
 
 ### 2.3 Drum events
 
@@ -294,9 +294,11 @@ The application uses ordinary portable terminal press events. It must not requir
 | --- | --- | --- |
 | Anywhere | `Space` | Play/pause |
 | Anywhere | `.` | Stop, reset, and clear effect tails |
-| Anywhere | `Ctrl+PageUp` / `Ctrl+PageDown` | Select the previous/next pattern, wrapping across the 100-pattern bank |
-| Anywhere | `Home` | Select Pattern 1 |
-| Anywhere | `End` | Select the highest-numbered pattern containing events or a non-default length |
+| Anywhere | `Ctrl+P` | Open the dynamic pattern dialog |
+| Pattern dialog | Left/right, `Home`, `End` | Select a pattern |
+| Pattern dialog | `N` / `D` | Insert an empty pattern / duplicate the cursor pattern |
+| Pattern dialog | `C` / `X` / `V` | Copy / cut / replace the cursor pattern |
+| Pattern dialog | `Delete` | Remove the cursor pattern, resetting the final pattern instead |
 | Anywhere | `o` | Audition selected track/step without editing |
 | Anywhere | `Ctrl+S` | Save, prompting if no current path exists |
 | Anywhere | `Ctrl+Shift+S` | Save as |
@@ -443,7 +445,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`, but the application does not silently alter a user-supplied filename.
-- Version 7 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, pattern counts other than 100, step counts outside 1 through 64, incompatible events/locks/LFOs, and invalid tie graphs. Version 6 is migrated; versions 1 through 5 and unknown future versions are rejected.
+- Version 8 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. Versions 1 through 7, missing versions, and unknown future versions are rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -453,7 +455,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 7,
+  "format_version": 8,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -554,7 +556,7 @@ A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `s
 
 The Rust model should express and validate the schema through these domain concepts rather than untyped maps:
 
-- `ProjectV6`
+- `Project`
 - `Globals`
 - `Track` with fixed `TrackKind`
 - `KickParameters`, `SnareParameters`, `HatParameters`, `BassParameters`, `ChordParameters`, and `LeadParameters`

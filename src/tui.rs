@@ -2,9 +2,8 @@ use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
     model::{
         ChordShape, ChorusMode, DelayDivision, GlobalParameterId, LfoConfig, LfoDivision, LfoRate,
-        LfoWaveform, MAX_STEP_COUNT, PATTERN_COUNT, ParameterId, ParameterValue, Percent,
-        ProjectV6, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
-        Waveform,
+        LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, Project, STEP_BANK_SIZE,
+        STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind, Waveform,
     },
     persistence,
     reducer::{Editor, Scope},
@@ -50,6 +49,7 @@ impl Drop for TerminalGuard {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Mode {
     Navigation,
+    PatternDialog,
     ParameterEdit(ParameterId),
     LfoEdit {
         parameter: ParameterId,
@@ -135,7 +135,7 @@ impl FaderAnimation {
     }
 }
 impl App {
-    pub fn new(project: ProjectV6, path: Option<PathBuf>) -> Self {
+    pub fn new(project: Project, path: Option<PathBuf>) -> Self {
         Self {
             editor: Editor::new(project),
             row: 0,
@@ -215,7 +215,7 @@ impl App {
     }
 }
 
-pub fn run(project: ProjectV6, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
+pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
     let old_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -260,6 +260,9 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     if matches!(a.mode, Mode::OpenConfirm(_)) {
         return handle_open_confirm(a, audio, k);
     }
+    if a.mode == Mode::PatternDialog {
+        return handle_pattern_dialog(a, audio, k);
+    }
     if a.mode == Mode::Help {
         if matches!(k.code, KeyCode::Esc | KeyCode::Char('?')) {
             a.mode = Mode::Navigation
@@ -285,25 +288,9 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
         }
         return Ok(());
     }
-    match k.code {
-        KeyCode::Home => {
-            select_pattern(a, audio, 0);
-            return Ok(());
-        }
-        KeyCode::End => {
-            select_pattern(a, audio, a.editor.project.last_used_pattern());
-            return Ok(());
-        }
-        _ => {}
-    }
     if k.modifiers.contains(KeyModifiers::CONTROL) {
         match k.code {
-            KeyCode::PageDown => {
-                select_pattern(a, audio, adjacent_pattern(a.editor.pattern(), true))
-            }
-            KeyCode::PageUp => {
-                select_pattern(a, audio, adjacent_pattern(a.editor.pattern(), false))
-            }
+            KeyCode::Char('p' | 'P') => a.mode = Mode::PatternDialog,
             KeyCode::Char('q' | 'Q') => {
                 if a.editor.is_dirty() {
                     a.mode = Mode::QuitConfirm
@@ -587,14 +574,19 @@ fn select_pattern(a: &mut App, audio: &mut Audio, pattern: usize) {
     if pattern == a.editor.pattern() {
         return;
     }
-    if audio.available_commands() < 2 {
+    let previous = a.editor.pattern();
+    if pattern >= a.editor.project.patterns.len() || audio.available_commands() < 2 {
         a.status = "Audio command queue full; pattern switch rejected".into();
         return;
     }
     if !a.editor.select_pattern(pattern) {
         return;
     }
-    let _ = audio.send(Audio::snapshot(&a.editor.project));
+    if audio.send(Audio::snapshot(&a.editor.project)).is_err() {
+        let _ = a.editor.select_pattern(previous);
+        a.status = "Audio command queue full; pattern switch rejected".into();
+        return;
+    }
     if audio
         .send(AudioCommand::SelectPattern {
             pattern: pattern as u8,
@@ -613,11 +605,84 @@ fn select_pattern(a: &mut App, audio: &mut Audio, pattern: usize) {
     };
 }
 
-fn adjacent_pattern(pattern: usize, forward: bool) -> usize {
+fn adjacent_pattern_in_count(pattern: usize, forward: bool, count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
     if forward {
-        (pattern + 1) % PATTERN_COUNT
+        (pattern + 1) % count
     } else {
-        (pattern + PATTERN_COUNT - 1) % PATTERN_COUNT
+        (pattern + count - 1) % count
+    }
+}
+
+fn handle_pattern_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    match k.code {
+        KeyCode::Esc | KeyCode::Char('p' | 'P') => a.mode = Mode::Navigation,
+        KeyCode::Left => {
+            let pattern = adjacent_pattern_in_count(
+                a.editor.pattern(),
+                false,
+                a.editor.project.patterns.len(),
+            );
+            select_pattern(a, audio, pattern);
+        }
+        KeyCode::Right => {
+            let pattern = adjacent_pattern_in_count(
+                a.editor.pattern(),
+                true,
+                a.editor.project.patterns.len(),
+            );
+            select_pattern(a, audio, pattern);
+        }
+        KeyCode::Home => select_pattern(a, audio, 0),
+        KeyCode::End => select_pattern(a, audio, a.editor.project.patterns.len() - 1),
+        KeyCode::Char('n' | 'N') => {
+            pattern_edit(a, audio, |e| e.insert_pattern(), "Inserted pattern")
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            pattern_edit(a, audio, |e| e.duplicate_pattern(), "Duplicated pattern")
+        }
+        KeyCode::Char('c' | 'C') => {
+            a.editor.copy_pattern();
+            a.status = format!("Copied pattern {}", a.editor.pattern() + 1);
+        }
+        KeyCode::Char('x' | 'X') => pattern_edit(a, audio, |e| e.cut_pattern(), "Cut pattern"),
+        KeyCode::Char('v' | 'V') => pattern_edit(a, audio, |e| e.paste_pattern(), "Pasted pattern"),
+        KeyCode::Delete | KeyCode::Backspace => {
+            pattern_edit(a, audio, |e| e.delete_pattern(), "Deleted pattern")
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn pattern_edit<F>(a: &mut App, audio: &mut Audio, f: F, message: &str)
+where
+    F: FnOnce(&mut Editor) -> Result<bool, crate::reducer::EditError>,
+{
+    if audio.available_commands() < 2 {
+        a.status = "Audio command queue full; pattern edit rejected".into();
+        return;
+    }
+    match f(&mut a.editor) {
+        Ok(true) if sync_project(a, audio) => {
+            if audio
+                .send(AudioCommand::SelectPattern {
+                    pattern: a.editor.pattern() as u8,
+                })
+                .is_ok()
+            {
+                a.step = 0;
+                a.playheads = [None; TRACK_COUNT];
+                a.status = format!("{message}: P{}", a.editor.pattern() + 1);
+            } else {
+                a.status = "Audio command queue full; pattern edit rejected".into();
+            }
+        }
+        Ok(true) => {}
+        Ok(false) => a.status = "No change".into(),
+        Err(e) => a.status = e.to_string(),
     }
 }
 
@@ -1773,6 +1838,7 @@ fn scope_name(scope: Scope) -> &'static str {
 fn mode_name(mode: &Mode) -> String {
     match mode {
         Mode::Navigation => "Navigation".into(),
+        Mode::PatternDialog => "Pattern dialog".into(),
         Mode::ParameterEdit(parameter) => {
             format!("Parameter edit ({})", parameter.display_name())
         }
@@ -2791,7 +2857,11 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     } else {
         "STOP"
     };
-    let pattern_state = format!("P{}", a.editor.pattern() + 1);
+    let pattern_state = format!(
+        "P{} / {}",
+        a.editor.pattern() + 1,
+        a.editor.project.patterns.len()
+    );
     let header = vec![
         Line::from(vec![
             Span::styled(
@@ -2805,7 +2875,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
                 " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
                 device_name, a.editor.project.globals.tempo_bpm
             )),
-            Span::raw("  [Ctrl+PgUp/PgDn] Pattern  [Home] First  [End] Last used"),
+            Span::raw("  [Ctrl+P] Patterns"),
             Span::raw("  [Ctrl+S] Save [Ctrl+O] Open"),
         ]),
         Line::from("[Space] Play/Pause  [.] Stop  [Ctrl+Z/Y] Undo/Redo  [Ctrl+Q] Quit  [?] Help"),
@@ -3004,7 +3074,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+PageUp/Down previous/next, Home first, End last used.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, n pan, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus, e spread, C shape.\nGlobal: t tempo, y delay, f feedback, r reverb time, b tone, p pre-delay, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nPatterns: Ctrl+P opens the dialog; arrows, Home, and End select patterns. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, n pan, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus, e spread, C shape.\nGlobal: t tempo, y delay, f feedback, r reverb time, b tone, p pre-delay, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3016,6 +3086,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         )
     }
     match &a.mode {
+        Mode::PatternDialog => render_pattern_popup(f, area, a),
         Mode::LfoEdit { parameter, field } => {
             let track = a.row - 1;
             if let Ok(Some(config)) = a.editor.lfo(track, *parameter) {
@@ -3112,6 +3183,52 @@ fn render_chord_popup(f: &mut ratatui::Frame, area: Rect, selected: ChordShape, 
             height: 1.min(inner.height),
             ..inner
         },
+    );
+}
+
+fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
+    let height = (a.editor.project.patterns.len() as u16 + 6).min(area.height.saturating_sub(4));
+    let width = 64.min(area.width.saturating_sub(4));
+    let popup_area = Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    f.render_widget(Clear, popup_area);
+    let lines = a
+        .editor
+        .project
+        .patterns
+        .iter()
+        .enumerate()
+        .map(|(index, pattern)| {
+            let used = pattern
+                .tracks
+                .iter()
+                .any(|track| track.steps.iter().any(Option::is_some));
+            let marker = if index == a.editor.pattern() {
+                "▶"
+            } else {
+                " "
+            };
+            let state = if used { "used" } else { "empty" };
+            Line::from(format!(" {marker} P{:03}  {state}", index + 1))
+        })
+        .collect::<Vec<_>>();
+    let mut content = lines;
+    content.push(Line::from(""));
+    content.push(Line::from("←/→ Home End · N insert · D duplicate"));
+    content.push(Line::from(
+        "C copy · X cut · V paste · Delete remove · Esc close",
+    ));
+    f.render_widget(
+        Paragraph::new(content)
+            .block(
+                Block::bordered().title(format!("Patterns ({})", a.editor.project.patterns.len())),
+            )
+            .scroll((a.editor.pattern().min(u16::MAX as usize) as u16, 0)),
+        popup_area,
     );
 }
 
@@ -3535,7 +3652,7 @@ mod tests {
 
     #[test]
     fn parameter_editor_arrows_cycle_visible_controls_and_wrap() {
-        let mut app = App::new(ProjectV6::new(), None);
+        let mut app = App::new(Project::new(), None);
         app.row = 1;
         app.step = 4;
         app.scope = Scope::Lock;
@@ -3559,7 +3676,7 @@ mod tests {
 
     #[test]
     fn page_step_navigation_moves_right_and_wraps_left() {
-        let mut app = App::new(ProjectV6::new(), None);
+        let mut app = App::new(Project::new(), None);
         app.row = 1;
         app.step = 0;
         move_step_page(&mut app, false);
@@ -3571,11 +3688,11 @@ mod tests {
     }
 
     #[test]
-    fn pattern_navigation_wraps_across_the_full_bank() {
-        assert_eq!(adjacent_pattern(0, false), PATTERN_COUNT - 1);
-        assert_eq!(adjacent_pattern(PATTERN_COUNT - 1, true), 0);
-        assert_eq!(adjacent_pattern(3, false), 2);
-        assert_eq!(adjacent_pattern(3, true), 4);
+    fn pattern_navigation_wraps_across_the_dynamic_list() {
+        assert_eq!(adjacent_pattern_in_count(0, false, 3), 2);
+        assert_eq!(adjacent_pattern_in_count(2, true, 3), 0);
+        assert_eq!(adjacent_pattern_in_count(1, false, 3), 0);
+        assert_eq!(adjacent_pattern_in_count(1, true, 3), 2);
     }
 
     #[test]
@@ -3602,7 +3719,7 @@ mod tests {
 
     #[test]
     fn track_jump_clamps_step_and_replaces_incompatible_parameter() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].steps.resize(4, None);
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3631,7 +3748,7 @@ mod tests {
 
     #[test]
     fn accent_readout_resolves_ties_to_their_source_note() {
-        let mut app = App::new(ProjectV6::new(), None);
+        let mut app = App::new(Project::new(), None);
         app.row = 4;
         app.editor.set_note(3, 0, 1).unwrap();
         app.editor.toggle_accent(3, 0).unwrap();
@@ -3682,7 +3799,7 @@ mod tests {
     #[test]
     fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
         let backend = TestBackend::new(120, 34);
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].input_octave = Some(4);
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
@@ -3729,7 +3846,7 @@ mod tests {
 
     #[test]
     fn small_terminal_replaces_main_layout() {
-        let app = App::new(ProjectV6::new(), None);
+        let app = App::new(Project::new(), None);
         let screen = rendered(&app, 119, 34);
         assert!(screen.contains("terminal-groove needs 120x34"));
         assert!(screen.contains("Current: 119x34"));
@@ -3737,7 +3854,7 @@ mod tests {
 
     #[test]
     fn lfo_modal_and_fader_badge_render_at_minimum_size() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3756,7 +3873,7 @@ mod tests {
 
     #[test]
     fn chord_shape_modal_and_title_render_at_minimum_size() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -3779,7 +3896,7 @@ mod tests {
 
     #[test]
     fn chord_shape_editor_page_navigation_follows_each_step() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[4].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -3834,7 +3951,7 @@ mod tests {
 
     #[test]
     fn lfo_control_bank_reports_synced_and_physical_free_rates() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3891,7 +4008,7 @@ mod tests {
 
     #[test]
     fn lfo_controls_are_laid_out_left_to_right() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
         app.row = 4;
@@ -3913,7 +4030,7 @@ mod tests {
 
     #[test]
     fn lock_scope_labels_explicit_and_inherited_values() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -3935,7 +4052,7 @@ mod tests {
 
     #[test]
     fn lock_values_remain_displayed_after_track_navigation() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             locks: crate::model::ParameterLocks {
@@ -3957,7 +4074,7 @@ mod tests {
 
     #[test]
     fn active_parameter_gets_a_visible_fader_outline_and_physical_readout() {
-        let mut app = App::new(ProjectV6::new(), None);
+        let mut app = App::new(Project::new(), None);
         app.row = 4;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
@@ -3967,7 +4084,7 @@ mod tests {
 
     #[test]
     fn lock_parameter_editing_has_a_prominent_banner() {
-        let mut app = App::new(ProjectV6::new(), None);
+        let mut app = App::new(Project::new(), None);
         app.row = 4;
         app.scope = Scope::Lock;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
@@ -3992,7 +4109,7 @@ mod tests {
 
     #[test]
     fn base_parameter_editing_does_not_show_lock_editing_banner() {
-        let mut app = App::new(ProjectV6::new(), None);
+        let mut app = App::new(Project::new(), None);
         app.row = 4;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
@@ -4001,7 +4118,7 @@ mod tests {
 
     #[test]
     fn locked_badge_uses_a_distinct_color() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[3].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -4032,7 +4149,7 @@ mod tests {
 
     #[test]
     fn global_cards_show_all_local_shortcuts() {
-        let app = App::new(ProjectV6::new(), None);
+        let app = App::new(Project::new(), None);
         let screen = rendered(&app, 120, 34);
         for key in ["[t]", "[y]", "[f]", "[r]", "[k]", "[s]"] {
             assert!(screen.contains(key), "missing {key}");
@@ -4124,7 +4241,7 @@ mod tests {
 
     #[test]
     fn vertical_navigation_follows_physical_rows_without_track_cursors() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].steps.resize(64, None);
         project.tracks[1].steps.resize(20, None);
         project.tracks[2].steps.resize(40, None);
@@ -4167,7 +4284,7 @@ mod tests {
 
     #[test]
     fn bank_navigation_handles_partial_banks() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].steps.resize(20, None);
         let mut app = App::new(project, None);
         app.row = 1;
@@ -4180,7 +4297,7 @@ mod tests {
 
     #[test]
     fn sixty_four_step_track_renders_as_two_compact_rows_with_scroll_hint() {
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         for track in &mut project.tracks {
             track.steps.resize(64, None);
         }

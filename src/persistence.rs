@@ -1,4 +1,4 @@
-use crate::model::ProjectV6;
+use crate::model::Project;
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
@@ -33,7 +33,7 @@ pub enum ProjectIoError {
     },
 }
 
-pub fn load(path: &Path) -> Result<ProjectV6, ProjectIoError> {
+pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
     let bytes = fs::read(path).map_err(|source| ProjectIoError::Read {
         path: path.into(),
         source,
@@ -44,33 +44,17 @@ pub fn load(path: &Path) -> Result<ProjectV6, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    match version {
-        Some(6 | 7) => {}
-        Some(version) => {
-            return Err(ProjectIoError::Validation {
-                path: path.into(),
-                source: crate::model::ValidationError::Version(version as u32),
-            });
-        }
-        None => {}
+    if version != Some(8) {
+        return Err(ProjectIoError::Validation {
+            path: path.into(),
+            source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
+        });
     }
-    let mut project: ProjectV6 =
+    let project: Project =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
         })?;
-    if project.format_version == 6 {
-        project.format_version = 7;
-        if project.song.is_empty() {
-            project.song.push(crate::model::SongEntry {
-                pattern: 1,
-                bars: 1,
-            });
-        }
-    }
-    // Version 7 projects created before the 100-pattern bank may contain only
-    // the older ten slots. Extend them with empty patterns before validation.
-    project.seed_patterns();
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
@@ -80,7 +64,7 @@ pub fn load(path: &Path) -> Result<ProjectV6, ProjectIoError> {
     Ok(project)
 }
 
-pub fn save_atomic(path: &Path, project: &ProjectV6) -> Result<(), ProjectIoError> {
+pub fn save_atomic(path: &Path, project: &Project) -> Result<(), ProjectIoError> {
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
@@ -122,10 +106,40 @@ mod tests {
     fn round_trip_and_newline() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("x.groove.json");
-        let p = ProjectV6::new();
+        let p = Project::new();
         save_atomic(&f, &p).unwrap();
         assert_eq!(load(&f).unwrap(), p);
         assert!(fs::read(&f).unwrap().ends_with(b"\n"));
+    }
+
+    #[test]
+    fn dynamic_pattern_counts_round_trip_and_bounds_are_strict() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("patterns.groove.json");
+        for count in [1, 2, 100] {
+            let mut value = serde_json::to_value(Project::new()).unwrap();
+            let pattern = value["patterns"][0].clone();
+            value["patterns"] = serde_json::Value::Array(vec![pattern; count]);
+            fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(load(&path).unwrap().patterns.len(), count);
+        }
+        for count in [0, 101] {
+            let mut value = serde_json::to_value(Project::new()).unwrap();
+            let pattern = value["patterns"][0].clone();
+            value["patterns"] = if count == 0 {
+                serde_json::Value::Array(Vec::new())
+            } else {
+                serde_json::Value::Array(vec![pattern; count])
+            };
+            fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            assert!(matches!(
+                load(&path),
+                Err(ProjectIoError::Validation {
+                    source: crate::model::ValidationError::PatternCount(_),
+                    ..
+                })
+            ));
+        }
     }
     #[test]
     fn reject_unknown() {
@@ -140,8 +154,8 @@ mod tests {
     }
     #[test]
     fn default_schema_uses_required_names() {
-        let value = serde_json::to_value(ProjectV6::new()).unwrap();
-        assert_eq!(value["format_version"], 7);
+        let value = serde_json::to_value(Project::new()).unwrap();
+        assert_eq!(value["format_version"], 8);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 50);
@@ -157,15 +171,15 @@ mod tests {
         assert!(value["tracks"][0].get("input_degree").is_none());
         assert_eq!(
             value["patterns"].as_array().unwrap().len(),
-            crate::model::PATTERN_COUNT
+            crate::model::MIN_PATTERN_COUNT
         );
     }
 
     #[test]
-    fn v6_projects_without_reverb_controls_use_defaults() {
+    fn latest_projects_without_optional_reverb_controls_use_defaults() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("old-v6.groove.json");
-        let mut value = serde_json::to_value(ProjectV6::new()).unwrap();
+        let mut value = serde_json::to_value(Project::new()).unwrap();
         value["globals"]
             .as_object_mut()
             .unwrap()
@@ -185,7 +199,7 @@ mod tests {
     fn mixed_track_lengths_round_trip_and_format_v2_is_rejected() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("mixed.groove.json");
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         for (track, length) in project.tracks.iter_mut().zip([1, 7, 16, 31, 32, 64]) {
             track.steps.resize(length, None);
         }
@@ -205,22 +219,19 @@ mod tests {
     }
 
     #[test]
-    fn older_version_seven_projects_are_extended_to_the_full_pattern_bank() {
+    fn older_version_seven_projects_are_rejected() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("old-pattern-bank.groove.json");
-        let mut value = serde_json::to_value(ProjectV6::new()).unwrap();
-        let patterns = value["patterns"].as_array().unwrap();
-        value["patterns"] = serde_json::Value::Array(patterns[..10].to_vec());
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["format_version"] = 7.into();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-
-        let loaded = load(&path).unwrap();
-        assert_eq!(loaded.patterns.len(), crate::model::PATTERN_COUNT);
-        assert!(loaded.patterns[10..].iter().all(|pattern| {
-            pattern
-                .tracks
-                .iter()
-                .all(|track| track.steps == vec![None; crate::model::STEP_BANK_SIZE])
-        }));
+        assert!(matches!(
+            load(&path),
+            Err(ProjectIoError::Validation {
+                source: crate::model::ValidationError::Version(7),
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -228,7 +239,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("legacy.groove.json");
         for version in 1..=5 {
-            let mut value = serde_json::to_value(ProjectV6::new()).unwrap();
+            let mut value = serde_json::to_value(Project::new()).unwrap();
             value["format_version"] = version.into();
             fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
             assert!(matches!(
@@ -241,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_projects_are_valid_version_six_files() {
+    fn bundled_legacy_projects_are_rejected() {
         for json in [
             include_str!("../beat"),
             include_str!("../beat2"),
@@ -250,7 +261,13 @@ mod tests {
         ] {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
-            load(path.path()).unwrap();
+            assert!(matches!(
+                load(path.path()),
+                Err(ProjectIoError::Validation {
+                    source: crate::model::ValidationError::Version(6),
+                    ..
+                })
+            ));
         }
     }
 
@@ -258,7 +275,7 @@ mod tests {
     fn lfo_schema_round_trips_synced_and_free_rates() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("lfos.groove.json");
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[0].lfos.tune = Some(crate::model::LfoConfig {
             waveform: crate::model::LfoWaveform::SampleAndHold,
             rate: crate::model::LfoRate::Free {
@@ -281,13 +298,13 @@ mod tests {
     fn lfo_schema_rejects_unknown_and_missing_fields() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("invalid-lfo.groove.json");
-        let mut value = serde_json::to_value(ProjectV6::new()).unwrap();
+        let mut value = serde_json::to_value(Project::new()).unwrap();
         value["tracks"][0]["lfos"]["wat"] =
             serde_json::to_value(crate::model::LfoConfig::default()).unwrap();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
 
-        let mut value = serde_json::to_value(ProjectV6::new()).unwrap();
+        let mut value = serde_json::to_value(Project::new()).unwrap();
         value["tracks"][0].as_object_mut().unwrap().remove("lfos");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
@@ -297,7 +314,7 @@ mod tests {
     fn chord_shape_schema_round_trips_and_defaults_legacy_notes() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("chords.groove.json");
-        let mut project = ProjectV6::new();
+        let mut project = Project::new();
         project.tracks[4].input_chord_shape = Some(crate::model::ChordShape::SeventhRoot);
         project.tracks[4].steps[0] = Some(crate::model::StepEvent::Note {
             degree: 1,
