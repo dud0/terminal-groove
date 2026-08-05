@@ -2079,7 +2079,7 @@ fn selected_accent(a: &App, track: usize) -> Option<(bool, Option<usize>)> {
 fn articulation_title(a: &App, track: usize) -> String {
     match selected_accent(a, track) {
         Some((accent, None)) => {
-            let mut text = format!("[Shift+A] Accent {}", if accent { "on" } else { "off" });
+            let mut text = format!("[A] Accent {}", if accent { "on" } else { "off" });
             if let Some(StepEvent::BassNote { slide, .. }) =
                 a.editor.project.tracks[track].steps[a.step]
             {
@@ -3373,7 +3373,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: Shift+A toggles accent; Shift+G toggles Bass slide.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nTracks: l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C trigger editor (shape, arp, type, rate). Chord settings belong to note triggers; ties inherit them and empty steps edit input defaults.\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or Chord editing. Esc or ? closes Help.",
+            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: A toggles accent; Shift+G toggles Bass slide.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nTracks: l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C trigger editor (shape, arp, type, rate). Chord settings belong to note triggers; ties inherit them and empty steps edit input defaults.\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or Chord editing. Esc or ? closes Help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -4310,6 +4310,10 @@ mod tests {
         app.row = 4;
         app.editor.set_note(3, 0, 1).unwrap();
         app.editor.toggle_accent(3, 0).unwrap();
+        assert_eq!(
+            articulation_title(&app, 3),
+            "[A] Accent on · [Shift+G] Slide off"
+        );
         app.editor.toggle_tie(3, 1).unwrap();
         assert_eq!(selected_accent(&app, 3), Some((true, None)));
         app.step = 1;
@@ -4432,6 +4436,8 @@ mod tests {
         assert!(screen.contains("o audition"));
         assert!(screen.contains("y delay division"));
         assert!(screen.contains("filter envelope"));
+        assert!(screen.contains("Events: A toggles accent"));
+        assert!(!screen.contains("Events: Shift+A toggles accent"));
     }
 
     #[test]

@@ -317,7 +317,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Track | `Shift+1`–`Shift+6` | Jump to the corresponding track |
 | Track | `l` | Edit the selected track length from 1 through 64 steps |
 | Track | `Shift+D` | Double the selected track by appending an exact copy, when its length is at most 32 |
-| Trigger or note | `Shift+A` | Toggle accent |
+| Trigger or note | `A` | Toggle accent |
 | Bass note | `Shift+G` | Toggle slide |
 | Eligible parameter editor | `Shift+L` | Add or edit that parameter's track-level LFO |
 | Track | `v` | Edit level |
@@ -366,7 +366,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
-- `Shift+A` toggles accent immediately on a trigger or note. `Shift+G` toggles slide on a Bass note. Both are undoable and reject incompatible or empty steps visibly.
+- `A` toggles accent immediately on a trigger or note. `Shift+G` toggles slide on a Bass note. Both are undoable and reject incompatible or empty steps visibly.
 
 ### 5.4 Audition behavior
 
