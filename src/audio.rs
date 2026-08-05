@@ -1,7 +1,7 @@
 use crate::{
     dsp::{
         Adsr, Biquad, DcBlock, Delay, EnvStage, EnvelopeProfile, LadderFilter, Lfo, MasterLimiter,
-        PolyBlepOsc, Reverb, Smoother, StereoChorus, exp_map_f32,
+        PolyBlepOsc, Reverb, Smoother, StereoChorus, equal_power_pan, exp_map_f32,
     },
     engine::{GateAction, StepClock, synth_action},
     model::{
@@ -24,6 +24,7 @@ use std::{
 #[derive(Clone, Copy, Debug)]
 struct AudioTrack {
     level: Percent,
+    pan: Percent,
     muted: bool,
     delay_send: Percent,
     reverb_send: Percent,
@@ -71,6 +72,7 @@ impl AudioProject {
                 let t = &project.tracks[i];
                 AudioTrack {
                     level: t.level,
+                    pan: t.pan,
                     muted: t.muted,
                     delay_send: t.delay_send,
                     reverb_send: t.reverb_send,
@@ -282,6 +284,7 @@ struct SynthVoice {
     level: Smoother,
     delay_send: Smoother,
     reverb_send: Smoother,
+    pan: Smoother,
 }
 
 #[derive(Clone, Copy)]
@@ -424,6 +427,7 @@ struct DrumVoice {
     level: Smoother,
     delay_send: Smoother,
     reverb_send: Smoother,
+    pan: Smoother,
     locks: ParameterLocks,
 }
 
@@ -455,6 +459,7 @@ impl DrumVoice {
             level: Smoother::new(0.0),
             delay_send: Smoother::new(0.0),
             reverb_send: Smoother::new(0.0),
+            pan: Smoother::new(50.0),
             locks: ParameterLocks::default(),
         }
     }
@@ -494,6 +499,7 @@ impl SynthVoice {
             level: Smoother::new(0.0),
             delay_send: Smoother::new(0.0),
             reverb_send: Smoother::new(0.0),
+            pan: Smoother::new(50.0),
         }
     }
 }
@@ -959,6 +965,9 @@ impl Renderer {
             locks.reverb_send.unwrap_or(track.reverb_send).normalized(),
             smoothing,
         );
+        voice
+            .pan
+            .set(locks.pan.unwrap_or(track.pan).get() as f32, smoothing);
         voice.locks = locks;
     }
     fn apply_synth_params(
@@ -1069,6 +1078,11 @@ impl Renderer {
             locks.reverb_send.unwrap_or(t.reverb_send).normalized(),
             smoothing,
         );
+        if !(voice.chord && voice.active) {
+            voice
+                .pan
+                .set(locks.pan.unwrap_or(t.pan).get() as f32, smoothing);
+        }
         voice.locks = locks;
     }
 
@@ -1204,6 +1218,24 @@ impl Renderer {
             Self::configure_synth_voice_frequency(project, sr, 4, frequency, trigger, locks, voice);
         }
         pool.voice_count = voice_count;
+        let spread = locks
+            .spread
+            .unwrap_or_else(|| match project.tracks[4].instrument {
+                Instrument::Chord(p) => p.spread,
+                _ => crate::model::ChordSpread::Off,
+            });
+        let offsets = match voice_count {
+            3 => [-50.0, 0.0, 50.0, 0.0],
+            4 => [-50.0, -16.6667, 16.6667, 50.0],
+            _ => [0.0; 4],
+        };
+        for (index, offset) in offsets.into_iter().take(voice_count).enumerate() {
+            let target = locks.pan.unwrap_or(project.tracks[4].pan).get() as f32
+                + offset * spread.percent().normalized();
+            pool.voices[pool.group * CHORD_GROUP_SIZE + index]
+                .pan
+                .set(target.clamp(0.0, 100.0), 0);
+        }
         Self::configure_chorus(&mut pool.chorus, project.tracks[4], locks);
         pool.active = true;
     }
@@ -1642,7 +1674,8 @@ impl Renderer {
         track: usize,
         sr: f32,
         level_offset: f32,
-    ) -> (f32, f32, f32) {
+        pan_offset: f32,
+    ) -> (f32, f32, f32, f32) {
         let raw = match track {
             0 => {
                 let hz = voice.kick_pitch.next_value();
@@ -1681,6 +1714,7 @@ impl Renderer {
             sample,
             voice.delay_send.next_value(),
             voice.reverb_send.next_value(),
+            modulated_percent(voice.pan.next_value(), pan_offset),
         )
     }
     fn next(&mut self) -> (f32, f32) {
@@ -1698,66 +1732,84 @@ impl Renderer {
         let mut reverb_l = 0.0;
         let mut reverb_r = 0.0;
         for i in 0..3 {
-            let (x, delay_send, reverb_send) = Self::render_drum(
+            let (x, delay_send, reverb_send, pan) = Self::render_drum(
                 &mut self.drums[i],
                 i,
                 self.sr,
                 self.lfo_offsets[i][ParameterId::Level as usize],
+                self.lfo_offsets[i][ParameterId::Pan as usize],
             );
+            let (pl, pr) = equal_power_pan(pan);
             let gain = self.mute[i].next_value();
-            dry_l += x * gain;
-            dry_r += x * gain;
-            delay_l += x * delay_send * gain;
-            delay_r += x * delay_send * gain;
-            reverb_l += x * reverb_send * gain;
-            reverb_r += x * reverb_send * gain;
+            dry_l += x * pl * gain;
+            dry_r += x * pr * gain;
+            delay_l += x * pl * delay_send * gain;
+            delay_r += x * pr * delay_send * gain;
+            reverb_l += x * pl * reverb_send * gain;
+            reverb_r += x * pr * reverb_send * gain;
         }
         for i in 0..3 {
-            let (x, delay_send, reverb_send) = Self::render_drum(
+            let (x, delay_send, reverb_send, pan) = Self::render_drum(
                 &mut self.preview_drums[i],
                 i,
                 self.sr,
                 self.preview_lfo_offsets[i][ParameterId::Level as usize],
+                self.preview_lfo_offsets[i][ParameterId::Pan as usize],
             );
-            dry_l += x;
-            dry_r += x;
-            delay_l += x * delay_send;
-            delay_r += x * delay_send;
-            reverb_l += x * reverb_send;
-            reverb_r += x * reverb_send;
+            let (pl, pr) = equal_power_pan(pan);
+            dry_l += x * pl;
+            dry_r += x * pr;
+            delay_l += x * pl * delay_send;
+            delay_r += x * pr * delay_send;
+            reverb_l += x * pl * reverb_send;
+            reverb_r += x * pr * reverb_send;
         }
         for i in [0, 2] {
             let (x, ds, rs) =
                 Self::render_synth(&mut self.synth[i], self.sr, &self.lfo_offsets[i + 3]);
+            let (pl, pr) = equal_power_pan(modulated_percent(
+                self.synth[i].pan.next_value(),
+                self.lfo_offsets[i + 3][ParameterId::Pan as usize],
+            ));
             let gain = self.mute[i + 3].next_value();
-            dry_l += x * gain;
-            dry_r += x * gain;
-            delay_l += x * ds * gain;
-            delay_r += x * ds * gain;
-            reverb_l += x * rs * gain;
-            reverb_r += x * rs * gain;
+            dry_l += x * pl * gain;
+            dry_r += x * pr * gain;
+            delay_l += x * pl * ds * gain;
+            delay_r += x * pr * ds * gain;
+            reverb_l += x * pl * rs * gain;
+            reverb_r += x * pr * rs * gain;
             let (x, ds, rs) = Self::render_synth(
                 &mut self.preview[i],
                 self.sr,
                 &self.preview_lfo_offsets[i + 3],
             );
-            dry_l += x;
-            dry_r += x;
-            delay_l += x * ds;
-            delay_r += x * ds;
-            reverb_l += x * rs;
-            reverb_r += x * rs;
+            let (pl, pr) = equal_power_pan(modulated_percent(
+                self.preview[i].pan.next_value(),
+                self.preview_lfo_offsets[i + 3][ParameterId::Pan as usize],
+            ));
+            dry_l += x * pl;
+            dry_r += x * pr;
+            delay_l += x * pl * ds;
+            delay_r += x * pr * ds;
+            reverb_l += x * pl * rs;
+            reverb_r += x * pr * rs;
         }
-        let mut chord_sample = 0.0;
+        let mut chord_left = 0.0;
+        let mut chord_right = 0.0;
         let mut chord_ds = 0.0;
         let mut chord_rs = 0.0;
         for voice in &mut self.chord.voices {
             let (x, ds, rs) = Self::render_synth(voice, self.sr, &self.lfo_offsets[4]);
-            chord_sample += x;
+            let (pl, pr) = equal_power_pan(modulated_percent(
+                voice.pan.next_value(),
+                self.lfo_offsets[4][ParameterId::Pan as usize],
+            ));
+            chord_left += x * pl;
+            chord_right += x * pr;
             chord_ds = ds;
             chord_rs = rs;
         }
-        let (chord_l, chord_r) = self.chord.chorus.process(chord_sample);
+        let (chord_l, chord_r) = self.chord.chorus.process_stereo(chord_left, chord_right);
         let chord_gain = self.mute[4].next_value();
         dry_l += chord_l * chord_gain;
         dry_r += chord_r * chord_gain;
@@ -1766,16 +1818,25 @@ impl Renderer {
         reverb_l += chord_l * chord_rs * chord_gain;
         reverb_r += chord_r * chord_rs * chord_gain;
 
-        let mut preview_sample = 0.0;
+        let mut preview_left = 0.0;
+        let mut preview_right = 0.0;
         let mut preview_ds = 0.0;
         let mut preview_rs = 0.0;
         for voice in &mut self.preview_chord.voices {
             let (x, ds, rs) = Self::render_synth(voice, self.sr, &self.preview_lfo_offsets[4]);
-            preview_sample += x;
+            let (pl, pr) = equal_power_pan(modulated_percent(
+                voice.pan.next_value(),
+                self.preview_lfo_offsets[4][ParameterId::Pan as usize],
+            ));
+            preview_left += x * pl;
+            preview_right += x * pr;
             preview_ds = ds;
             preview_rs = rs;
         }
-        let (preview_l, preview_r) = self.preview_chord.chorus.process(preview_sample);
+        let (preview_l, preview_r) = self
+            .preview_chord
+            .chorus
+            .process_stereo(preview_left, preview_right);
         dry_l += preview_l;
         dry_r += preview_r;
         delay_l += preview_l * preview_ds;
@@ -1956,7 +2017,7 @@ mod tests {
             let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
             renderer.boundary();
             (0..400)
-                .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0).0)
+                .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0, 0.0).0)
                 .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
         }
 
@@ -1973,7 +2034,7 @@ mod tests {
             let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
             renderer.boundary();
             (0..400)
-                .map(|_| Renderer::render_synth(&mut renderer.synth[0], renderer.sr, &[0.0; 18]).0)
+                .map(|_| Renderer::render_synth(&mut renderer.synth[0], renderer.sr, &[0.0; 20]).0)
                 .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
         }
 
@@ -2039,7 +2100,7 @@ mod tests {
 
         renderer.boundary();
         for _ in 0..80 {
-            Renderer::render_synth(&mut renderer.synth[0], renderer.sr, &[0.0; 18]);
+            Renderer::render_synth(&mut renderer.synth[0], renderer.sr, &[0.0; 20]);
         }
         let stage_before_slide = renderer.synth[0].env.stage;
         let starting_frequency = renderer.synth[0].freq.next_value();
@@ -2109,7 +2170,7 @@ mod tests {
             peak.max(left.abs()).max(right.abs())
         });
         assert!(
-            (-16.0..=-12.0).contains(&rms_dbfs),
+            (-19.0..=-12.0).contains(&rms_dbfs),
             "representative groove RMS was {rms_dbfs:.2} dBFS"
         );
         assert!(peak <= 10.0_f32.powf(-1.0 / 20.0) + 0.000_01);
@@ -2181,11 +2242,11 @@ mod tests {
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
         renderer.boundary();
         let locked = (0..40)
-            .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0).0)
+            .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0, 0.0).0)
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
         renderer.boundary();
         let restored = (0..40)
-            .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0).0)
+            .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0, 0.0).0)
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
         assert_eq!(locked, 0.0);
         assert!(restored > 0.0001);

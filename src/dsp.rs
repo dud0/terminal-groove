@@ -14,6 +14,11 @@ pub fn exp_map_f32(percent: f32, min: f32, max: f32) -> f32 {
     min * (max / min).powf(percent.clamp(0.0, 100.0) / 100.0)
 }
 
+pub fn equal_power_pan(pan: f32) -> (f32, f32) {
+    let angle = pan.clamp(0.0, 100.0) * std::f32::consts::FRAC_PI_2 / 100.0;
+    (angle.cos(), angle.sin())
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Lfo {
     phase: f32,
@@ -516,6 +521,11 @@ impl StereoChorus {
     }
 
     pub fn process(&mut self, input: f32) -> (f32, f32) {
+        self.process_stereo(input, input)
+    }
+
+    pub fn process_stereo(&mut self, left_input: f32, right_input: f32) -> (f32, f32) {
+        let input = (left_input + right_input) * 0.5;
         self.buffer[self.pos] = input;
         let next = self.mode_sample(input, self.mode, self.phase);
         let output = if self.fade_remaining > 0 {
@@ -523,11 +533,11 @@ impl StereoChorus {
             let mix = 1.0 - self.fade_remaining as f32 / self.fade_length as f32;
             self.fade_remaining -= 1;
             (
-                old.0 + (next.0 - old.0) * mix,
-                old.1 + (next.1 - old.1) * mix,
+                left_input + old.0 + (next.0 - old.0) * mix - input,
+                right_input + old.1 + (next.1 - old.1) * mix - input,
             )
         } else {
-            next
+            (left_input + next.0 - input, right_input + next.1 - input)
         };
         self.pos = (self.pos + 1) % self.buffer.len();
         let rate = if self.mode == 2 { 0.8 } else { 0.5 };

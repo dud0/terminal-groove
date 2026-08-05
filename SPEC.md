@@ -44,7 +44,7 @@ All sound is synthesized in real time. The application contains no audio samples
 - Time-signature changes
 - Swing, microtiming, probability, or continuously variable event velocity
 - Polyphonic note entry outside the fixed Chord shape mapping, or oscillator detune
-- Per-track pan, solo, master-volume control, or configurable effect returns
+- Solo, master-volume control, or configurable effect returns
 - User-defined track types or track reordering
 - Mouse control
 - Plug-ins or external effects
@@ -120,7 +120,7 @@ Pressing a degree key replaces any existing event on the selected step with that
 Every track has base parameter values. A step may contain a sparse set of parameter locks that overlay those values for that step only.
 
 - Locks are permitted only on a drum trigger, synth note, or synth tie.
-- Instrument parameters, waveform, level, delay send, and reverb send are lockable.
+- Instrument parameters, waveform, pan, level, delay send, and reverb send are lockable. Chord spread is also lockable on Chord steps.
 - Mute is never lockable.
 - At each boundary, the engine computes effective values by overlaying the current step's locks on the base values.
 - A track LFO then applies its bipolar offset around that effective base-or-lock value and clamps the result to 0–100%.
@@ -150,13 +150,13 @@ Track parameters use an integer `Percent` value from 0 through 100 inclusive. Pe
 
 Physical controls that need perceptual resolution, such as frequency and envelope time, map the percentage exponentially. The detail panel displays both the percentage and the derived physical value when applicable.
 
-Track level maps 0% to silence and 100% to unity gain using a smooth perceptual curve. Effect sends map 0% to no send and 100% to the full post-fader track signal. Tracks are centered in the stereo field.
+Track level maps 0% to silence and 100% to unity gain using a smooth perceptual curve. Pan is 0–100%, with 50% center, and uses equal-power gains from hard left to hard right. Effect sends map 0% to no send and 100% to the full post-fader, panned track signal. Tracks default to center.
 
 All continuous DSP parameters use short smoothing ramps. A default ramp of approximately 5 ms is sufficient except for delay-time changes, which require a longer click-free crossfade.
 
 ### 3.2 Per-parameter LFOs
 
-Each track may attach one independent LFO to each eligible continuous instrument parameter and track level. Waveform, mute, delay send, reverb send, pitch, accent, slide, and global parameters are not eligible.
+Each track may attach one independent LFO to each eligible continuous instrument parameter, track level, and pan. Waveform, mute, delay send, reverb send, pitch, accent, slide, Chord spread, and global parameters are not eligible.
 
 Each assignment stores enabled state, waveform, rate, and depth. Waveforms are sine, triangle, square, rising saw, and deterministic sample-and-hold. Sine and triangle begin at the center and rise, square begins high, saw begins at -1 and rises, and sample-and-hold selects one deterministic pseudorandom bipolar value per cycle.
 
@@ -216,6 +216,7 @@ Chord is a Juno-60-inspired polyphonic engine; Lead is an SH-101-inspired monoph
 - `attack`, `decay`, `sustain`, and `release`; Chord uses approximately 1 ms–3 s attack and 2 ms–12 s decay/release, while Lead uses 1.5 ms–4 s and 2 ms–10 s respectively.
 
 Chord additionally has a stereo `chorus` selector with Off, I, and II modes. Mode I uses approximately 15 ms base delay, 1.5 ms modulation depth, and 0.5 Hz; mode II uses 12 ms, 2.5 ms, and 0.8 Hz. Mode changes crossfade over approximately 5 ms. Chorus precedes post-fader stereo sends.
+Chord also has a `spread` selector: Off keeps every voice at the track pan, Narrow uses half stereo width, and Wide uses full width. Three voices are placed left/center/right and four voices left/inner-left/inner-right/right in stored voice order; positions are centered around track pan and clamped at the boundaries. Spread is captured for each chord voice group so release tails retain their layout, is lockable per step, and is not LFO-modulatable. Chorus preserves stereo voice input while remaining centered when spread is Off.
 
 Chord defaults: 70% Saw mix, pulse width 50%, sub 35%, chorus I, cutoff 55%, resonance 15%, filter envelope 25%, and ADSR 55/45/75/65%. Lead defaults: 75% Saw mix, pulse width 50%, sub 25%, cutoff 50%, resonance 35%, filter envelope 55%, and ADSR 0/35/55/20%.
 
@@ -317,6 +318,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Track | `m` | Toggle mute immediately |
 | Track | `y` | Edit delay send |
 | Track | `b` | Edit reverb send |
+| Track | `n` | Edit pan |
 | Kick | `u` / `d` / `a` | Edit tune, decay, or attack |
 | Snare | `u` / `t` / `s` | Edit tune, tone, or snappy |
 | Hi-hat | `u` / `d` | Edit tune or decay |
@@ -329,6 +331,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Chord/Lead | `c` / `R` / `f` | Edit cutoff, resonance, or filter-envelope amount |
 | Chord/Lead | `a` / `d` / `s` / `r` | Edit ADSR |
 | Chord | `h` | Edit chorus Off/I/II mode |
+| Chord | `e` | Edit spread Off/Narrow/Wide |
 | Chord | `C` | Edit the selected Chord note's shape, or the Chord input shape on an empty step |
 | Global | `t` | Edit tempo |
 | Global | `y` | Edit delay division |
@@ -480,6 +483,7 @@ The top-level object is:
 - `kind`: `kick`, `snare`, `hat`, `bass`, `chord`, or `lead`
 - `name`: the fixed display identifier
 - `level`: integer 0–100
+- `pan`: integer 0–100; omitted values load as 50
 - `muted`: Boolean
 - `delay_send`: integer 0–100
 - `reverb_send`: integer 0–100
@@ -488,7 +492,7 @@ The top-level object is:
 - A `steps` array containing 1 through 64 elements; its array length is the track length
 - Bass, Chord, and Lead additionally store `input_degree` and `input_octave`. Chord tracks may store `input_chord_shape`; omitted values mean `1-3-5`.
 
-Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. Lead stores the same percentage controls except `chorus`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
+Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. `spread` accepts `off`, `narrow`, or `wide`, and omitted values load as `off`. Lead stores the same percentage controls except `chorus` and `spread`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
 
 An empty step is JSON `null`. Populated step shapes are:
 

@@ -863,6 +863,32 @@ fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<b
                     );
                     return Ok(true);
                 }
+                Ok(ParameterValue::Spread(mode)) => {
+                    let next = match (mode, k.code) {
+                        (crate::model::ChordSpread::Off, KeyCode::Up) => {
+                            crate::model::ChordSpread::Narrow
+                        }
+                        (crate::model::ChordSpread::Narrow, KeyCode::Up) => {
+                            crate::model::ChordSpread::Wide
+                        }
+                        (crate::model::ChordSpread::Wide, KeyCode::Down) => {
+                            crate::model::ChordSpread::Narrow
+                        }
+                        (crate::model::ChordSpread::Narrow, KeyCode::Down) => {
+                            crate::model::ChordSpread::Off
+                        }
+                        _ => mode,
+                    };
+                    set_parameter(
+                        a,
+                        audio,
+                        parameter,
+                        ParameterValue::Spread(next),
+                        true,
+                        false,
+                    );
+                    return Ok(true);
+                }
                 Err(e) => {
                     a.status = e.to_string();
                     return Ok(true);
@@ -1270,6 +1296,7 @@ fn set_parameter(
             ParameterValue::Percent(value) => Some(value),
             ParameterValue::Waveform(_) => None,
             ParameterValue::Chorus(_) => None,
+            ParameterValue::Spread(_) => None,
         });
     let key = keep_editing.then_some(coalesce_key(track, step, parameter));
     match a
@@ -1914,7 +1941,7 @@ impl ParameterGroup {
     }
 }
 
-const COMMON_PARAMETERS: [ParameterDescriptor; 3] = [
+const COMMON_PARAMETERS: [ParameterDescriptor; 4] = [
     ParameterDescriptor {
         id: ParameterId::Level,
         label: "Level",
@@ -1933,12 +1960,19 @@ const COMMON_PARAMETERS: [ParameterDescriptor; 3] = [
         shortcut: "b",
         group: ParameterGroup::Mixer,
     },
+    ParameterDescriptor {
+        id: ParameterId::Pan,
+        label: "Pan",
+        shortcut: "n",
+        group: ParameterGroup::Mixer,
+    },
 ];
 
-const KICK_PARAMETERS: [ParameterDescriptor; 6] = [
+const KICK_PARAMETERS: [ParameterDescriptor; 7] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
+    COMMON_PARAMETERS[3],
     ParameterDescriptor {
         id: ParameterId::Tune,
         label: "Tune",
@@ -1959,10 +1993,11 @@ const KICK_PARAMETERS: [ParameterDescriptor; 6] = [
     },
 ];
 
-const SNARE_PARAMETERS: [ParameterDescriptor; 6] = [
+const SNARE_PARAMETERS: [ParameterDescriptor; 7] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
+    COMMON_PARAMETERS[3],
     ParameterDescriptor {
         id: ParameterId::Tune,
         label: "Tune",
@@ -1983,10 +2018,11 @@ const SNARE_PARAMETERS: [ParameterDescriptor; 6] = [
     },
 ];
 
-const HAT_PARAMETERS: [ParameterDescriptor; 5] = [
+const HAT_PARAMETERS: [ParameterDescriptor; 6] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
+    COMMON_PARAMETERS[3],
     ParameterDescriptor {
         id: ParameterId::Tune,
         label: "Tune",
@@ -2001,10 +2037,11 @@ const HAT_PARAMETERS: [ParameterDescriptor; 5] = [
     },
 ];
 
-const BASS_PARAMETERS: [ParameterDescriptor; 8] = [
+const BASS_PARAMETERS: [ParameterDescriptor; 9] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
+    COMMON_PARAMETERS[3],
     ParameterDescriptor {
         id: ParameterId::Waveform,
         label: "Wave",
@@ -2037,10 +2074,11 @@ const BASS_PARAMETERS: [ParameterDescriptor; 8] = [
     },
 ];
 
-const CHORD_PARAMETERS: [ParameterDescriptor; 14] = [
+const CHORD_PARAMETERS: [ParameterDescriptor; 16] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
+    COMMON_PARAMETERS[3],
     ParameterDescriptor {
         id: ParameterId::OscillatorMix,
         label: "Osc Mix",
@@ -2063,6 +2101,12 @@ const CHORD_PARAMETERS: [ParameterDescriptor; 14] = [
         id: ParameterId::Chorus,
         label: "Chorus",
         shortcut: "h",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Spread,
+        label: "Spread",
+        shortcut: "e",
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
@@ -2109,20 +2153,21 @@ const CHORD_PARAMETERS: [ParameterDescriptor; 14] = [
     },
 ];
 
-const LEAD_PARAMETERS: [ParameterDescriptor; 13] = [
+const LEAD_PARAMETERS: [ParameterDescriptor; 14] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
-    CHORD_PARAMETERS[3],
+    COMMON_PARAMETERS[3],
     CHORD_PARAMETERS[4],
     CHORD_PARAMETERS[5],
-    CHORD_PARAMETERS[7],
-    CHORD_PARAMETERS[8],
+    CHORD_PARAMETERS[6],
     CHORD_PARAMETERS[9],
     CHORD_PARAMETERS[10],
     CHORD_PARAMETERS[11],
     CHORD_PARAMETERS[12],
     CHORD_PARAMETERS[13],
+    CHORD_PARAMETERS[14],
+    CHORD_PARAMETERS[15],
 ];
 
 fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescriptor] {
@@ -2218,6 +2263,7 @@ fn physical_parameter_readout(
         ParameterValue::Chorus(ChorusMode::Off) => "Off".into(),
         ParameterValue::Chorus(ChorusMode::I) => "Mode I".into(),
         ParameterValue::Chorus(ChorusMode::Ii) => "Mode II".into(),
+        ParameterValue::Spread(value) => value.to_string(),
         ParameterValue::Percent(value) => {
             let value = value.get();
             match (a.editor.project.tracks[track].kind, parameter) {
@@ -2560,6 +2606,11 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
             ParameterValue::Chorus(ChorusMode::Off) => "OFF".into(),
             ParameterValue::Chorus(ChorusMode::I) => "I".into(),
             ParameterValue::Chorus(ChorusMode::Ii) => "II".into(),
+            ParameterValue::Spread(value) => match value {
+                crate::model::ChordSpread::Off => "OFF".into(),
+                crate::model::ChordSpread::Narrow => "NAR".into(),
+                crate::model::ChordSpread::Wide => "WIDE".into(),
+            },
         };
         render_centered(f, &value_label, content, style);
         for segment in 0..10 {
@@ -2601,6 +2652,14 @@ fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usi
                         ChorusMode::Off => 9,
                         ChorusMode::I => 5,
                         ChorusMode::Ii => 0,
+                    };
+                    if segment == selected { "●" } else { "│" }
+                }
+                ParameterValue::Spread(mode) => {
+                    let selected = match mode {
+                        crate::model::ChordSpread::Off => 9,
+                        crate::model::ChordSpread::Narrow => 5,
+                        crate::model::ChordSpread::Wide => 0,
                     };
                     if segment == selected { "●" } else { "│" }
                 }
@@ -2945,7 +3004,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+PageUp/Down previous/next, Home first, End last used.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus, C shape.\nGlobal: t tempo, y delay, f feedback, r reverb time, b tone, p pre-delay, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
+            "All sound is synthesized.\nPatterns: Ctrl+PageUp/Down previous/next, Home first, End last used.\nNavigation: arrows, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track, Enter, Delete.\nParameter editing: PageUp/Down changes step, Shift+1..6 selects a track.\nEvents: Shift+A toggles accent; Shift+G toggles Bass slide.\nTracks: l length, Shift+D double, p scope, v level, n pan, m mute, y delay, b reverb.\nParameters: Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, c/R/f filter, a/d/s/r ADSR. Chord: h chorus, e spread, C shape.\nGlobal: t tempo, y delay, f feedback, r reverb time, b tone, p pre-delay, k key, s scale.\nAnywhere: Space play/pause, . stop, o audition, Ctrl+S save, Ctrl+O open, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\nEsc or ? closes help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3454,20 +3513,20 @@ mod tests {
     #[test]
     fn parameter_banks_have_contextual_order_and_shortcuts() {
         let drum = parameter_descriptors(TrackKind::Kick);
-        assert_eq!(drum.len(), 6);
+        assert_eq!(drum.len(), 7);
         assert_eq!(drum[0].shortcut, "v");
         assert_eq!(drum[0].group, ParameterGroup::Mixer);
-        assert_eq!(drum[3].shortcut, "u");
-        assert_eq!(drum[3].group, ParameterGroup::Instrument);
+        assert_eq!(drum[4].shortcut, "u");
+        assert_eq!(drum[4].group, ParameterGroup::Instrument);
         let synth = parameter_descriptors(TrackKind::Chord);
-        assert_eq!(synth.len(), 14);
-        assert_eq!(synth[3].id, ParameterId::OscillatorMix);
-        assert_eq!(synth[3].group, ParameterGroup::Instrument);
-        assert_eq!(synth[4].id, ParameterId::PulseWidth);
-        assert_eq!(synth[6].id, ParameterId::Chorus);
-        assert_eq!(synth[7].group, ParameterGroup::Filter);
-        assert_eq!(synth[8].shortcut, "R");
-        assert_eq!(synth[10].group, ParameterGroup::Envelope);
+        assert_eq!(synth.len(), 16);
+        assert_eq!(synth[4].id, ParameterId::OscillatorMix);
+        assert_eq!(synth[4].group, ParameterGroup::Instrument);
+        assert_eq!(synth[5].id, ParameterId::PulseWidth);
+        assert_eq!(synth[7].id, ParameterId::Chorus);
+        assert_eq!(synth[9].group, ParameterGroup::Filter);
+        assert_eq!(synth[10].shortcut, "R");
+        assert_eq!(synth[12].group, ParameterGroup::Envelope);
         assert_ne!(
             ParameterGroup::Mixer.color(),
             ParameterGroup::Filter.color()
@@ -3488,6 +3547,7 @@ mod tests {
         assert!(matches!(app.mode, Mode::ParameterEdit(ParameterId::Level)));
 
         app.row = 4;
+        move_parameter_editor(&mut app, true);
         move_parameter_editor(&mut app, true);
         move_parameter_editor(&mut app, true);
         move_parameter_editor(&mut app, true);

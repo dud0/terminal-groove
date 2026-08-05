@@ -376,6 +376,24 @@ impl Editor {
         )
     }
 
+    pub fn set_pan(
+        &mut self,
+        track: usize,
+        step: usize,
+        scope: Scope,
+        value: Percent,
+        key: Option<CoalesceKey>,
+    ) -> Result<bool, EditError> {
+        self.set_parameter(
+            track,
+            step,
+            scope,
+            ParameterId::Pan,
+            ParameterValue::Percent(value),
+            key,
+        )
+    }
+
     pub fn accent_value(&self, track: usize, step: usize) -> Result<bool, EditError> {
         self.project
             .tracks
@@ -522,7 +540,7 @@ impl Editor {
         let next = match self.parameter_value(track, step, scope, ParameterId::Waveform)? {
             ParameterValue::Waveform(Waveform::Square) => Waveform::Saw,
             ParameterValue::Waveform(Waveform::Saw) => Waveform::Square,
-            ParameterValue::Percent(_) | ParameterValue::Chorus(_) => {
+            ParameterValue::Percent(_) | ParameterValue::Chorus(_) | ParameterValue::Spread(_) => {
                 return Err(EditError::InvalidParameter);
             }
         };

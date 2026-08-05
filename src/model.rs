@@ -428,6 +428,40 @@ pub enum TrackKind {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ChordSpread {
+    #[default]
+    Off,
+    Narrow,
+    Wide,
+}
+
+impl ChordSpread {
+    pub const ALL: [Self; 3] = [Self::Off, Self::Narrow, Self::Wide];
+    pub const fn percent(self) -> Percent {
+        match self {
+            Self::Off => Percent::ZERO,
+            Self::Narrow => Percent(50),
+            Self::Wide => Percent(100),
+        }
+    }
+}
+
+impl fmt::Display for ChordSpread {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Off => "Off",
+                Self::Narrow => "Narrow",
+                Self::Wide => "Wide",
+            }
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChordShape {
     #[default]
     TriadRoot,
@@ -541,6 +575,8 @@ pub struct ChordParameters {
     pub pulse_width: Percent,
     pub sub_oscillator: Percent,
     pub chorus: ChorusMode,
+    #[serde(default)]
+    pub spread: ChordSpread,
     pub cutoff: Percent,
     pub resonance: Percent,
     pub filter_envelope: Percent,
@@ -588,6 +624,8 @@ pub enum Instrument {
 #[serde(deny_unknown_fields)]
 pub struct ParameterLocks {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub pan: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delay_send: Option<Percent>,
@@ -612,6 +650,8 @@ pub struct ParameterLocks {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chorus: Option<ChorusMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub spread: Option<ChordSpread>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resonance: Option<Percent>,
@@ -628,6 +668,8 @@ pub struct ParameterLocks {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LfoAssignments {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pan: Option<LfoConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<LfoConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -661,6 +703,7 @@ pub struct LfoAssignments {
 impl LfoAssignments {
     pub fn get(&self, parameter: ParameterId) -> Option<LfoConfig> {
         match parameter {
+            ParameterId::Pan => self.pan,
             ParameterId::Level => self.level,
             ParameterId::Tune => self.tune,
             ParameterId::Tone => self.tone,
@@ -678,12 +721,14 @@ impl LfoAssignments {
             ParameterId::DelaySend
             | ParameterId::ReverbSend
             | ParameterId::Waveform
-            | ParameterId::Chorus => None,
+            | ParameterId::Chorus
+            | ParameterId::Spread => None,
         }
     }
 
     pub fn set(&mut self, parameter: ParameterId, config: Option<LfoConfig>) -> bool {
         let slot = match parameter {
+            ParameterId::Pan => &mut self.pan,
             ParameterId::Level => &mut self.level,
             ParameterId::Tune => &mut self.tune,
             ParameterId::Tone => &mut self.tone,
@@ -701,7 +746,8 @@ impl LfoAssignments {
             ParameterId::DelaySend
             | ParameterId::ReverbSend
             | ParameterId::Waveform
-            | ParameterId::Chorus => {
+            | ParameterId::Chorus
+            | ParameterId::Spread => {
                 return false;
             }
         };
@@ -716,6 +762,7 @@ impl ParameterLocks {
 
     pub fn get(&self, parameter: ParameterId) -> Option<ParameterValue> {
         match parameter {
+            ParameterId::Pan => self.pan.map(ParameterValue::Percent),
             ParameterId::Level => self.level.map(ParameterValue::Percent),
             ParameterId::DelaySend => self.delay_send.map(ParameterValue::Percent),
             ParameterId::ReverbSend => self.reverb_send.map(ParameterValue::Percent),
@@ -728,6 +775,7 @@ impl ParameterLocks {
             ParameterId::PulseWidth => self.pulse_width.map(ParameterValue::Percent),
             ParameterId::SubOscillator => self.sub_oscillator.map(ParameterValue::Percent),
             ParameterId::Chorus => self.chorus.map(ParameterValue::Chorus),
+            ParameterId::Spread => self.spread.map(ParameterValue::Spread),
             ParameterId::Cutoff => self.cutoff.map(ParameterValue::Percent),
             ParameterId::Resonance => self.resonance.map(ParameterValue::Percent),
             ParameterId::FilterEnvelope => self.filter_envelope.map(ParameterValue::Percent),
@@ -739,6 +787,7 @@ impl ParameterLocks {
 
     pub fn set(&mut self, parameter: ParameterId, value: ParameterValue) -> bool {
         match (parameter, value) {
+            (ParameterId::Pan, ParameterValue::Percent(v)) => self.pan = Some(v),
             (ParameterId::Level, ParameterValue::Percent(v)) => self.level = Some(v),
             (ParameterId::DelaySend, ParameterValue::Percent(v)) => self.delay_send = Some(v),
             (ParameterId::ReverbSend, ParameterValue::Percent(v)) => self.reverb_send = Some(v),
@@ -755,6 +804,7 @@ impl ParameterLocks {
                 self.sub_oscillator = Some(v)
             }
             (ParameterId::Chorus, ParameterValue::Chorus(v)) => self.chorus = Some(v),
+            (ParameterId::Spread, ParameterValue::Spread(v)) => self.spread = Some(v),
             (ParameterId::Cutoff, ParameterValue::Percent(v)) => self.cutoff = Some(v),
             (ParameterId::Resonance, ParameterValue::Percent(v)) => self.resonance = Some(v),
             (ParameterId::FilterEnvelope, ParameterValue::Percent(v)) => {
@@ -770,6 +820,7 @@ impl ParameterLocks {
 
     pub fn clear(&mut self, parameter: ParameterId) {
         match parameter {
+            ParameterId::Pan => self.pan = None,
             ParameterId::Level => self.level = None,
             ParameterId::DelaySend => self.delay_send = None,
             ParameterId::ReverbSend => self.reverb_send = None,
@@ -782,6 +833,7 @@ impl ParameterLocks {
             ParameterId::PulseWidth => self.pulse_width = None,
             ParameterId::SubOscillator => self.sub_oscillator = None,
             ParameterId::Chorus => self.chorus = None,
+            ParameterId::Spread => self.spread = None,
             ParameterId::Cutoff => self.cutoff = None,
             ParameterId::Resonance => self.resonance = None,
             ParameterId::FilterEnvelope => self.filter_envelope = None,
@@ -878,6 +930,8 @@ pub struct Track {
     pub kind: TrackKind,
     pub name: String,
     pub level: Percent,
+    #[serde(default = "default_pan")]
+    pub pan: Percent,
     pub muted: bool,
     pub delay_send: Percent,
     pub reverb_send: Percent,
@@ -929,12 +983,16 @@ pub struct ProjectV6 {
 fn p(n: u8) -> Percent {
     Percent(n)
 }
+fn default_pan() -> Percent {
+    Percent(50)
+}
 impl ProjectV6 {
     pub fn new() -> Self {
         let track = |kind: TrackKind, name: &str, instrument: Instrument| Track {
             kind,
             name: name.into(),
             level: p(80),
+            pan: default_pan(),
             muted: false,
             delay_send: p(0),
             reverb_send: p(0),
@@ -949,6 +1007,7 @@ impl ProjectV6 {
             kind,
             name: name.into(),
             level: p(80),
+            pan: default_pan(),
             muted: false,
             delay_send: p(0),
             reverb_send: p(0),
@@ -1008,6 +1067,7 @@ impl ProjectV6 {
                         pulse_width: p(50),
                         sub_oscillator: p(35),
                         chorus: ChorusMode::I,
+                        spread: ChordSpread::Off,
                         cutoff: p(55),
                         resonance: p(15),
                         filter_envelope: p(25),
@@ -1341,6 +1401,7 @@ fn validate_ties(track: usize, steps: &[Step]) -> Result<(), ValidationError> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParameterId {
     Level,
+    Pan,
     DelaySend,
     ReverbSend,
     Tune,
@@ -1352,6 +1413,7 @@ pub enum ParameterId {
     PulseWidth,
     SubOscillator,
     Chorus,
+    Spread,
     Cutoff,
     Resonance,
     FilterEnvelope,
@@ -1365,11 +1427,13 @@ pub enum ParameterValue {
     Percent(Percent),
     Waveform(Waveform),
     Chorus(ChorusMode),
+    Spread(ChordSpread),
 }
 
 impl ParameterId {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Level,
+        Self::Pan,
         Self::DelaySend,
         Self::ReverbSend,
         Self::Tune,
@@ -1381,6 +1445,7 @@ impl ParameterId {
         Self::PulseWidth,
         Self::SubOscillator,
         Self::Chorus,
+        Self::Spread,
         Self::Cutoff,
         Self::Resonance,
         Self::FilterEnvelope,
@@ -1391,7 +1456,7 @@ impl ParameterId {
 
     pub const fn is_valid_for(self, kind: TrackKind) -> bool {
         match self {
-            Self::Level | Self::DelaySend | Self::ReverbSend => true,
+            Self::Level | Self::Pan | Self::DelaySend | Self::ReverbSend => true,
             Self::Tune => matches!(kind, TrackKind::Kick | TrackKind::Snare | TrackKind::Hat),
             Self::Tone | Self::Snappy => matches!(kind, TrackKind::Snare),
             Self::Decay => matches!(
@@ -1408,6 +1473,7 @@ impl ParameterId {
                 matches!(kind, TrackKind::Chord | TrackKind::Lead)
             }
             Self::Chorus => matches!(kind, TrackKind::Chord),
+            Self::Spread => matches!(kind, TrackKind::Chord),
             Self::Cutoff | Self::Resonance | Self::FilterEnvelope => {
                 matches!(kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead)
             }
@@ -1427,13 +1493,14 @@ impl ParameterId {
         self.is_valid_for(kind)
             && !matches!(
                 self,
-                Self::DelaySend | Self::ReverbSend | Self::Waveform | Self::Chorus
+                Self::DelaySend | Self::ReverbSend | Self::Waveform | Self::Chorus | Self::Spread
             )
     }
 
     pub const fn name(self) -> &'static str {
         match self {
             Self::Level => "level",
+            Self::Pan => "pan",
             Self::DelaySend => "delay_send",
             Self::ReverbSend => "reverb_send",
             Self::Tune => "tune",
@@ -1445,6 +1512,7 @@ impl ParameterId {
             Self::PulseWidth => "pulse_width",
             Self::SubOscillator => "sub_oscillator",
             Self::Chorus => "chorus",
+            Self::Spread => "spread",
             Self::Cutoff => "cutoff",
             Self::Resonance => "resonance",
             Self::FilterEnvelope => "filter_envelope",
@@ -1458,6 +1526,7 @@ impl ParameterId {
         match self {
             Self::DelaySend => "delay send",
             Self::ReverbSend => "reverb send",
+            Self::Pan => "pan",
             Self::FilterEnvelope => "filter envelope",
             Self::OscillatorMix => "oscillator mix",
             Self::PulseWidth => "pulse width",
@@ -1471,6 +1540,7 @@ impl Track {
     pub fn parameter(&self, parameter: ParameterId) -> Option<ParameterValue> {
         let value = match parameter {
             ParameterId::Level => ParameterValue::Percent(self.level),
+            ParameterId::Pan => ParameterValue::Percent(self.pan),
             ParameterId::DelaySend => ParameterValue::Percent(self.delay_send),
             ParameterId::ReverbSend => ParameterValue::Percent(self.reverb_send),
             ParameterId::Tune => match self.instrument {
@@ -1518,6 +1588,10 @@ impl Track {
                 Instrument::Chord(p) => ParameterValue::Chorus(p.chorus),
                 _ => return None,
             },
+            ParameterId::Spread => match self.instrument {
+                Instrument::Chord(p) => ParameterValue::Spread(p.spread),
+                _ => return None,
+            },
             ParameterId::Cutoff => match self.instrument {
                 Instrument::Bass(p) => ParameterValue::Percent(p.cutoff),
                 Instrument::Chord(p) => ParameterValue::Percent(p.cutoff),
@@ -1559,6 +1633,7 @@ impl Track {
     pub fn set_parameter(&mut self, parameter: ParameterId, value: ParameterValue) -> bool {
         match (parameter, value) {
             (ParameterId::Level, ParameterValue::Percent(v)) => self.level = v,
+            (ParameterId::Pan, ParameterValue::Percent(v)) => self.pan = v,
             (ParameterId::DelaySend, ParameterValue::Percent(v)) => self.delay_send = v,
             (ParameterId::ReverbSend, ParameterValue::Percent(v)) => self.reverb_send = v,
             (ParameterId::Tune, ParameterValue::Percent(v)) => match &mut self.instrument {
@@ -1608,6 +1683,10 @@ impl Track {
             }
             (ParameterId::Chorus, ParameterValue::Chorus(v)) => match &mut self.instrument {
                 Instrument::Chord(p) => p.chorus = v,
+                _ => return false,
+            },
+            (ParameterId::Spread, ParameterValue::Spread(v)) => match &mut self.instrument {
+                Instrument::Chord(p) => p.spread = v,
                 _ => return false,
             },
             (ParameterId::Cutoff, ParameterValue::Percent(v)) => match &mut self.instrument {
@@ -1898,6 +1977,8 @@ mod tests {
                 ParameterValue::Waveform(Waveform::Square)
             } else if parameter.is_chorus() {
                 ParameterValue::Chorus(ChorusMode::Ii)
+            } else if parameter == ParameterId::Spread {
+                ParameterValue::Spread(ChordSpread::Wide)
             } else {
                 percent
             };
