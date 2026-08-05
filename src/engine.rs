@@ -149,6 +149,8 @@ mod tests {
                 degree: 1,
                 octave: 3,
                 accent: false,
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
                 chord_shape: None,
                 arpeggio: ArpeggioConfig::default(),

@@ -31,6 +31,12 @@ pub enum ValidationError {
     AllTies(usize),
     #[error("tracks[{0}].lfos: incompatible destination `{1}`")]
     Lfo(usize, &'static str),
+    #[error("tracks[{0}]: swing must be between 0 and 75%")]
+    Swing(usize),
+    #[error("tracks[{0}].steps[{1}]: invalid trigger condition")]
+    Condition(usize, usize),
+    #[error("tracks[{0}].steps[{1}]: retrigger_count must be between 1 and 4")]
+    Retrigger(usize, usize),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -969,11 +975,53 @@ impl ParameterLocks {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TriggerCondition {
+    #[default]
+    Always,
+    Cycle {
+        position: u8,
+        length: u8,
+    },
+    Chance {
+        probability: Percent,
+    },
+}
+
+impl TriggerCondition {
+    pub const fn valid(self) -> bool {
+        match self {
+            Self::Always | Self::Chance { .. } => true,
+            Self::Cycle { position, length } => {
+                length >= 2 && length <= 4 && position >= 1 && position <= length
+            }
+        }
+    }
+}
+
+impl fmt::Display for TriggerCondition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Always => write!(f, "Always"),
+            Self::Cycle { position, length } => write!(f, "Cycle {position}/{length}"),
+            Self::Chance { probability } => write!(f, "Chance {probability}"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StepEvent {
     Trigger {
         accent: bool,
+        #[serde(default, skip_serializing_if = "trigger_condition_is_default")]
+        condition: TriggerCondition,
+        #[serde(
+            default = "default_retrigger_count",
+            skip_serializing_if = "retrigger_count_is_default"
+        )]
+        retrigger_count: u8,
         locks: ParameterLocks,
     },
     BassNote {
@@ -981,6 +1029,13 @@ pub enum StepEvent {
         octave: u8,
         accent: bool,
         slide: bool,
+        #[serde(default, skip_serializing_if = "trigger_condition_is_default")]
+        condition: TriggerCondition,
+        #[serde(
+            default = "default_retrigger_count",
+            skip_serializing_if = "retrigger_count_is_default"
+        )]
+        retrigger_count: u8,
         locks: ParameterLocks,
     },
     Note {
@@ -991,11 +1046,27 @@ pub enum StepEvent {
         chord_shape: Option<ChordShape>,
         #[serde(default, skip_serializing_if = "ArpeggioConfig::is_default")]
         arpeggio: ArpeggioConfig,
+        #[serde(default, skip_serializing_if = "trigger_condition_is_default")]
+        condition: TriggerCondition,
+        #[serde(
+            default = "default_retrigger_count",
+            skip_serializing_if = "retrigger_count_is_default"
+        )]
+        retrigger_count: u8,
         locks: ParameterLocks,
     },
     Tie {
         locks: ParameterLocks,
     },
+}
+fn trigger_condition_is_default(value: &TriggerCondition) -> bool {
+    *value == TriggerCondition::Always
+}
+fn default_retrigger_count() -> u8 {
+    1
+}
+fn retrigger_count_is_default(value: &u8) -> bool {
+    *value == 1
 }
 impl StepEvent {
     pub fn locks(&self) -> &ParameterLocks {
@@ -1039,6 +1110,50 @@ impl StepEvent {
             _ => None,
         }
     }
+    pub fn condition(&self) -> Option<TriggerCondition> {
+        match self {
+            Self::Trigger { condition, .. }
+            | Self::BassNote { condition, .. }
+            | Self::Note { condition, .. } => Some(*condition),
+            Self::Tie { .. } => None,
+        }
+    }
+    pub fn condition_mut(&mut self) -> Option<&mut TriggerCondition> {
+        match self {
+            Self::Trigger { condition, .. }
+            | Self::BassNote { condition, .. }
+            | Self::Note { condition, .. } => Some(condition),
+            Self::Tie { .. } => None,
+        }
+    }
+    pub fn retrigger_count(&self) -> Option<u8> {
+        match self {
+            Self::Trigger {
+                retrigger_count, ..
+            }
+            | Self::BassNote {
+                retrigger_count, ..
+            }
+            | Self::Note {
+                retrigger_count, ..
+            } => Some(*retrigger_count),
+            Self::Tie { .. } => None,
+        }
+    }
+    pub fn retrigger_count_mut(&mut self) -> Option<&mut u8> {
+        match self {
+            Self::Trigger {
+                retrigger_count, ..
+            }
+            | Self::BassNote {
+                retrigger_count, ..
+            }
+            | Self::Note {
+                retrigger_count, ..
+            } => Some(retrigger_count),
+            Self::Tie { .. } => None,
+        }
+    }
 }
 pub type Step = Option<StepEvent>;
 
@@ -1053,6 +1168,8 @@ pub struct Track {
     pub muted: bool,
     pub delay_send: Percent,
     pub reverb_send: Percent,
+    #[serde(default)]
+    pub swing: Percent,
     pub instrument: Instrument,
     pub lfos: LfoAssignments,
     /// Transient editor cache for the selected pattern.  It is deliberately
@@ -1116,6 +1233,7 @@ impl PartialEq for Project {
                     && left.muted == right.muted
                     && left.delay_send == right.delay_send
                     && left.reverb_send == right.reverb_send
+                    && left.swing == right.swing
                     && left.instrument == right.instrument
                     && left.lfos == right.lfos
                     && left.input_degree == right.input_degree
@@ -1153,6 +1271,7 @@ impl Project {
             muted: false,
             delay_send: p(0),
             reverb_send: p(0),
+            swing: p(0),
             instrument,
             lfos: LfoAssignments::default(),
             steps: vec![None; STEP_BANK_SIZE],
@@ -1172,6 +1291,7 @@ impl Project {
                 TrackKind::Chord | TrackKind::Lead => p(20),
                 _ => p(0),
             },
+            swing: p(0),
             instrument,
             lfos: LfoAssignments::default(),
             steps: vec![None; STEP_BANK_SIZE],
@@ -1181,7 +1301,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 11,
+            format_version: 12,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1314,7 +1434,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 11 {
+        if self.format_version != 12 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -1372,6 +1492,9 @@ impl Project {
             {
                 return Err(ValidationError::TrackOrder(ti, expected[ti].1));
             }
+            if t.swing.get() > 75 {
+                return Err(ValidationError::Swing(ti));
+            }
             validate_lfos(ti, t)?;
             if let Some(d) = t.input_degree {
                 if !(1..=8).contains(&d) {
@@ -1407,6 +1530,16 @@ impl Project {
                         );
                         if !event_ok {
                             return Err(ValidationError::EventKind(ti, si));
+                        }
+                        if let Some(condition) = event.condition()
+                            && !condition.valid()
+                        {
+                            return Err(ValidationError::Condition(ti, si));
+                        }
+                        if let Some(count) = event.retrigger_count()
+                            && !(1..=4).contains(&count)
+                        {
+                            return Err(ValidationError::Retrigger(ti, si));
                         }
                         if let StepEvent::Note {
                             chord_shape,
@@ -1912,16 +2045,22 @@ mod tests {
         let mut right = left.clone();
         left.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         right.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: true,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         assert_eq!(left, right);
 
         right.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: true,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         assert_ne!(left, right);
@@ -2008,6 +2147,8 @@ mod tests {
             accent: false,
             chord_shape: None,
             arpeggio: ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         s[0] = Some(StepEvent::Tie {
@@ -2026,6 +2167,8 @@ mod tests {
             octave: 3,
             accent: false,
             slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Tie {
@@ -2057,6 +2200,8 @@ mod tests {
     fn accent_and_slide_event_fields_are_strict() {
         let trigger = StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         };
         let note = StepEvent::Note {
@@ -2065,6 +2210,8 @@ mod tests {
             accent: false,
             chord_shape: None,
             arpeggio: ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         };
         assert_eq!(serde_json::to_value(trigger).unwrap()["accent"], false);
@@ -2086,6 +2233,8 @@ mod tests {
         let mut drum = Project::new();
         drum.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: ParameterLocks {
                 cutoff: Percent::new(50),
                 ..Default::default()
@@ -2103,6 +2252,8 @@ mod tests {
             accent: false,
             chord_shape: None,
             arpeggio: ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: ParameterLocks {
                 tone: Percent::new(50),
                 ..Default::default()
@@ -2287,6 +2438,8 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks,
         });
         assert_eq!(

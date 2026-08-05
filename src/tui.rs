@@ -4,7 +4,7 @@ use crate::{
         ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, DelayDivision, GlobalParameterId,
         LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue,
         Percent, Project, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
-        Waveform,
+        TriggerCondition, Waveform,
     },
     persistence,
     reducer::{Editor, Scope},
@@ -60,6 +60,10 @@ enum Mode {
     ChordEdit {
         shape: ChordShape,
     },
+    TriggerEdit {
+        field: TriggerField,
+    },
+    SwingEdit,
     GlobalEdit(GlobalParameterId),
     TempoInput(String),
     TrackLengthInput(String),
@@ -87,6 +91,26 @@ enum ChordField {
     Arp,
     Type,
     Rate,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TriggerField {
+    Mode,
+    CyclePosition,
+    CycleLength,
+    Chance,
+    Retrigger,
+}
+
+impl TriggerField {
+    const ALL: [Self; 5] = [
+        Self::Mode,
+        Self::CyclePosition,
+        Self::CycleLength,
+        Self::Chance,
+        Self::Retrigger,
+    ];
 }
 
 impl ChordField {
@@ -373,6 +397,12 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     if matches!(a.mode, Mode::ChordEdit { .. }) && handle_chord_key(a, audio, k)? {
         return Ok(());
     }
+    if matches!(a.mode, Mode::TriggerEdit { .. }) && handle_trigger_key(a, audio, k)? {
+        return Ok(());
+    }
+    if a.mode == Mode::SwingEdit && handle_swing_key(a, audio, k)? {
+        return Ok(());
+    }
     if matches!(a.mode, Mode::ParameterEdit(_)) && handle_parameter_key(a, audio, k)? {
         return Ok(());
     }
@@ -493,6 +523,22 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
             if apply(a, audio, |e| e.toggle_slide(track, step)) {
                 sync_project(a, audio);
             }
+        }
+        KeyCode::Char('T') if a.row > 0 => {
+            let track = a.row - 1;
+            match a.editor.trigger_condition_value(track, a.step) {
+                Ok(_) => {
+                    a.mode = Mode::TriggerEdit {
+                        field: TriggerField::Mode,
+                    };
+                    a.status = "Editing trigger condition and retrigger count".into();
+                }
+                Err(error) => a.status = error.to_string(),
+            }
+        }
+        KeyCode::Char('S') if a.row > 0 => {
+            a.mode = Mode::SwingEdit;
+            a.status = format!("{} swing", a.editor.project.tracks[a.row - 1].name);
         }
         KeyCode::Char('C') if a.row == 5 => open_chord_editor(a),
         KeyCode::Char(c) if a.row == 0 => {
@@ -1288,6 +1334,170 @@ fn move_chord_editor_step(a: &mut App, forward: bool) {
     a.mode = Mode::ChordEdit { shape };
 }
 
+fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+    let Mode::TriggerEdit { field } = a.mode else {
+        return Ok(false);
+    };
+    let track = a.row.saturating_sub(1);
+    let step = a.step;
+    match k.code {
+        KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o') => return Ok(false),
+        KeyCode::Char('?') => {
+            a.mode = Mode::Help;
+            return Ok(true);
+        }
+        KeyCode::Enter | KeyCode::Esc | KeyCode::Char('T') => {
+            a.mode = Mode::Navigation;
+            a.status = "Trigger editing finished".into();
+            return Ok(true);
+        }
+        KeyCode::Left | KeyCode::Right => {
+            let index = TriggerField::ALL
+                .iter()
+                .position(|value| *value == field)
+                .unwrap();
+            let next = if k.code == KeyCode::Right {
+                (index + 1) % TriggerField::ALL.len()
+            } else {
+                (index + TriggerField::ALL.len() - 1) % TriggerField::ALL.len()
+            };
+            a.mode = Mode::TriggerEdit {
+                field: TriggerField::ALL[next],
+            };
+            return Ok(true);
+        }
+        _ => {}
+    }
+    let condition = match a.editor.trigger_condition_value(track, step) {
+        Ok(value) => value,
+        Err(error) => {
+            a.status = error.to_string();
+            a.mode = Mode::Navigation;
+            return Ok(true);
+        }
+    };
+    let direction: i16 = if k.code == KeyCode::Down { -1 } else { 1 };
+    let mut changed = false;
+    match field {
+        TriggerField::Mode if matches!(k.code, KeyCode::Up | KeyCode::Down) => {
+            let modes = [
+                TriggerCondition::Always,
+                TriggerCondition::Cycle {
+                    position: 1,
+                    length: 2,
+                },
+                TriggerCondition::Chance {
+                    probability: Percent::new(50).unwrap(),
+                },
+            ];
+            let index = match condition {
+                TriggerCondition::Always => 0,
+                TriggerCondition::Cycle { .. } => 1,
+                TriggerCondition::Chance { .. } => 2,
+            };
+            let next = (index as i16 + direction).rem_euclid(modes.len() as i16) as usize;
+            changed = apply(a, audio, |editor| {
+                editor.set_trigger_condition(track, step, modes[next])
+            });
+        }
+        TriggerField::CyclePosition if matches!(k.code, KeyCode::Up | KeyCode::Down) => {
+            if let TriggerCondition::Cycle { position, length } = condition {
+                let position = (position as i16 + direction).clamp(1, length as i16) as u8;
+                changed = apply(a, audio, |editor| {
+                    editor.set_trigger_condition(
+                        track,
+                        step,
+                        TriggerCondition::Cycle { position, length },
+                    )
+                });
+            }
+        }
+        TriggerField::CycleLength if matches!(k.code, KeyCode::Up | KeyCode::Down) => {
+            if let TriggerCondition::Cycle { position, length } = condition {
+                let length = (length as i16 + direction).clamp(2, 4) as u8;
+                changed = apply(a, audio, |editor| {
+                    editor.set_trigger_condition(
+                        track,
+                        step,
+                        TriggerCondition::Cycle {
+                            position: position.min(length),
+                            length,
+                        },
+                    )
+                });
+            }
+        }
+        TriggerField::Chance => {
+            if let TriggerCondition::Chance { probability } = condition {
+                let value = match k.code {
+                    KeyCode::Up | KeyCode::Down => probability.saturating_add(direction),
+                    KeyCode::Char(c) => crate::reducer::percentage_key(c).unwrap_or(probability),
+                    _ => probability,
+                };
+                if value != probability {
+                    changed = apply(a, audio, |editor| {
+                        editor.set_trigger_condition(
+                            track,
+                            step,
+                            TriggerCondition::Chance { probability: value },
+                        )
+                    });
+                }
+            }
+        }
+        TriggerField::Retrigger if matches!(k.code, KeyCode::Up | KeyCode::Down) => {
+            let count = a.editor.retrigger_count_value(track, step).unwrap_or(1);
+            let count = (count as i16 + direction).clamp(1, 4) as u8;
+            changed = apply(a, audio, |editor| {
+                editor.set_retrigger_count(track, step, count)
+            });
+        }
+        _ => {}
+    }
+    if changed {
+        sync_project(a, audio);
+    }
+    Ok(true)
+}
+
+fn handle_swing_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+    let track = a.row.saturating_sub(1);
+    match k.code {
+        KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o') => Ok(false),
+        KeyCode::Char('?') => {
+            a.mode = Mode::Help;
+            Ok(true)
+        }
+        KeyCode::Enter | KeyCode::Esc | KeyCode::Char('S') => {
+            a.editor.end_coalescing();
+            a.mode = Mode::Navigation;
+            a.status = "Swing editing finished".into();
+            Ok(true)
+        }
+        KeyCode::Up | KeyCode::Down => {
+            let delta = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                10
+            } else {
+                1
+            };
+            let delta = if k.code == KeyCode::Down {
+                -delta
+            } else {
+                delta
+            };
+            let current = a.editor.project.tracks[track].swing;
+            let value = Percent::new((current.get() as i16 + delta).clamp(0, 75) as u8).unwrap();
+            if apply(a, audio, |editor| {
+                editor.set_track_swing(track, value, None)
+            }) {
+                sync_project(a, audio);
+            }
+            Ok(true)
+        }
+        _ => Ok(true),
+    }
+}
+
 fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::LfoEdit { parameter, field } = a.mode.clone() else {
         return Ok(false);
@@ -2007,6 +2217,8 @@ fn mode_name(mode: &Mode) -> String {
             format!("Track LFO edit ({})", parameter.display_name())
         }
         Mode::ChordEdit { shape } => format!("Chord trigger edit ({shape})"),
+        Mode::TriggerEdit { .. } => "Trigger editor".into(),
+        Mode::SwingEdit => "Track swing edit".into(),
         Mode::GlobalEdit(id) => format!("Global edit ({})", global_name(*id)),
         Mode::TempoInput(_) => "Tempo numeric input".into(),
         Mode::TrackLengthInput(_) => "Track length input".into(),
@@ -2021,7 +2233,12 @@ fn mode_name(mode: &Mode) -> String {
 fn help_available(mode: &Mode) -> bool {
     matches!(
         mode,
-        Mode::Navigation | Mode::ParameterEdit(_) | Mode::LfoEdit { .. } | Mode::ChordEdit { .. }
+        Mode::Navigation
+            | Mode::ParameterEdit(_)
+            | Mode::LfoEdit { .. }
+            | Mode::ChordEdit { .. }
+            | Mode::TriggerEdit { .. }
+            | Mode::SwingEdit
     )
 }
 
@@ -2036,7 +2253,19 @@ fn track_label(t: &crate::model::Track) -> String {
 fn step_cell(event: Option<&StepEvent>) -> String {
     match event {
         None => " . ".into(),
-        Some(StepEvent::Trigger { accent, locks }) if locks.is_empty() => {
+        Some(StepEvent::Trigger {
+            accent,
+            condition,
+            retrigger_count,
+            locks,
+        }) if *condition != TriggerCondition::Always || *retrigger_count != 1 => {
+            if *accent {
+                "X+ ".into()
+            } else {
+                "x+ ".into()
+            }
+        }
+        Some(StepEvent::Trigger { accent, locks, .. }) if locks.is_empty() => {
             if *accent {
                 " X ".into()
             } else {
@@ -3267,6 +3496,21 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
                 ) {
                     style = style.add_modifier(Modifier::UNDERLINED);
                 }
+                if matches!(
+                    track.steps[step].as_ref(),
+                    Some(StepEvent::BassNote {
+                        condition,
+                        retrigger_count,
+                        ..
+                    }
+                    | StepEvent::Note {
+                        condition,
+                        retrigger_count,
+                        ..
+                    }) if *condition != TriggerCondition::Always || *retrigger_count != 1
+                ) {
+                    style = style.fg(Color::Magenta).add_modifier(Modifier::BOLD);
+                }
                 cells.push(
                     ratatui::widgets::Cell::from(step_cell(track.steps[step].as_ref()))
                         .style(style),
@@ -3302,14 +3546,31 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     let pattern_help = format!(
         "[↑↓] vertical  [←→] step  [Shift+←→] bank  [Shift+1..6] track  [l] length  [Shift+D] double{scroll_hint}"
     );
-    let pattern_title = Line::from(format!("Pattern  {pattern_help}"));
+    let trigger_summary = if a.row > 0 {
+        let track = a.row - 1;
+        a.editor.project.tracks[track].steps[a.step]
+            .as_ref()
+            .and_then(|event| event.condition().zip(event.retrigger_count()))
+            .map(|(condition, count)| format!(" · {condition}, x{count}"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let swing_summary = if a.row > 0 {
+        format!(" · Swing {}", a.editor.project.tracks[a.row - 1].swing)
+    } else {
+        String::new()
+    };
+    let pattern_title = Line::from(format!(
+        "Pattern  {pattern_help}{trigger_summary}{swing_summary}"
+    ));
     f.render_widget(
         Table::new(rows, widths)
             .column_spacing(0)
             .header(Row::new(header_cells))
             .block(
                 Block::bordered().title(pattern_title).title_bottom(
-                    ". empty   x/X normal/accent   D:O note   D!O accent   */# lock   underline slide   - tie",
+                    ". empty   x/X normal/accent   + condition/retrigger   D:O note   D!O accent   */# lock   underline slide   - tie",
                 ),
             ),
         chunks[2],
@@ -3380,13 +3641,22 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             "Type 1–64 and press Enter; [↑/↓] ±1  [Shift+↑/↓] ±16  [Esc] finish",
         ));
     }
+    if matches!(a.mode, Mode::TriggerEdit { .. }) {
+        status_lines.push(Line::from(
+            "Trigger editor · [←/→] field  [↑/↓] adjust  [`/1–9/0] chance  [Enter/Esc] finish",
+        ));
+    } else if a.mode == Mode::SwingEdit {
+        status_lines.push(Line::from(
+            "Track swing · [↑/↓] ±1%  [Shift+↑/↓] ±10%  (0–75%)  [Enter/Esc] finish",
+        ));
+    }
     f.render_widget(Paragraph::new(status_lines), chunks[4]);
     if a.mode == Mode::Help {
         popup(
             f,
             area,
             "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: A toggles accent; Shift+G toggles Bass slide.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nTracks: l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C trigger editor (shape, arp, type, rate). Chord settings belong to note triggers; ties inherit them and empty steps edit input defaults.\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or Chord editing. Esc or ? closes Help.",
+            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: A toggles accent; Shift+G toggles Bass slide; Shift+T edits condition/chance/retriggers.\nTracks: Shift+S edits 0–75% swing; l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C trigger editor (shape, arp, type, rate).\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or trigger editing. Esc or ? closes Help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3413,6 +3683,17 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             }
         }
         Mode::ChordEdit { shape } => render_chord_popup(f, chunks[3], *shape, a),
+        Mode::TriggerEdit { field } => render_trigger_popup(f, area, a, *field),
+        Mode::SwingEdit => popup(
+            f,
+            area,
+            "Track swing",
+            &format!(
+                "{}: {}\n\n[↑/↓] ±1%   [Shift+↑/↓] ±10%\n0–75% · applies to offbeat sixteenths",
+                a.editor.project.tracks[a.row - 1].name,
+                a.editor.project.tracks[a.row - 1].swing,
+            ),
+        ),
         Mode::TempoInput(input) => popup(
             f,
             area,
@@ -3465,6 +3746,73 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
         ),
         _ => {}
     }
+}
+
+fn render_trigger_popup(f: &mut ratatui::Frame, area: Rect, a: &App, field: TriggerField) {
+    let track = a.row.saturating_sub(1);
+    let Ok(condition) = a.editor.trigger_condition_value(track, a.step) else {
+        return;
+    };
+    let count = a.editor.retrigger_count_value(track, a.step).unwrap_or(1);
+    let (cycle_position, cycle_length, chance) = match condition {
+        TriggerCondition::Cycle { position, length } => (position, length, 50),
+        TriggerCondition::Chance { probability } => (1, 2, probability.get()),
+        TriggerCondition::Always => (1, 2, 50),
+    };
+    let mode = match condition {
+        TriggerCondition::Always => "Always",
+        TriggerCondition::Cycle { .. } => "Cycle",
+        TriggerCondition::Chance { .. } => "Chance",
+    };
+    let fields = [
+        (TriggerField::Mode, format!("Mode: {mode}"), false),
+        (
+            TriggerField::CyclePosition,
+            format!("Phase: {cycle_position}"),
+            !matches!(condition, TriggerCondition::Cycle { .. }),
+        ),
+        (
+            TriggerField::CycleLength,
+            format!("Length: {cycle_length}"),
+            !matches!(condition, TriggerCondition::Cycle { .. }),
+        ),
+        (
+            TriggerField::Chance,
+            format!("Chance: {chance}%"),
+            !matches!(condition, TriggerCondition::Chance { .. }),
+        ),
+        (
+            TriggerField::Retrigger,
+            format!("Retrigger: {count}"),
+            false,
+        ),
+    ];
+    let text = fields
+        .into_iter()
+        .map(|(candidate, value, disabled)| {
+            let marker = if candidate == field { "> " } else { "  " };
+            let suffix = if disabled { " (inactive)" } else { "" };
+            Line::from(Span::styled(
+                format!("{marker}{value}{suffix}"),
+                if disabled {
+                    Style::default().fg(Color::DarkGray)
+                } else if candidate == field {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    let popup_area = lfo_popup_rect(area);
+    f.render_widget(Clear, popup_area);
+    f.render_widget(
+        Paragraph::new(text)
+            .block(Block::bordered().title(format!("Trigger · Step {}", a.step + 1))),
+        popup_area,
+    );
 }
 
 fn render_chord_popup(f: &mut ratatui::Frame, area: Rect, selected: ChordShape, a: &App) {
@@ -4200,6 +4548,8 @@ mod tests {
         project.patterns.push(project.patterns[0].clone());
         project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         let mut app = App::new(project, None);
@@ -4382,6 +4732,8 @@ mod tests {
             accent: false,
             chord_shape: None,
             arpeggio: crate::model::ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         project.patterns[0].tracks[3].steps[1] = Some(StepEvent::Note {
@@ -4390,6 +4742,8 @@ mod tests {
             accent: false,
             chord_shape: None,
             arpeggio: crate::model::ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: crate::model::ParameterLocks {
                 cutoff: Some(Percent::new(50).unwrap()),
                 ..Default::default()
@@ -4503,6 +4857,8 @@ mod tests {
             accent: false,
             chord_shape: Some(ChordShape::SeventhFirstInversion),
             arpeggio: crate::model::ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         let mut app = App::new(project, None);
@@ -4528,6 +4884,8 @@ mod tests {
             accent: false,
             chord_shape: None,
             arpeggio: crate::model::ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         project.patterns[0].tracks[4].steps[1] = Some(StepEvent::Note {
@@ -4536,6 +4894,8 @@ mod tests {
             accent: false,
             chord_shape: Some(ChordShape::Sus4SecondInversion),
             arpeggio: crate::model::ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         let mut app = App::new(project, None);
@@ -4682,6 +5042,8 @@ mod tests {
             accent: false,
             chord_shape: None,
             arpeggio: crate::model::ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: crate::model::ParameterLocks {
                 cutoff: Some(Percent::new(50).unwrap()),
                 ..Default::default()
@@ -4701,6 +5063,8 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: crate::model::ParameterLocks {
                 level: Some(Percent::new(25).unwrap()),
                 ..Default::default()
@@ -4771,6 +5135,8 @@ mod tests {
             accent: false,
             chord_shape: None,
             arpeggio: crate::model::ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: crate::model::ParameterLocks {
                 cutoff: Some(Percent::new(50).unwrap()),
                 ..Default::default()
@@ -4813,6 +5179,8 @@ mod tests {
                 accent: false,
                 chord_shape: None,
                 arpeggio: crate::model::ArpeggioConfig::default(),
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
             })),
             "1:3"
@@ -4824,6 +5192,8 @@ mod tests {
                 accent: false,
                 chord_shape: None,
                 arpeggio: crate::model::ArpeggioConfig::default(),
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: crate::model::ParameterLocks {
                     cutoff: Some(Percent::new(50).unwrap()),
                     ..Default::default()

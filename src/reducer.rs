@@ -2,7 +2,7 @@ use crate::audio::PatternIndexMap;
 use crate::model::{
     ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, LfoConfig, MAX_STEP_COUNT,
     MIN_STEP_COUNT, ParameterId, ParameterValue, Pattern, Percent, Project, StepEvent, TrackKind,
-    Waveform, tie_source,
+    TriggerCondition, Waveform, tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -28,6 +28,7 @@ pub enum EditError {
     NoAccent,
     NoSlide,
     NoChordShape,
+    NoTriggerSettings,
 }
 impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -47,6 +48,7 @@ impl std::fmt::Display for EditError {
                 Self::NoAccent => "accent requires a trigger or note",
                 Self::NoSlide => "slide requires a Bass note",
                 Self::NoChordShape => "chord shape requires a Chord note or empty Chord step",
+                Self::NoTriggerSettings => "trigger settings require a trigger or note",
             }
         )
     }
@@ -493,6 +495,8 @@ impl Editor {
                     octave: t.input_octave.unwrap(),
                     accent: false,
                     slide: false,
+                    condition: TriggerCondition::Always,
+                    retrigger_count: 1,
                     locks: Default::default(),
                 }
             } else if matches!(t.kind, TrackKind::Chord | TrackKind::Lead) {
@@ -511,11 +515,15 @@ impl Editor {
                     } else {
                         ArpeggioConfig::default()
                     },
+                    condition: TriggerCondition::Always,
+                    retrigger_count: 1,
                     locks: Default::default(),
                 }
             } else {
                 StepEvent::Trigger {
                     accent: false,
+                    condition: TriggerCondition::Always,
+                    retrigger_count: 1,
                     locks: Default::default(),
                 }
             });
@@ -531,38 +539,72 @@ impl Editor {
             if step >= t.steps.len() || !(1..=8).contains(&degree) {
                 return Err(EditError::InvalidStep);
             }
-            let (locks, accent, slide, chord_shape, arpeggio, existing_note) =
-                match t.steps[step].take() {
-                    Some(StepEvent::BassNote {
-                        accent,
-                        slide,
-                        locks,
-                        ..
-                    }) => (locks, accent, slide, None, ArpeggioConfig::default(), false),
-                    Some(StepEvent::Note {
-                        accent,
-                        chord_shape,
-                        arpeggio,
-                        locks,
-                        ..
-                    }) => (locks, accent, false, chord_shape, arpeggio, true),
-                    Some(event) => (
-                        *event.locks(),
-                        false,
-                        false,
-                        None,
-                        ArpeggioConfig::default(),
-                        false,
-                    ),
-                    None => (
-                        Default::default(),
-                        false,
-                        false,
-                        None,
-                        ArpeggioConfig::default(),
-                        false,
-                    ),
-                };
+            let (
+                locks,
+                accent,
+                slide,
+                chord_shape,
+                arpeggio,
+                condition,
+                retrigger_count,
+                existing_note,
+            ) = match t.steps[step].take() {
+                Some(StepEvent::BassNote {
+                    accent,
+                    slide,
+                    condition,
+                    retrigger_count,
+                    locks,
+                    ..
+                }) => (
+                    locks,
+                    accent,
+                    slide,
+                    None,
+                    ArpeggioConfig::default(),
+                    condition,
+                    retrigger_count,
+                    false,
+                ),
+                Some(StepEvent::Note {
+                    accent,
+                    chord_shape,
+                    arpeggio,
+                    condition,
+                    retrigger_count,
+                    locks,
+                    ..
+                }) => (
+                    locks,
+                    accent,
+                    false,
+                    chord_shape,
+                    arpeggio,
+                    condition,
+                    retrigger_count,
+                    true,
+                ),
+                Some(event) => (
+                    *event.locks(),
+                    false,
+                    false,
+                    None,
+                    ArpeggioConfig::default(),
+                    TriggerCondition::Always,
+                    1,
+                    false,
+                ),
+                None => (
+                    Default::default(),
+                    false,
+                    false,
+                    None,
+                    ArpeggioConfig::default(),
+                    TriggerCondition::Always,
+                    1,
+                    false,
+                ),
+            };
             let octave = t.input_octave.unwrap();
             t.input_degree = Some(degree);
             t.steps[step] = Some(if t.kind == TrackKind::Bass {
@@ -571,6 +613,8 @@ impl Editor {
                     octave,
                     accent,
                     slide,
+                    condition,
+                    retrigger_count,
                     locks,
                 }
             } else {
@@ -597,6 +641,8 @@ impl Editor {
                     } else {
                         ArpeggioConfig::default()
                     },
+                    condition,
+                    retrigger_count,
                     locks,
                 }
             });
@@ -913,6 +959,105 @@ impl Editor {
         })
     }
 
+    pub fn trigger_condition_value(
+        &self,
+        track: usize,
+        step: usize,
+    ) -> Result<TriggerCondition, EditError> {
+        self.project
+            .tracks
+            .get(track)
+            .ok_or(EditError::InvalidTrack)?
+            .steps
+            .get(step)
+            .ok_or(EditError::InvalidStep)?
+            .as_ref()
+            .and_then(StepEvent::condition)
+            .ok_or(EditError::NoTriggerSettings)
+    }
+
+    pub fn retrigger_count_value(&self, track: usize, step: usize) -> Result<u8, EditError> {
+        self.project
+            .tracks
+            .get(track)
+            .ok_or(EditError::InvalidTrack)?
+            .steps
+            .get(step)
+            .ok_or(EditError::InvalidStep)?
+            .as_ref()
+            .and_then(StepEvent::retrigger_count)
+            .ok_or(EditError::NoTriggerSettings)
+    }
+
+    pub fn set_trigger_condition(
+        &mut self,
+        track: usize,
+        step: usize,
+        condition: TriggerCondition,
+    ) -> Result<bool, EditError> {
+        if !condition.valid() {
+            return Err(EditError::NoTriggerSettings);
+        }
+        self.edit(None, move |project| {
+            let event = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?
+                .steps
+                .get_mut(step)
+                .ok_or(EditError::InvalidStep)?
+                .as_mut()
+                .ok_or(EditError::NoTriggerSettings)?;
+            *event.condition_mut().ok_or(EditError::NoTriggerSettings)? = condition;
+            Ok(())
+        })
+    }
+
+    pub fn set_retrigger_count(
+        &mut self,
+        track: usize,
+        step: usize,
+        count: u8,
+    ) -> Result<bool, EditError> {
+        if !(1..=4).contains(&count) {
+            return Err(EditError::NoTriggerSettings);
+        }
+        self.edit(None, move |project| {
+            let event = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?
+                .steps
+                .get_mut(step)
+                .ok_or(EditError::InvalidStep)?
+                .as_mut()
+                .ok_or(EditError::NoTriggerSettings)?;
+            *event
+                .retrigger_count_mut()
+                .ok_or(EditError::NoTriggerSettings)? = count;
+            Ok(())
+        })
+    }
+
+    pub fn set_track_swing(
+        &mut self,
+        track: usize,
+        value: Percent,
+        key: Option<CoalesceKey>,
+    ) -> Result<bool, EditError> {
+        if value.get() > 75 {
+            return Err(EditError::InvalidParameter);
+        }
+        self.edit(key, move |project| {
+            project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?
+                .swing = value;
+            Ok(())
+        })
+    }
+
     pub fn set_parameter(
         &mut self,
         track: usize,
@@ -1119,6 +1264,8 @@ mod tests {
         project.patterns.push(project.patterns[0].clone());
         project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: true,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         project.activate_pattern(1);
@@ -1197,6 +1344,8 @@ mod tests {
         editor.select_pattern(0);
         editor.project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
 
@@ -1561,5 +1710,31 @@ mod tests {
         );
         assert!(editor.undo());
         assert!(editor.redo());
+    }
+
+    #[test]
+    fn trigger_settings_and_swing_are_atomic_and_reject_ties() {
+        let mut editor = Editor::new(Project::new());
+        editor.toggle_event(0, 0).unwrap();
+        let condition = TriggerCondition::Cycle {
+            position: 2,
+            length: 3,
+        };
+        editor.set_trigger_condition(0, 0, condition).unwrap();
+        editor.set_retrigger_count(0, 0, 3).unwrap();
+        editor
+            .set_track_swing(0, Percent::new(42).unwrap(), None)
+            .unwrap();
+        assert_eq!(editor.trigger_condition_value(0, 0), Ok(condition));
+        assert_eq!(editor.retrigger_count_value(0, 0), Ok(3));
+        assert_eq!(editor.project.tracks[0].swing, Percent::new(42).unwrap());
+        assert!(editor.undo());
+        assert_eq!(editor.project.tracks[0].swing, Percent::ZERO);
+        editor.set_note(3, 0, 1).unwrap();
+        editor.toggle_tie(3, 1).unwrap();
+        assert_eq!(
+            editor.set_retrigger_count(3, 1, 2),
+            Err(EditError::NoTriggerSettings)
+        );
     }
 }

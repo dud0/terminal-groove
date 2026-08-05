@@ -7,7 +7,7 @@ use crate::{
     model::{
         ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, Globals, Instrument,
         LfoAssignments, MAX_STEP_COUNT, ParameterId, ParameterLocks, Percent, Project, StepEvent,
-        TRACK_COUNT, Waveform,
+        TRACK_COUNT, TriggerCondition, Waveform,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -78,6 +78,7 @@ struct AudioTrack {
     muted: bool,
     delay_send: Percent,
     reverb_send: Percent,
+    swing: Percent,
     instrument: Instrument,
     lfos: LfoAssignments,
     input_degree: u8,
@@ -127,6 +128,7 @@ impl AudioProject {
                     muted: t.muted,
                     delay_send: t.delay_send,
                     reverb_send: t.reverb_send,
+                    swing: t.swing,
                     instrument: t.instrument,
                     lfos: t.lfos,
                     input_degree: t.input_degree.unwrap_or(1),
@@ -750,6 +752,26 @@ struct Renderer {
     preview_lfos: [[Lfo; ParameterId::ALL.len()]; TRACK_COUNT],
     lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
     preview_lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
+    scheduled: [Option<ScheduledTrackAction>; 32],
+    cycle_counts: [[u32; MAX_STEP_COUNT]; TRACK_COUNT],
+    condition_rng: [u32; TRACK_COUNT],
+    preview_scheduled: [Option<PreviewAction>; 24],
+}
+
+#[derive(Clone, Copy)]
+struct ScheduledTrackAction {
+    remaining: u32,
+    track: u8,
+    step: u8,
+    retrigger: bool,
+    trigger_allowed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PreviewAction {
+    remaining: u32,
+    track: u8,
+    step: u8,
 }
 impl Renderer {
     fn new(project: AudioProject, sr: u32, status: Arc<AudioStatus>) -> Self {
@@ -803,6 +825,12 @@ impl Renderer {
             }),
             lfo_offsets: [[0.0; ParameterId::ALL.len()]; TRACK_COUNT],
             preview_lfo_offsets: [[0.0; ParameterId::ALL.len()]; TRACK_COUNT],
+            scheduled: [None; 32],
+            cycle_counts: [[0; MAX_STEP_COUNT]; TRACK_COUNT],
+            condition_rng: std::array::from_fn(|i| {
+                0x8a5c_9d31 ^ (i as u32).wrapping_mul(0x9e37_79b9)
+            }),
+            preview_scheduled: [None; 24],
         };
         r.configure_effects(0);
         r
@@ -833,6 +861,72 @@ impl Renderer {
         };
         for (i, mute) in self.mute.iter_mut().enumerate() {
             mute.set((!self.project.tracks[i].muted) as u8 as f32, smoothing);
+        }
+    }
+    fn reset_trigger_state(&mut self) {
+        self.scheduled = [None; 32];
+        self.preview_scheduled = [None; 24];
+        self.cycle_counts = [[0; MAX_STEP_COUNT]; TRACK_COUNT];
+        self.condition_rng =
+            std::array::from_fn(|i| 0x8a5c_9d31 ^ (i as u32).wrapping_mul(0x9e37_79b9));
+    }
+    fn condition_passes(&mut self, track: usize, step: usize, condition: TriggerCondition) -> bool {
+        match condition {
+            TriggerCondition::Always => true,
+            TriggerCondition::Cycle { position, length } => {
+                let count = self.cycle_counts[track][step];
+                self.cycle_counts[track][step] = count.wrapping_add(1);
+                (count % u32::from(length)) + 1 == u32::from(position)
+            }
+            TriggerCondition::Chance { probability } => {
+                let state = &mut self.condition_rng[track];
+                *state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (*state % 100) < u32::from(probability.get())
+            }
+        }
+    }
+    fn enqueue(&mut self, action: ScheduledTrackAction) {
+        if let Some(slot) = self.scheduled.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(action);
+        }
+    }
+    fn advance_scheduled(&mut self) {
+        let mut ready = [None; 32];
+        for (index, action) in self.scheduled.iter_mut().enumerate() {
+            let Some(mut pending) = *action else { continue };
+            if pending.remaining > 0 {
+                pending.remaining -= 1;
+                *action = Some(pending);
+            } else {
+                ready[index] = Some(pending);
+                *action = None;
+            }
+        }
+        for action in ready.into_iter().flatten() {
+            self.process_track_action(
+                action.track as usize,
+                action.step as usize,
+                action.retrigger,
+                action.trigger_allowed,
+            );
+        }
+    }
+    fn advance_preview_scheduled(&mut self) {
+        let mut ready = [None; 24];
+        for (index, action) in self.preview_scheduled.iter_mut().enumerate() {
+            let Some(mut pending) = *action else {
+                continue;
+            };
+            if pending.remaining > 0 {
+                pending.remaining -= 1;
+                *action = Some(pending);
+            } else {
+                ready[index] = Some(pending);
+                *action = None;
+            }
+        }
+        for action in ready.into_iter().flatten() {
+            self.audition_once(action.track as usize, action.step as usize);
         }
     }
     fn command(&mut self, command: AudioCommand) {
@@ -886,6 +980,7 @@ impl Renderer {
                 self.reverb.clear();
                 self.limiter.clear();
                 self.reset_lfos();
+                self.reset_trigger_state();
                 self.status.running.store(false, Ordering::Release);
                 self.status.paused.store(false, Ordering::Release);
                 for playhead in &self.status.playheads {
@@ -974,6 +1069,7 @@ impl Renderer {
         self.active_pattern = pattern;
         self.queued_pattern = None;
         self.next_steps = [0; TRACK_COUNT];
+        self.reset_trigger_state();
         self.status
             .active_pattern
             .store(pattern as u8, Ordering::Release);
@@ -1675,6 +1771,32 @@ impl Renderer {
         {
             return;
         }
+        self.preview_scheduled = [None; 24];
+        let count = self.project.patterns[self.active_pattern].tracks[track].steps[step]
+            .and_then(|event| event.retrigger_count())
+            .unwrap_or(1);
+        self.audition_once(track, step);
+        let step_samples = self.clock.step_samples().round() as u32;
+        for hit in 1..count {
+            if let Some(slot) = self
+                .preview_scheduled
+                .iter_mut()
+                .find(|slot| slot.is_none())
+            {
+                *slot = Some(PreviewAction {
+                    remaining: step_samples * u32::from(hit) / u32::from(count),
+                    track: track as u8,
+                    step: step as u8,
+                });
+            }
+        }
+    }
+    fn audition_once(&mut self, track: usize, step: usize) {
+        if track >= TRACK_COUNT
+            || step >= self.project.patterns[self.active_pattern].tracks[track].step_count as usize
+        {
+            return;
+        }
         self.reset_preview_lfos(track);
         if track < 3 {
             let accent = match self.project.patterns[self.active_pattern].tracks[track].steps[step]
@@ -1693,6 +1815,7 @@ impl Renderer {
                 accent,
                 slide,
                 locks,
+                ..
             }) => (
                 degree,
                 octave,
@@ -1708,7 +1831,7 @@ impl Renderer {
                 accent,
                 chord_shape,
                 arpeggio,
-                locks: _,
+                ..
             }) => (
                 degree,
                 octave,
@@ -1807,8 +1930,8 @@ impl Renderer {
         Self::configure_synth_voice(&self.project, self.sr, track, trigger, locks, v);
         v.remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
     }
-    fn boundary(&mut self) {
-        if self.clock.next_step % 16 == 0
+    fn boundary(&mut self, global_step: usize) {
+        if global_step % 16 == 0
             && let Some(pattern) = self.queued_pattern
         {
             self.activate_pattern(pattern);
@@ -1821,129 +1944,182 @@ impl Renderer {
         for track in 0..TRACK_COUNT {
             let step = self.next_steps[track];
             self.status.playheads[track].store(step as u8, Ordering::Release);
-            let t = self.project.tracks[track];
             let sequence = self.project.patterns[self.active_pattern].tracks[track];
-            if track < 3 {
-                self.update_drum_mix(track, step, ParameterSmoothing::Default.samples(self.sr));
-                if let Some(StepEvent::Trigger { accent, locks }) = sequence.steps[step] {
-                    self.trigger_drum(track, accent, locks);
-                }
+            let event = sequence.steps[step];
+            let trigger_allowed = event
+                .and_then(|event| event.condition())
+                .map(|condition| self.condition_passes(track, step, condition))
+                .unwrap_or(true);
+            let step_samples = self.clock.step_samples().round() as u32;
+            let delay = if global_step % 2 == 1 {
+                step_samples * u32::from(self.project.tracks[track].swing.get()) / 100
             } else {
-                let vi = track - 3;
-                let active = if track == 4 {
-                    self.chord.active
-                } else {
-                    self.synth[vi].active
+                0
+            };
+            self.enqueue(ScheduledTrackAction {
+                remaining: delay,
+                track: track as u8,
+                step: step as u8,
+                retrigger: false,
+                trigger_allowed,
+            });
+            if trigger_allowed {
+                if let Some(count) = event.and_then(|event| event.retrigger_count()) {
+                    let next_delay = if (global_step + 1) % 2 == 1 {
+                        step_samples * u32::from(self.project.tracks[track].swing.get()) / 100
+                    } else {
+                        0
+                    };
+                    let horizon = (step_samples + next_delay).saturating_sub(delay);
+                    for hit in 1..count {
+                        self.enqueue(ScheduledTrackAction {
+                            remaining: horizon * u32::from(hit) / u32::from(count),
+                            track: track as u8,
+                            step: step as u8,
+                            retrigger: true,
+                            trigger_allowed: true,
+                        });
+                    }
+                }
+            }
+            self.next_steps[track] = (step + 1) % sequence.step_count as usize;
+        }
+        // Execute straight-grid actions at the boundary itself. Delayed swing
+        // actions remain in the fixed queue for subsequent callback samples.
+        self.advance_scheduled();
+    }
+
+    fn process_track_action(
+        &mut self,
+        track: usize,
+        step: usize,
+        retrigger: bool,
+        trigger_allowed: bool,
+    ) {
+        let t = self.project.tracks[track];
+        let sequence = self.project.patterns[self.active_pattern].tracks[track];
+        if track < 3 {
+            if !retrigger {
+                self.update_drum_mix(track, step, ParameterSmoothing::Default.samples(self.sr));
+            }
+            if trigger_allowed
+                && let Some(StepEvent::Trigger { accent, locks, .. }) = sequence.steps[step]
+            {
+                self.trigger_drum(track, accent, locks);
+            }
+            return;
+        }
+        let vi = track - 3;
+        let active = if track == 4 {
+            self.chord.active
+        } else {
+            self.synth[vi].active
+        };
+        let action = if !trigger_allowed
+            && !retrigger
+            && sequence.steps[step]
+                .and_then(|event| event.condition())
+                .is_some()
+        {
+            GateAction::Release
+        } else {
+            synth_action(
+                &sequence.steps[..sequence.step_count as usize],
+                step,
+                active,
+            )
+        };
+        match action {
+            GateAction::Trigger {
+                degree,
+                octave,
+                accent,
+                slide,
+                chord_shape,
+                arpeggio,
+            } => {
+                let locks = self.locks_at(track, step);
+                let trigger = SynthTrigger {
+                    degree,
+                    octave,
+                    accent,
+                    slide,
+                    chord_shape,
+                    arpeggio,
                 };
-                match synth_action(
-                    &sequence.steps[..sequence.step_count as usize],
-                    step,
-                    active,
-                ) {
-                    GateAction::Trigger {
-                        degree,
-                        octave,
-                        accent,
-                        slide,
-                        chord_shape,
-                        arpeggio,
-                    } => {
-                        let locks = self.locks_at(track, step);
-                        let trigger = SynthTrigger {
-                            degree,
-                            octave,
-                            accent,
-                            slide,
-                            chord_shape,
-                            arpeggio,
-                        };
-                        if track == 4 {
-                            Self::trigger_chord(
-                                &self.project,
-                                self.sr,
-                                trigger,
-                                locks,
-                                &mut self.chord,
-                            );
-                        } else {
-                            Self::configure_synth_voice(
-                                &self.project,
-                                self.sr,
-                                track,
-                                trigger,
-                                locks,
-                                &mut self.synth[vi],
-                            );
-                        }
-                    }
-                    GateAction::Hold => {
-                        if matches!(sequence.steps[step], Some(StepEvent::Tie { .. })) {
-                            let locks = self.locks_at(track, step);
-                            if track == 4 {
-                                for voice in &mut self.chord.voices[self.chord.group
-                                    * CHORD_GROUP_SIZE
-                                    ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
-                                {
-                                    Self::apply_synth_params(
-                                        &self.project,
-                                        self.sr,
-                                        track,
-                                        locks,
-                                        voice,
-                                        ParameterSmoothing::Default.samples(self.sr),
-                                    );
-                                }
-                                Self::configure_chorus(&mut self.chord.chorus, t, locks);
-                            } else {
-                                Self::apply_synth_params(
-                                    &self.project,
-                                    self.sr,
-                                    track,
-                                    locks,
-                                    &mut self.synth[vi],
-                                    ParameterSmoothing::Default.samples(self.sr),
-                                );
-                            }
-                        }
-                    }
-                    GateAction::Release => {
-                        if track == 4 {
-                            for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
-                                ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
-                            {
-                                Self::apply_synth_params(
-                                    &self.project,
-                                    self.sr,
-                                    track,
-                                    ParameterLocks::default(),
-                                    voice,
-                                    ParameterSmoothing::Default.samples(self.sr),
-                                );
-                            }
-                            Self::release_chord(&mut self.chord);
-                            Self::configure_chorus(
-                                &mut self.chord.chorus,
-                                t,
-                                ParameterLocks::default(),
-                            );
-                        } else {
+                if track == 4 {
+                    Self::trigger_chord(&self.project, self.sr, trigger, locks, &mut self.chord);
+                } else {
+                    Self::configure_synth_voice(
+                        &self.project,
+                        self.sr,
+                        track,
+                        trigger,
+                        locks,
+                        &mut self.synth[vi],
+                    );
+                }
+            }
+            GateAction::Hold if !retrigger => {
+                if matches!(sequence.steps[step], Some(StepEvent::Tie { .. })) {
+                    let locks = self.locks_at(track, step);
+                    if track == 4 {
+                        for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
+                            ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
+                        {
                             Self::apply_synth_params(
                                 &self.project,
                                 self.sr,
                                 track,
-                                ParameterLocks::default(),
-                                &mut self.synth[vi],
+                                locks,
+                                voice,
                                 ParameterSmoothing::Default.samples(self.sr),
                             );
-                            self.synth[vi].env.gate_off();
-                            self.synth[vi].active = false;
-                            self.synth[vi].slide_armed = false;
                         }
+                        Self::configure_chorus(&mut self.chord.chorus, t, locks);
+                    } else {
+                        Self::apply_synth_params(
+                            &self.project,
+                            self.sr,
+                            track,
+                            locks,
+                            &mut self.synth[vi],
+                            ParameterSmoothing::Default.samples(self.sr),
+                        );
                     }
-                    GateAction::None => {}
                 }
             }
-            self.next_steps[track] = (step + 1) % sequence.step_count as usize;
+            GateAction::Release if !retrigger => {
+                if track == 4 {
+                    for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
+                        ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
+                    {
+                        Self::apply_synth_params(
+                            &self.project,
+                            self.sr,
+                            track,
+                            ParameterLocks::default(),
+                            voice,
+                            ParameterSmoothing::Default.samples(self.sr),
+                        );
+                    }
+                    Self::release_chord(&mut self.chord);
+                    Self::configure_chorus(&mut self.chord.chorus, t, ParameterLocks::default());
+                } else {
+                    Self::apply_synth_params(
+                        &self.project,
+                        self.sr,
+                        track,
+                        ParameterLocks::default(),
+                        &mut self.synth[vi],
+                        ParameterSmoothing::Default.samples(self.sr),
+                    );
+                    self.synth[vi].env.gate_off();
+                    self.synth[vi].active = false;
+                    self.synth[vi].slide_armed = false;
+                }
+            }
+            _ => {}
         }
     }
     fn render_synth(
@@ -2114,9 +2290,13 @@ impl Renderer {
             self.advance_lfos();
         }
         self.advance_preview_lfos();
-        if self.playing && self.clock.tick().is_some() {
-            self.boundary()
+        self.advance_preview_scheduled();
+        if self.playing
+            && let Some(global_step) = self.clock.tick()
+        {
+            self.boundary(global_step)
         }
+        self.advance_scheduled();
         self.advance_chord_arpeggios();
         let mut dry_l = 0.0;
         let mut dry_r = 0.0;
@@ -2407,6 +2587,8 @@ mod tests {
         project.patterns.push(project.patterns[0].clone());
         project.patterns[1].tracks[0].steps[1] = Some(StepEvent::Trigger {
             accent: true,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         project.activate_pattern(1);
@@ -2438,7 +2620,7 @@ mod tests {
         let mut renderer =
             Renderer::new(AudioProject::from_project(&project), 8_000, status.clone());
         for expected in [[0, 0], [1, 1], [2, 2], [0, 3], [1, 4], [2, 0]] {
-            renderer.boundary();
+            renderer.boundary(0);
             assert_eq!(
                 [
                     status.playheads[0].load(Ordering::Acquire),
@@ -2453,6 +2635,8 @@ mod tests {
         let mut p = Project::new();
         p.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         let a = render_offline(&p, 8_000, 2_000);
@@ -2474,6 +2658,8 @@ mod tests {
                 octave: 2,
                 accent: false,
                 slide: false,
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
             });
             project.patterns[0].tracks[4].steps[step] = Some(StepEvent::Note {
@@ -2482,6 +2668,8 @@ mod tests {
                 accent: false,
                 chord_shape: None,
                 arpeggio: ArpeggioConfig::default(),
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
             });
             project.patterns[0].tracks[5].steps[step] = Some(StepEvent::Note {
@@ -2490,6 +2678,8 @@ mod tests {
                 accent: false,
                 chord_shape: None,
                 arpeggio: ArpeggioConfig::default(),
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
             });
         }
@@ -2507,11 +2697,13 @@ mod tests {
             let mut project = Project::new();
             project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
                 accent,
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
             });
             let status = Arc::new(AudioStatus::default());
             let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
-            renderer.boundary();
+            renderer.boundary(0);
             (0..400)
                 .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0, 0.0).0)
                 .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
@@ -2524,11 +2716,13 @@ mod tests {
                 octave: 3,
                 accent,
                 slide: false,
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
             });
             let status = Arc::new(AudioStatus::default());
             let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
-            renderer.boundary();
+            renderer.boundary(0);
             (0..400)
                 .map(|_| {
                     Renderer::render_synth(
@@ -2553,6 +2747,8 @@ mod tests {
             octave: 3,
             accent: true,
             slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         project.patterns[0].tracks[3].steps[1] = Some(StepEvent::Tie {
@@ -2560,18 +2756,20 @@ mod tests {
         });
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
-        renderer.boundary();
+        renderer.boundary(0);
         for _ in 0..40 {
             renderer.synth[0].accent_gain.next_value();
         }
         assert!(renderer.synth[0].accent_gain.next_value() > 1.3);
 
-        renderer.boundary();
+        renderer.boundary(0);
         project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: false,
             slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         renderer.command(Audio::snapshot(&project));
@@ -2589,6 +2787,8 @@ mod tests {
             octave: 3,
             accent: false,
             slide: true,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         project.patterns[0].tracks[3].steps[1] = Some(StepEvent::BassNote {
@@ -2596,12 +2796,14 @@ mod tests {
             octave: 3,
             accent: false,
             slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
 
-        renderer.boundary();
+        renderer.boundary(0);
         for _ in 0..80 {
             Renderer::render_synth(
                 &mut renderer.synth[0],
@@ -2612,7 +2814,7 @@ mod tests {
         let stage_before_slide = renderer.synth[0].env.stage;
         let starting_frequency = renderer.synth[0].freq.next_value();
 
-        renderer.boundary();
+        renderer.boundary(0);
         assert_eq!(renderer.synth[0].env.stage, stage_before_slide);
         let first_frequency = renderer.synth[0].freq.next_value();
         assert!(first_frequency > starting_frequency);
@@ -2630,18 +2832,24 @@ mod tests {
         for step in [0, 4, 8, 12] {
             project.patterns[0].tracks[0].steps[step] = Some(StepEvent::Trigger {
                 accent: step == 0,
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
             });
         }
         for step in [4, 12] {
             project.patterns[0].tracks[1].steps[step] = Some(StepEvent::Trigger {
                 accent: true,
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
             });
         }
         for step in 0..16 {
             project.patterns[0].tracks[2].steps[step] = Some(StepEvent::Trigger {
                 accent: step == 6 || step == 14,
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
             });
         }
@@ -2660,6 +2868,8 @@ mod tests {
                 octave: 2,
                 accent: step == 8,
                 slide: step == 4,
+                condition: Default::default(),
+                retrigger_count: 1,
                 locks: Default::default(),
             });
         }
@@ -2697,6 +2907,8 @@ mod tests {
         let mut dry_project = Project::new();
         dry_project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         let mut wet_project = dry_project.clone();
@@ -2737,6 +2949,8 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: ParameterLocks {
                 level: Some(Percent::ZERO),
                 ..Default::default()
@@ -2744,11 +2958,11 @@ mod tests {
         });
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
-        renderer.boundary();
+        renderer.boundary(0);
         let locked = (0..40)
             .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0, 0.0).0)
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-        renderer.boundary();
+        renderer.boundary(0);
         let restored = (0..40)
             .map(|_| Renderer::render_drum(&mut renderer.drums[0], 0, renderer.sr, 0.0, 0.0).0)
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
@@ -2765,6 +2979,8 @@ mod tests {
             octave: 3,
             accent: false,
             slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: ParameterLocks {
                 cutoff: Percent::new(20),
                 ..Default::default()
@@ -2773,7 +2989,7 @@ mod tests {
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
         renderer.command(AudioCommand::PlayPause);
-        renderer.boundary();
+        renderer.boundary(0);
         assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
 
         let mut edited = project.clone();
@@ -2786,7 +3002,7 @@ mod tests {
         renderer.command(Audio::snapshot(&edited));
         assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
 
-        renderer.boundary();
+        renderer.boundary(0);
         assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(80));
     }
 
@@ -2798,6 +3014,8 @@ mod tests {
             octave: 3,
             accent: false,
             slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: ParameterLocks {
                 level: Percent::new(30),
                 cutoff: Percent::new(20),
@@ -2816,17 +3034,17 @@ mod tests {
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
 
-        renderer.boundary();
+        renderer.boundary(0);
         assert_eq!(renderer.synth[0].locks.level, Percent::new(30));
         assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
         assert_eq!(renderer.synth[0].locks.resonance, None);
 
-        renderer.boundary();
+        renderer.boundary(0);
         assert_eq!(renderer.synth[0].locks.level, Percent::new(30));
         assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
         assert_eq!(renderer.synth[0].locks.resonance, Percent::new(70));
 
-        renderer.boundary();
+        renderer.boundary(0);
         assert_eq!(renderer.synth[0].locks.level, Percent::new(30));
         assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
         assert_eq!(renderer.synth[0].locks.resonance, Percent::new(70));
@@ -2844,6 +3062,8 @@ mod tests {
             octave: 3,
             accent: false,
             slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: ParameterLocks {
                 cutoff: Percent::new(25),
                 ..Default::default()
@@ -2861,7 +3081,7 @@ mod tests {
         project.tracks[0].level = Percent::new(100).unwrap();
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
-        renderer.boundary();
+        renderer.boundary(0);
         for _ in 0..40 {
             renderer.drums[0].level.next_value();
         }
@@ -2926,6 +3146,8 @@ mod tests {
             accent: false,
             chord_shape: None,
             arpeggio: ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: ParameterLocks {
                 cutoff: Percent::new(20),
                 ..Default::default()
@@ -2943,12 +3165,14 @@ mod tests {
             accent: true,
             chord_shape: None,
             arpeggio: ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
 
-        renderer.boundary();
+        renderer.boundary(0);
         let first_group = renderer.chord.group;
         let frequencies = std::array::from_fn::<_, 3, _>(|voice| {
             renderer.chord.voices[first_group * CHORD_GROUP_SIZE + voice]
@@ -2965,7 +3189,7 @@ mod tests {
             assert_eq!(voice.locks.cutoff, Percent::new(20));
         }
 
-        renderer.boundary();
+        renderer.boundary(0);
         assert_eq!(renderer.chord.group, first_group);
         for voice in &renderer.chord.voices
             [first_group * CHORD_GROUP_SIZE..first_group * CHORD_GROUP_SIZE + 3]
@@ -2973,7 +3197,7 @@ mod tests {
             assert_eq!(voice.locks.cutoff, Percent::new(20));
             assert_eq!(voice.locks.resonance, Percent::new(70));
         }
-        renderer.boundary();
+        renderer.boundary(0);
         assert_ne!(renderer.chord.group, first_group);
         for voice in &renderer.chord.voices
             [first_group * CHORD_GROUP_SIZE..first_group * CHORD_GROUP_SIZE + 3]
@@ -2986,7 +3210,7 @@ mod tests {
             assert_eq!(voice.env.stage, crate::dsp::EnvStage::Attack);
         }
 
-        renderer.boundary();
+        renderer.boundary(0);
         assert!(!renderer.chord.active);
     }
 
@@ -2999,11 +3223,13 @@ mod tests {
             accent: false,
             chord_shape: Some(ChordShape::SeventhRoot),
             arpeggio: ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
-        renderer.boundary();
+        renderer.boundary(0);
         assert_eq!(renderer.chord.voice_count, 4);
         let group = renderer.chord.group;
         let expected = [48, 52, 55, 59];
@@ -3037,6 +3263,8 @@ mod tests {
             accent: false,
             chord_shape: None,
             arpeggio: ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         let mut wet_project = dry_project.clone();
@@ -3154,6 +3382,8 @@ mod tests {
                 r#type: ArpeggioType::UpDown,
                 rate: ArpeggioRate::ThirtySecond,
             },
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         project.patterns[0].tracks[4].steps[1] = None;

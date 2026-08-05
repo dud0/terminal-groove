@@ -42,7 +42,7 @@ All sound is synthesized in real time. The application contains no audio samples
 - WAV or other audio export
 - Pattern chaining or song mode
 - Time-signature changes
-- Swing, microtiming, probability, or continuously variable event velocity
+- Microtiming or continuously variable event velocity
 - Polyphonic note entry outside the fixed Chord shape mapping, or oscillator detune
 - Solo, master-volume control, or configurable effect returns
 - User-defined track types or track reordering
@@ -75,7 +75,7 @@ All sound is synthesized in real time. The application contains no audio samples
 
 ### 2.3 Drum events
 
-A drum step is either empty or contains one trigger with a required Boolean `accent`. New triggers are unaccented. Pressing `Enter` on an occupied drum step clears the trigger, its accent, and all locks.
+A drum step is either empty or contains one trigger with a required Boolean `accent`, a trigger `condition`, and a `retrigger_count`. New triggers are unaccented, always trigger, and retrigger once. `condition` is `Always`, `Cycle { position, length }` for all phases of lengths 2–4, or `Chance { probability }` at 0–100%. Counts are 1–4 inclusive, including the first hit. Ties never carry these fields. Pressing `Enter` on an occupied drum step clears the trigger, its articulation, and all locks.
 
 Each drum track is a single retriggerable synthesized voice. Accent has a fixed engine-specific response: it raises level and also strengthens the kick transient, snare excitation, or hi-hat brightness. Instrument parameters are captured when the hit starts and remain part of that hit's tail. Mixer level and sends continue to follow each sequencer step.
 
@@ -90,6 +90,8 @@ A synth step is exactly one of:
 Degree 1 is the root in the stored input octave. Degrees 2 through 7 use the selected scale, and degree 8 is the root one octave above degree 1. Pitch uses twelve-tone equal temperament with A4 = 440 Hz.
 
 Notes are stored as scale degree and octave rather than absolute pitch. Changing the global key or scale therefore reinterprets all existing pattern notes the next time they trigger. A note that is already sounding keeps its current pitch until a new note event starts; a tie does not retune it.
+
+Every note also owns the same `condition` and `retrigger_count` fields as a drum trigger. A skipped Bass, Chord, or Lead note acts as an empty step: it releases the active voice and applies no locks. A skipped drum trigger is silent.
 
 Bass and Lead are monophonic. Chord interprets the stored degree as the root of a selected diatonic shape. The available shapes are `1-3-5`, `1-3-5-7`, `1-3-5-6`, `1-2-5`, and `1-4-5`, plus their cyclic inversions. A shape is stored on each Chord note as an ordered scale-degree recipe, so its musical quality follows the current root and scale. For example, `1-3-5-7` can produce different seventh qualities depending on the root and scale.
 
@@ -233,6 +235,9 @@ Each track provides:
 - Mute, default off
 - Delay send, default 0%
 - Reverb send, default 0% (20% for Chord and Lead)
+- Swing, default 0%, range 0–75%, shared across all patterns
+
+Swing delays only global offbeat sixteenths (clock steps 2, 4, …) by its percentage of the nominal step duration. It applies to the complete per-track action, including releases and locks, and remains aligned to the global clock for polymetric tracks. Conditions are evaluated once at the reached step. A successful event launches its full evenly-spaced retrigger burst before that track's next swing-adjusted slot. Cycle counters are per track and step; chance streams are deterministic per track. Both reset on Stop and pattern activation.
 
 Sends are post-fader and post-mute. Muting ramps the dry track and new send input to silence, but already-generated global effect tails continue. A muted synth voice continues its internal state, so unmuting may reveal a still-active voice.
 
@@ -319,6 +324,8 @@ The application uses ordinary portable terminal press events. It must not requir
 | Track | `Shift+D` | Double the selected track by appending an exact copy, when its length is at most 32 |
 | Trigger or note | `A` | Toggle accent |
 | Bass note | `Shift+G` | Toggle slide |
+| Trigger/note | `Shift+T` | Edit condition, cycle/chance values, and retrigger count |
+| Track | `Shift+S` | Edit 0–75% swing |
 | Eligible parameter editor | `Shift+L` | Add or edit that parameter's track-level LFO |
 | Track | `v` | Edit level |
 | Track | `m` | Toggle mute immediately |
@@ -366,7 +373,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
-- `A` toggles accent immediately on a trigger or note. `Shift+G` toggles slide on a Bass note. Both are undoable and reject incompatible or empty steps visibly.
+- `A` toggles accent immediately on a trigger or note. `Shift+G` toggles slide on a Bass note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. These edits are undoable and reject incompatible or empty steps visibly.
 
 ### 5.4 Audition behavior
 
@@ -461,7 +468,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 11,
+  "format_version": 12,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -587,7 +594,7 @@ For Chord or Lead pitch:
 }
 ```
 
-The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 11; no migration is needed.
+The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 12.
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 
@@ -732,7 +739,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 - Golden JSON for every track/event/lock and LFO rate/waveform variant
 - Default-project and populated-project round trips
 - Rejection of unknown versions/fields, bad ranges, wrong track order/count, step counts outside 1–64, invalid locks/LFO assignments, and invalid ties
-- Strict version 11 round trips, defaulting omitted Chord-shape and arpeggio fields, and rejection of versions 1 through 10 without migration
+- Strict version 12 round trips, v11 import with default condition/retrigger/swing fields, and rejection of all other versions
 - Failed loads preserve the active project
 - Atomic saves leave the previous file intact on failure
 - Successful save/load resets dirty state and load resets history
@@ -783,7 +790,7 @@ Keep the model/reducer and DSP independent from Ratatui and CPAL so they can be 
 6. Audition empty and occupied drum/pitched steps with `o`, including Chord shapes and inversions while transport is running, without pattern changes.
 7. Change key and scale and verify existing degree data follows the new harmony on future triggers.
 8. Undo and redo compound tie cleanup and repeated parameter edits, including returning to the saved clean revision.
-9. Save, inspect, reopen, and compare a version 11 project with accents, Bass slides, trigger-owned Chord shapes/arpeggiator settings, ordinary locks, Chord/Lead settings, ties, effects, mute states, and input octaves; verify versions 1 through 10 are rejected without altering the active project.
+9. Save, inspect, reopen, and compare a version 12 project with conditions, retriggers, swing, accents, Bass slides, trigger-owned Chord shapes/arpeggiator settings, ordinary locks, effects, mute states, and input octaves; verify v11 imports with defaults and all other versions are rejected without altering the active project.
 10. List audio devices, use the default device, and select a unique explicit device.
 11. Play for at least ten minutes at a supported 48 kHz low-latency configuration without stream errors, non-finite output, timing drift, or audible clicks from normal parameter edits.
 12. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored.

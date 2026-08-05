@@ -38,17 +38,23 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
         path: path.into(),
         source,
     })?;
-    let value: serde_json::Value =
+    let mut value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if version != Some(11) {
+    if !matches!(version, Some(11 | 12)) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
         });
+    }
+    // v12 adds serde-defaulted event settings and per-track swing.  Updating
+    // the document tag before deserialization keeps the in-memory project
+    // canonical while preserving v11's strict schema validation.
+    if version == Some(11) {
+        value["format_version"] = serde_json::Value::from(12);
     }
     let project: Project =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
@@ -157,10 +163,14 @@ mod tests {
         project.patterns.push(project.patterns[0].clone());
         project.patterns[0].tracks[0].steps[0] = Some(crate::model::StepEvent::Trigger {
             accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         project.patterns[1].tracks[0].steps[1] = Some(crate::model::StepEvent::Trigger {
             accent: true,
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         project.activate_pattern(1);
@@ -213,7 +223,7 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 11);
+        assert_eq!(value["format_version"], 12);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -323,7 +333,7 @@ mod tests {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
             let project = load(path.path()).unwrap();
-            assert_eq!(project.format_version, 11);
+            assert_eq!(project.format_version, 12);
             assert!(
                 (crate::model::MIN_PATTERN_COUNT..=crate::model::MAX_PATTERN_COUNT)
                     .contains(&project.patterns.len())
@@ -405,6 +415,8 @@ mod tests {
             accent: false,
             chord_shape: Some(crate::model::ChordShape::SeventhFirstInversion),
             arpeggio: crate::model::ArpeggioConfig::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         save_atomic(&path, &project).unwrap();
@@ -441,6 +453,8 @@ mod tests {
                 r#type: crate::model::ArpeggioType::DownUp,
                 rate: crate::model::ArpeggioRate::ThirtySecond,
             },
+            condition: Default::default(),
+            retrigger_count: 1,
             locks: Default::default(),
         });
         save_atomic(&path, &project).unwrap();
@@ -450,5 +464,44 @@ mod tests {
         assert!(json.contains("\"arpeggio\""));
         assert!(json.contains("down_up"));
         assert!(!json.contains("arpeggio_enabled"));
+    }
+
+    #[test]
+    fn v11_projects_migrate_trigger_defaults_and_swing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("v11.groove.json");
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(crate::model::StepEvent::Trigger {
+            accent: false,
+            condition: crate::model::TriggerCondition::Chance {
+                probability: crate::model::Percent::new(25).unwrap(),
+            },
+            retrigger_count: 4,
+            locks: Default::default(),
+        });
+        let mut value = serde_json::to_value(project).unwrap();
+        value["format_version"] = 11.into();
+        value["tracks"][0].as_object_mut().unwrap().remove("swing");
+        let event = value["patterns"][0]["tracks"][0]["steps"][0]
+            .as_object_mut()
+            .unwrap();
+        event.remove("condition");
+        event.remove("retrigger_count");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.format_version, 12);
+        assert_eq!(loaded.tracks[0].swing, crate::model::Percent::ZERO);
+        assert_eq!(
+            loaded.tracks[0].steps[0]
+                .as_ref()
+                .and_then(crate::model::StepEvent::condition),
+            Some(crate::model::TriggerCondition::Always)
+        );
+        assert_eq!(
+            loaded.tracks[0].steps[0]
+                .as_ref()
+                .and_then(crate::model::StepEvent::retrigger_count),
+            Some(1)
+        );
     }
 }
