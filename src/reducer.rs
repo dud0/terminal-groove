@@ -1,4 +1,5 @@
 use crate::audio::PatternIndexMap;
+use crate::generator::{self, Config as GeneratorConfig, Target as GeneratorTarget};
 use crate::model::{
     ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, LfoConfig, MAX_STEP_COUNT,
     MIN_STEP_COUNT, ParameterId, ParameterValue, Pattern, Percent, Project, StepEvent, TrackKind,
@@ -478,6 +479,24 @@ impl Editor {
         } else {
             false
         }
+    }
+
+    /// Fill empty cells in the active pattern as one undoable revision.
+    pub fn generate_pattern(&mut self, config: GeneratorConfig) -> Result<usize, EditError> {
+        let generated = generator::generate(&self.project, config);
+        if generated.inserted == 0 {
+            return Ok(0);
+        }
+        self.edit(None, |project| {
+            for (index, steps) in generated.tracks.iter().enumerate() {
+                if matches!(config.target, GeneratorTarget::Track(track) if track != index) {
+                    continue;
+                }
+                project.tracks[index].steps.clone_from(steps);
+            }
+            Ok(())
+        })?;
+        Ok(generated.inserted)
     }
     pub fn toggle_event(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
         self.edit(None, move |p| {
@@ -1779,5 +1798,23 @@ mod tests {
             editor.set_retrigger_count(3, 1, 2),
             Err(EditError::NoTriggerSettings)
         );
+    }
+
+    #[test]
+    fn generator_fills_only_empty_steps_and_is_one_undoable_edit() {
+        let mut editor = Editor::new(Project::new());
+        editor.set_note(3, 0, 8).unwrap();
+        let original = editor.project.tracks[3].steps[0];
+        let config = crate::generator::Config {
+            density: Percent::new(100).unwrap(),
+            ..Default::default()
+        };
+        let inserted = editor.generate_pattern(config).unwrap();
+        assert!(inserted > 0);
+        assert_eq!(editor.project.tracks[3].steps[0], original);
+        assert!(editor.undo());
+        assert_eq!(editor.project.tracks[3].steps[0], original);
+        assert!(editor.redo());
+        assert_eq!(editor.project.tracks[3].steps[0], original);
     }
 }

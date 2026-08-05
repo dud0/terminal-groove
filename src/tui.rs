@@ -1,5 +1,6 @@
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
+    generator::{Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
         ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, DelayDivision, GlobalParameterId,
         LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue,
@@ -52,6 +53,7 @@ impl Drop for TerminalGuard {
 enum Mode {
     Navigation,
     PatternDialog,
+    GeneratorDialog(GeneratorDialog),
     ParameterEdit(ParameterId),
     LfoEdit {
         parameter: ParameterId,
@@ -131,6 +133,17 @@ impl LfoField {
 enum FileAction {
     SaveAs,
     Open,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GeneratorDialog {
+    target: GeneratorTarget,
+    track: usize,
+    seed: String,
+    density: Percent,
+    ties: Percent,
+    accents: Percent,
+    field: usize,
 }
 pub struct App {
     pub editor: Editor,
@@ -316,6 +329,9 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     if a.mode == Mode::PatternDialog {
         return handle_pattern_dialog(a, audio, k);
     }
+    if matches!(a.mode, Mode::GeneratorDialog(_)) {
+        return handle_generator_dialog(a, audio, k);
+    }
     if a.mode == Mode::Help {
         if matches!(k.code, KeyCode::Esc | KeyCode::Char('?')) {
             a.mode = Mode::Navigation
@@ -430,6 +446,23 @@ fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
             } else {
                 a.status = "Audio command queue full".into()
             }
+        }
+        KeyCode::Char('g') => {
+            let track = a.row.saturating_sub(1).min(TRACK_COUNT - 1);
+            a.mode = Mode::GeneratorDialog(GeneratorDialog {
+                target: if a.row == 0 {
+                    GeneratorTarget::WholePattern
+                } else {
+                    GeneratorTarget::Track(track)
+                },
+                track,
+                seed: GeneratorConfig::default().seed.to_string(),
+                density: GeneratorConfig::default().density,
+                ties: GeneratorConfig::default().ties,
+                accents: GeneratorConfig::default().accents,
+                field: 0,
+            });
+            a.status = "Generator ready".into();
         }
         KeyCode::Char('.') => {
             if audio.send(AudioCommand::Stop).is_ok() {
@@ -749,6 +782,91 @@ fn handle_pattern_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             |e, cursor| e.delete_pattern_at(cursor),
             "Deleted pattern",
         ),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    let Mode::GeneratorDialog(dialog) = &mut a.mode else {
+        return Ok(());
+    };
+    match k.code {
+        KeyCode::Esc => a.mode = Mode::Navigation,
+        KeyCode::Tab => dialog.field = (dialog.field + 1) % 6,
+        KeyCode::BackTab => dialog.field = (dialog.field + 5) % 6,
+        KeyCode::Left | KeyCode::Right if dialog.field == 0 => {
+            dialog.target = match dialog.target {
+                GeneratorTarget::WholePattern => GeneratorTarget::Track(dialog.track),
+                GeneratorTarget::Track(_) => GeneratorTarget::WholePattern,
+            };
+        }
+        KeyCode::Left | KeyCode::Right if dialog.field == 1 => {
+            let delta = if k.code == KeyCode::Right {
+                1
+            } else {
+                TRACK_COUNT - 1
+            };
+            dialog.track = (dialog.track + delta) % TRACK_COUNT;
+            if matches!(dialog.target, GeneratorTarget::Track(_)) {
+                dialog.target = GeneratorTarget::Track(dialog.track);
+            }
+        }
+        KeyCode::Char(c) if dialog.field == 2 && c.is_ascii_digit() => {
+            if dialog.seed.len() < 20 {
+                dialog.seed.push(c);
+            }
+        }
+        KeyCode::Backspace if dialog.field == 2 => {
+            dialog.seed.pop();
+        }
+        KeyCode::Left if dialog.field == 2 => {
+            dialog.seed.pop();
+        }
+        KeyCode::Right if dialog.field == 2 => {}
+        KeyCode::Up | KeyCode::Down if (3..=5).contains(&dialog.field) => {
+            let delta = if k.code == KeyCode::Up { 5 } else { -5 };
+            match dialog.field {
+                3 => dialog.density = dialog.density.saturating_add(delta),
+                4 => dialog.ties = dialog.ties.saturating_add(delta),
+                _ => dialog.accents = dialog.accents.saturating_add(delta),
+            }
+        }
+        KeyCode::Left | KeyCode::Right if (3..=5).contains(&dialog.field) => {
+            dialog.field = if k.code == KeyCode::Right {
+                (dialog.field + 1).min(5)
+            } else {
+                dialog.field.saturating_sub(1).max(2)
+            };
+        }
+        KeyCode::Enter => {
+            let seed = dialog
+                .seed
+                .parse::<u64>()
+                .unwrap_or(GeneratorConfig::default().seed);
+            let config = GeneratorConfig {
+                target: dialog.target,
+                seed,
+                density: dialog.density,
+                range_low: 2,
+                range_high: 6,
+                ties: dialog.ties,
+                accents: dialog.accents,
+            };
+            if audio.available_commands() == 0 {
+                a.status = "Audio command queue full; generation rejected".into();
+            } else {
+                match a.editor.generate_pattern(config) {
+                    Ok(0) => a.status = format!("Seed {seed}: no empty steps available"),
+                    Ok(count) => {
+                        sync_project(a, audio);
+                        a.status = format!("Generated {count} events · seed {seed}");
+                        a.mode = Mode::Navigation;
+                    }
+                    Err(error) => a.status = error.to_string(),
+                }
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -2280,6 +2398,7 @@ fn mode_name(mode: &Mode) -> String {
     match mode {
         Mode::Navigation => "Navigation".into(),
         Mode::PatternDialog => "Pattern dialog".into(),
+        Mode::GeneratorDialog(_) => "Pattern idea generator".into(),
         Mode::ParameterEdit(parameter) => {
             format!("Parameter edit ({})", parameter.display_name())
         }
@@ -3474,7 +3593,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
                 " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
                 device_name, a.editor.project.globals.tempo_bpm
             )),
-            Span::raw("  [Ctrl+P] Patterns"),
+            Span::raw("  [Ctrl+P] Patterns  [g] Generate"),
             Span::raw("  [Ctrl+N] New [Ctrl+S] Save [Ctrl+O] Open"),
         ]),
         Line::from(format!(
@@ -3735,7 +3854,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
             f,
             area,
             "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears.\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: A toggles event accent or empty-step input default; Shift+G toggles Bass slide; Shift+T edits condition/chance/retriggers.\nTracks: Shift+S edits 0–75% swing; l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C trigger editor (shape, arp, type, rate).\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+N new project, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or trigger editing. Esc or ? closes Help.",
+            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears. g opens the deterministic fill-only pattern idea generator (seed, target, density, ties, accents).\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: A toggles event accent or empty-step input default; Shift+G toggles Bass slide; Shift+T edits condition/chance/retriggers.\nTracks: Shift+S edits 0–75% swing; l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C trigger editor (shape, arp, type, rate).\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+N new project, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or trigger editing. Esc or ? closes Help.",
         )
     }
     if a.mode == Mode::QuitConfirm {
@@ -3756,6 +3875,7 @@ fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     }
     match &a.mode {
         Mode::PatternDialog => render_pattern_popup(f, area, a),
+        Mode::GeneratorDialog(dialog) => render_generator_popup(f, area, dialog, a),
         Mode::LfoEdit { parameter, field } => {
             let track = a.row - 1;
             if let Ok(Some(config)) = a.editor.lfo(track, *parameter) {
@@ -4117,6 +4237,30 @@ fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
             ..inner
         },
     );
+}
+
+fn render_generator_popup(f: &mut ratatui::Frame, area: Rect, dialog: &GeneratorDialog, a: &App) {
+    let target = match dialog.target {
+        GeneratorTarget::WholePattern => "Whole pattern".to_string(),
+        GeneratorTarget::Track(track) => format!(
+            "Track {} ({})",
+            track + 1,
+            a.editor.project.tracks[track].name
+        ),
+    };
+    let text = format!(
+        "Target     {target}\nTrack      {}\nSeed       {}\nDensity    {}\nRange      O2–O6\nTies       {}\nAccents    {}\n\n[Tab/↑↓] field  [←→] change  type seed  [Enter] apply  [Esc] cancel",
+        a.editor.project.tracks[dialog.track].name,
+        if dialog.seed.is_empty() {
+            "0"
+        } else {
+            &dialog.seed
+        },
+        dialog.density,
+        dialog.ties,
+        dialog.accents,
+    );
+    popup(f, area, "Pattern idea generator [g]", &text);
 }
 
 fn pattern_is_empty(pattern: &crate::model::Pattern) -> bool {
