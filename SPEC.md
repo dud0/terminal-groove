@@ -691,6 +691,7 @@ Use one binary package with testable modules for model/validation, reducer and h
 - Project parse/validation errors identify the JSON path or domain field when possible.
 - Audio initialization errors identify the selected device and remediation, including the list-devices command.
 - Runtime stream failure stops transport and presents a persistent error. Project editing and saving remain available if terminal operation is still safe.
+- Runtime stream failures, audio initialization failures, and DSP non-finite diagnostics are appended to `terminal-groove-audio.log` in the working directory. The UI status names the file; logging is best effort and never occurs in the output callback.
 - DSP must replace any unexpected non-finite intermediate or sample with zero before it reaches the device and surface a diagnostic outside the callback.
 - Terminal cleanup uses RAII and a panic hook so the shell is not left in raw mode.
 

@@ -685,7 +685,7 @@ pub(super) fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
     }
     Ok(())
 }
-pub(super) fn refresh_audio_status(a: &mut App, audio: &Audio) {
+pub(super) fn refresh_audio_status(a: &mut App, audio: &mut Audio) {
     a.playing = audio.status.running.load(Ordering::Acquire);
     a.paused = audio.status.paused.load(Ordering::Acquire);
     a.active_pattern = usize::from(audio.status.active_pattern.load(Ordering::Acquire))
@@ -707,9 +707,24 @@ pub(super) fn refresh_audio_status(a: &mut App, audio: &Audio) {
         .status
         .max_callback_load_per_mille
         .load(Ordering::Relaxed);
+    let diagnostics = audio.log_pending_diagnostics();
     if audio.status.failed.load(Ordering::Acquire) {
-        a.status = "Audio stream failed; editing and saving remain available".into()
-    } else if audio.status.non_finite.swap(false, Ordering::AcqRel) {
-        a.status = "Audio DSP produced a non-finite value; output was silenced".into()
+        a.status = match diagnostics {
+            Ok(_) => format!(
+                "Audio stream failed; details logged to {}",
+                audio.audio_log_path().display()
+            ),
+            Err(error) => format!(
+                "Audio stream failed; could not write {}: {error}",
+                audio.audio_log_path().display()
+            ),
+        };
+    } else if let Ok(diagnostics) = diagnostics {
+        if diagnostics.non_finite {
+            a.status = format!(
+                "Audio DSP produced a non-finite value; details logged to {}",
+                audio.audio_log_path().display()
+            )
+        }
     }
 }

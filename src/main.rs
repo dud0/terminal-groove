@@ -33,6 +33,12 @@ fn main() -> Result<()> {
             .with_context(|| format!("startup project validation failed for {}", path.display()))?,
         None => Project::new(),
     };
-    let mut audio = audio::open(cli.audio_device.as_deref(), &project, cli.audio_buffer)?;
+    let mut audio = audio::open(cli.audio_device.as_deref(), &project, cli.audio_buffer)
+        .with_context(|| {
+            format!(
+                "audio diagnostics are written to {} when the log is available",
+                audio::default_audio_log_path().display()
+            )
+        })?;
     tui::run(project, cli.project, &mut audio)
 }

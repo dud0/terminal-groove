@@ -14,9 +14,15 @@ use anyhow::{Context, Result, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, SampleFormat, StreamConfig, SupportedBufferSize};
 use rtrb::{Producer, RingBuffer};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+    },
+    time::{SystemTime, UNIX_EPOCH},
 };
 #[derive(Clone, Copy, Debug)]
 struct AudioTrack {
@@ -194,6 +200,16 @@ pub struct AudioStatus {
     pub max_callback_duration_ns: AtomicU64,
     pub max_callback_load_per_mille: AtomicU64,
 }
+
+const AUDIO_LOG_FILE_NAME: &str = "terminal-groove-audio.log";
+const AUDIO_ERROR_QUEUE_SIZE: usize = 16;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AudioDiagnostics {
+    pub stream_failures: usize,
+    pub non_finite: bool,
+}
+
 impl Default for AudioStatus {
     fn default() -> Self {
         Self {
@@ -291,6 +307,28 @@ pub fn open(
     project: &Project,
     audio_buffer: Option<u32>,
 ) -> Result<Audio> {
+    let result = open_inner(requested, project, audio_buffer);
+    if let Err(error) = &result {
+        let device = requested.unwrap_or("<default>");
+        let path = default_audio_log_path();
+        if let Err(log_error) =
+            append_audio_log(&path, device, "initialization", &error.to_string())
+        {
+            eprintln!(
+                "could not write audio diagnostic log {}: {log_error}",
+                path.display()
+            );
+        }
+    }
+    result
+}
+
+#[allow(deprecated)]
+fn open_inner(
+    requested: Option<&str>,
+    project: &Project,
+    audio_buffer: Option<u32>,
+) -> Result<Audio> {
     let device = choose_device(requested)?;
     let name = device.name().unwrap_or_else(|_| "unknown".into());
     let supported = device
@@ -305,26 +343,144 @@ pub fn open(
     let status = Arc::new(AudioStatus::default());
     let (producer, consumer) = RingBuffer::new(256);
     let (retire_producer, retired) = RingBuffer::new(32);
+    let (error_producer, error_consumer) = RingBuffer::new(AUDIO_ERROR_QUEUE_SIZE);
     let initial = AudioProject::from_project(project);
     let stream = match format {
-        SampleFormat::F32 => { let s=status.clone(); let rs=status.clone(); let ts=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[f32],_|render(out,channels,sr,&ts,&mut r,&mut c,|x|x),move |_|mark_failed(&s),None) }
-        SampleFormat::I16 => { let s=status.clone(); let rs=status.clone(); let ts=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[i16],_|render(out,channels,sr,&ts,&mut r,&mut c,|x|(x.clamp(-1.,1.)*32767.) as i16),move |_|mark_failed(&s),None) }
-        SampleFormat::U16 => { let s=status.clone(); let rs=status.clone(); let ts=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[u16],_|render(out,channels,sr,&ts,&mut r,&mut c,|x|((x.clamp(-1.,1.)*0.5+0.5)*65535.) as u16),move |_|mark_failed(&s),None) }
+        SampleFormat::F32 => {
+            let error_status = status.clone();
+            let render_status = status.clone();
+            let timing_status = status.clone();
+            let mut errors = error_producer;
+            let mut renderer = Renderer::new_with_retirement(
+                Box::new(initial),
+                sr,
+                render_status,
+                retire_producer,
+            );
+            let mut commands = consumer;
+            device.build_output_stream(
+                &config,
+                move |out: &mut [f32], _| {
+                    render(
+                        out,
+                        channels,
+                        sr,
+                        &timing_status,
+                        &mut renderer,
+                        &mut commands,
+                        |x| x,
+                    )
+                },
+                move |error| mark_failed(&error_status, &mut errors, error),
+                None,
+            )
+        }
+        SampleFormat::I16 => {
+            let error_status = status.clone();
+            let render_status = status.clone();
+            let timing_status = status.clone();
+            let mut errors = error_producer;
+            let mut renderer = Renderer::new_with_retirement(
+                Box::new(initial),
+                sr,
+                render_status,
+                retire_producer,
+            );
+            let mut commands = consumer;
+            device.build_output_stream(
+                &config,
+                move |out: &mut [i16], _| {
+                    render(
+                        out,
+                        channels,
+                        sr,
+                        &timing_status,
+                        &mut renderer,
+                        &mut commands,
+                        |x| (x.clamp(-1.0, 1.0) * 32767.0) as i16,
+                    )
+                },
+                move |error| mark_failed(&error_status, &mut errors, error),
+                None,
+            )
+        }
+        SampleFormat::U16 => {
+            let error_status = status.clone();
+            let render_status = status.clone();
+            let timing_status = status.clone();
+            let mut errors = error_producer;
+            let mut renderer = Renderer::new_with_retirement(
+                Box::new(initial),
+                sr,
+                render_status,
+                retire_producer,
+            );
+            let mut commands = consumer;
+            device.build_output_stream(
+                &config,
+                move |out: &mut [u16], _| {
+                    render(
+                        out,
+                        channels,
+                        sr,
+                        &timing_status,
+                        &mut renderer,
+                        &mut commands,
+                        |x| ((x.clamp(-1.0, 1.0) * 0.5 + 0.5) * 65535.0) as u16,
+                    )
+                },
+                move |error| mark_failed(&error_status, &mut errors, error),
+                None,
+            )
+        }
         other => bail!("audio output `{name}` uses unsupported sample format {other:?}; supported: f32, i16, u16"),
     }.with_context(|| format!("could not build stream for audio output `{name}`"))?;
     stream
         .play()
         .with_context(|| format!("could not start audio output `{name}`"))?;
-    Ok(Audio::new(stream, name, status, producer, retired))
+    Ok(Audio::new(
+        stream,
+        name,
+        status,
+        producer,
+        retired,
+        error_consumer,
+        default_audio_log_path(),
+    ))
 }
 
-fn mark_failed(status: &AudioStatus) {
+fn mark_failed(
+    status: &AudioStatus,
+    errors: &mut Producer<cpal::StreamError>,
+    error: cpal::StreamError,
+) {
     status.failed.store(true, Ordering::Release);
     status.running.store(false, Ordering::Release);
     status.paused.store(false, Ordering::Release);
     for playhead in &status.playheads {
         playhead.store(u8::MAX, Ordering::Release);
     }
+    let _ = errors.push(error);
+}
+
+pub fn default_audio_log_path() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join(AUDIO_LOG_FILE_NAME)
+}
+
+fn append_audio_log(path: &Path, device: &str, kind: &str, message: &str) -> std::io::Result<()> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "timestamp_unix_ms={timestamp}")?;
+    writeln!(file, "device={device}")?;
+    writeln!(file, "kind={kind}")?;
+    writeln!(file, "message={message}")?;
+    writeln!(file)?;
+    Ok(())
 }
 
 /// Deterministic, device-independent rendering used by tests and diagnostics.
@@ -339,6 +495,47 @@ pub fn render_offline(project: &Project, sample_rate: u32, frames: usize) -> Vec
 mod tests {
     use super::*;
     use crate::model::LEAD_TRACK_INDEX;
+    use std::fs;
+
+    #[test]
+    fn stream_failure_marks_audio_stopped_and_queues_error() {
+        let status = AudioStatus::default();
+        let (mut producer, mut consumer) = RingBuffer::new(2);
+
+        mark_failed(
+            &status,
+            &mut producer,
+            cpal::StreamError::DeviceNotAvailable,
+        );
+
+        assert!(status.failed.load(Ordering::Acquire));
+        assert!(!status.running.load(Ordering::Acquire));
+        assert!(!status.paused.load(Ordering::Acquire));
+        assert_eq!(
+            consumer.pop().unwrap(),
+            cpal::StreamError::DeviceNotAvailable
+        );
+    }
+
+    #[test]
+    fn audio_log_contains_failure_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audio.log");
+
+        append_audio_log(
+            &path,
+            "Null Output",
+            "runtime stream failure",
+            "device disappeared",
+        )
+        .unwrap();
+
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(contents.contains("timestamp_unix_ms="));
+        assert!(contents.contains("device=Null Output"));
+        assert!(contents.contains("kind=runtime stream failure"));
+        assert!(contents.contains("message=device disappeared"));
+    }
 
     #[test]
     fn automatic_audio_buffer_is_clamped_to_device_limits() {
