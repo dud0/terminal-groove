@@ -500,22 +500,14 @@ pub(super) fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEven
         KeyCode::Esc => a.mode = Mode::Navigation,
         KeyCode::Tab => dialog.field = (dialog.field + 1) % 6,
         KeyCode::BackTab => dialog.field = (dialog.field + 5) % 6,
+        KeyCode::Up | KeyCode::Down => {
+            dialog.field = move_generator_field(dialog.field, k.code == KeyCode::Up);
+        }
         KeyCode::Left | KeyCode::Right if dialog.field == 0 => {
-            dialog.target = match dialog.target {
-                GeneratorTarget::WholePattern => GeneratorTarget::Track(dialog.track),
-                GeneratorTarget::Track(_) => GeneratorTarget::WholePattern,
-            };
+            change_generator_value(dialog, k.code == KeyCode::Right);
         }
         KeyCode::Left | KeyCode::Right if dialog.field == 1 => {
-            let delta = if k.code == KeyCode::Right {
-                1
-            } else {
-                TRACK_COUNT - 1
-            };
-            dialog.track = (dialog.track + delta) % TRACK_COUNT;
-            if matches!(dialog.target, GeneratorTarget::Track(_)) {
-                dialog.target = GeneratorTarget::Track(dialog.track);
-            }
+            change_generator_value(dialog, k.code == KeyCode::Right);
         }
         KeyCode::Char(c) if dialog.field == 2 && c.is_ascii_digit() => {
             if dialog.seed.len() < 20 {
@@ -529,20 +521,8 @@ pub(super) fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEven
             dialog.seed.pop();
         }
         KeyCode::Right if dialog.field == 2 => {}
-        KeyCode::Up | KeyCode::Down if (3..=5).contains(&dialog.field) => {
-            let delta = if k.code == KeyCode::Up { 5 } else { -5 };
-            match dialog.field {
-                3 => dialog.density = dialog.density.saturating_add(delta),
-                4 => dialog.ties = dialog.ties.saturating_add(delta),
-                _ => dialog.accents = dialog.accents.saturating_add(delta),
-            }
-        }
         KeyCode::Left | KeyCode::Right if (3..=5).contains(&dialog.field) => {
-            dialog.field = if k.code == KeyCode::Right {
-                (dialog.field + 1).min(5)
-            } else {
-                dialog.field.saturating_sub(1).max(2)
-            };
+            change_generator_value(dialog, k.code == KeyCode::Right);
         }
         KeyCode::Enter => {
             let seed = dialog
@@ -575,6 +555,41 @@ pub(super) fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEven
         _ => {}
     }
     Ok(())
+}
+
+pub(super) fn move_generator_field(field: usize, up: bool) -> usize {
+    if up {
+        field.saturating_sub(1)
+    } else {
+        field.saturating_add(1).min(5)
+    }
+}
+
+pub(super) fn change_generator_value(dialog: &mut GeneratorDialog, right: bool) {
+    match dialog.field {
+        0 => {
+            dialog.target = match dialog.target {
+                GeneratorTarget::WholePattern => GeneratorTarget::Track(dialog.track),
+                GeneratorTarget::Track(_) => GeneratorTarget::WholePattern,
+            };
+        }
+        1 => {
+            let delta = if right { 1 } else { TRACK_COUNT - 1 };
+            dialog.track = (dialog.track + delta) % TRACK_COUNT;
+            if matches!(dialog.target, GeneratorTarget::Track(_)) {
+                dialog.target = GeneratorTarget::Track(dialog.track);
+            }
+        }
+        3..=5 => {
+            let delta = if right { 5 } else { -5 };
+            match dialog.field {
+                3 => dialog.density = dialog.density.saturating_add(delta),
+                4 => dialog.ties = dialog.ties.saturating_add(delta),
+                _ => dialog.accents = dialog.accents.saturating_add(delta),
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(super) fn pattern_edit_at<F>(a: &mut App, audio: &mut Audio, f: F, message: &str)

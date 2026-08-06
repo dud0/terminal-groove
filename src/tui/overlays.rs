@@ -324,19 +324,59 @@ pub(super) fn render_generator_popup(
             a.editor.project.tracks[track].name
         ),
     };
-    let text = format!(
-        "Target     {target}\nTrack      {}\nSeed       {}\nDensity    {}\nRange      O2–O6\nTies       {}\nAccents    {}\n\n[Tab/↑↓] field  [←→] change  type seed  [Enter] apply  [Esc] cancel",
-        a.editor.project.tracks[dialog.track].name,
-        if dialog.seed.is_empty() {
-            "0"
-        } else {
-            &dialog.seed
-        },
-        dialog.density,
-        dialog.ties,
-        dialog.accents,
+    let fields = [
+        (Some(0), format!("Target     {target}")),
+        (
+            Some(1),
+            format!("Track      {}", a.editor.project.tracks[dialog.track].name),
+        ),
+        (
+            Some(2),
+            format!(
+                "Seed       {}",
+                if dialog.seed.is_empty() {
+                    "0"
+                } else {
+                    &dialog.seed
+                }
+            ),
+        ),
+        (Some(3), format!("Density    {}", dialog.density)),
+        (None, "Range      O2–O6".into()),
+        (Some(4), format!("Ties       {}", dialog.ties)),
+        (Some(5), format!("Accents    {}", dialog.accents)),
+    ];
+    let lines = fields
+        .into_iter()
+        .map(|(index, field)| {
+            let active = index == Some(dialog.field);
+            let marker = if active { "> " } else { "  " };
+            let style = if active {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(format!("{marker}{field}"), style))
+        })
+        .chain([
+            Line::from(""),
+            Line::from("[↑/↓]/[Tab] field  [←→] change  type seed"),
+            Line::from("[Enter] apply  [Esc] cancel"),
+        ])
+        .collect::<Vec<_>>();
+    let popup_area = popup_rect(area);
+    f.render_widget(Clear, popup_area);
+    f.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Pattern idea generator [g]"),
+        ),
+        popup_area,
     );
-    popup(f, area, "Pattern idea generator [g]", &text);
 }
 
 pub(super) fn pattern_is_empty(pattern: &crate::model::Pattern) -> bool {

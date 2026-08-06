@@ -79,15 +79,15 @@ use controller::{
 #[cfg(test)]
 #[allow(unused_imports)]
 use input::{
-    adjacent_pattern_in_count, apply, coalesce_key, commit_pattern, duplicate_selected_track,
-    enter_parameter_edit, flipped_waveform, handle_chord_key, handle_generator_dialog, handle_key,
-    handle_lfo_key, handle_parameter_key, handle_pattern_dialog, handle_swing_key,
-    handle_track_length_input, handle_trigger_key, lfo_choice_index, move_chord_editor_step,
-    move_parameter_editor, move_step, move_step_bank, move_step_page, move_step_vertical,
-    normalize_cursor, open_chord_editor, open_lfo_editor, parameter_edit_passthrough,
-    parameter_shortcut, parameter_supports_direct_percentage, pattern_edit_at, select_track,
-    set_lfo_config, set_parameter, set_selected_track_length, switch_parameter_editor,
-    track_jump_index,
+    adjacent_pattern_in_count, apply, change_generator_value, coalesce_key, commit_pattern,
+    duplicate_selected_track, enter_parameter_edit, flipped_waveform, handle_chord_key,
+    handle_generator_dialog, handle_key, handle_lfo_key, handle_parameter_key,
+    handle_pattern_dialog, handle_swing_key, handle_track_length_input, handle_trigger_key,
+    lfo_choice_index, move_chord_editor_step, move_generator_field, move_parameter_editor,
+    move_step, move_step_bank, move_step_page, move_step_vertical, normalize_cursor,
+    open_chord_editor, open_lfo_editor, parameter_edit_passthrough, parameter_shortcut,
+    parameter_supports_direct_percentage, pattern_edit_at, select_track, set_lfo_config,
+    set_parameter, set_selected_track_length, switch_parameter_editor, track_jump_index,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -315,6 +315,64 @@ mod tests {
         assert!(screen.contains("Enter select (queue while playing)"));
         assert!(!screen.contains("P001"));
         assert!(!screen.contains("used"));
+    }
+
+    #[test]
+    fn generator_dialog_field_arrows_clamp_and_values_change_horizontally() {
+        assert_eq!(move_generator_field(0, true), 0);
+        assert_eq!(move_generator_field(0, false), 1);
+        assert_eq!(move_generator_field(4, false), 5);
+        assert_eq!(move_generator_field(5, false), 5);
+        assert_eq!(move_generator_field(5, true), 4);
+
+        let mut dialog = GeneratorDialog {
+            target: GeneratorTarget::WholePattern,
+            track: 0,
+            seed: "123".into(),
+            density: Percent::new(48).unwrap(),
+            ties: Percent::new(18).unwrap(),
+            accents: Percent::new(24).unwrap(),
+            field: 3,
+        };
+        change_generator_value(&mut dialog, true);
+        assert_eq!(dialog.density, Percent::new(53).unwrap());
+        change_generator_value(&mut dialog, false);
+        assert_eq!(dialog.density, Percent::new(48).unwrap());
+
+        dialog.field = 4;
+        change_generator_value(&mut dialog, false);
+        assert_eq!(dialog.ties, Percent::new(13).unwrap());
+        dialog.field = 5;
+        dialog.accents = Percent::new(100).unwrap();
+        change_generator_value(&mut dialog, true);
+        assert_eq!(dialog.accents, Percent::new(100).unwrap());
+
+        dialog.field = 0;
+        change_generator_value(&mut dialog, true);
+        assert_eq!(dialog.target, GeneratorTarget::Track(0));
+        dialog.field = 1;
+        change_generator_value(&mut dialog, true);
+        assert_eq!(dialog.track, 1);
+        assert_eq!(dialog.target, GeneratorTarget::Track(1));
+    }
+
+    #[test]
+    fn generator_dialog_highlights_the_selected_field() {
+        let mut app = App::new(Project::new(), None);
+        app.mode = Mode::GeneratorDialog(GeneratorDialog {
+            target: GeneratorTarget::WholePattern,
+            track: 0,
+            seed: "123".into(),
+            density: Percent::new(48).unwrap(),
+            ties: Percent::new(18).unwrap(),
+            accents: Percent::new(24).unwrap(),
+            field: 4,
+        });
+
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("> Ties"));
+        assert!(screen.contains("[↑/↓]/[Tab] field"));
+        assert!(!screen.contains("> Target"));
     }
 
     #[test]
