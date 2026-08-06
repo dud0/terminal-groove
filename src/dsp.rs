@@ -550,7 +550,6 @@ impl TrackEffectChain {
         self.flanger_write = 0;
         self.flanger_l.fill(0.0);
         self.flanger_r.fill(0.0);
-        self.processing = false;
     }
 }
 

@@ -824,6 +824,24 @@ mod tests {
     }
 
     #[test]
+    fn stopping_and_restarting_preserves_configured_track_effects() {
+        let mut project = Project::new();
+        project.tracks[0].effects.distortion.drive = crate::model::Percent::new(100).unwrap();
+        project.tracks[0].effects.distortion.mix = crate::model::Percent::new(100).unwrap();
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+
+        let before_stop = renderer.effects[0].process(0.25).0;
+        assert!((before_stop - 0.25).abs() > 0.01);
+
+        renderer.command(AudioCommand::Stop);
+        renderer.command(AudioCommand::PlayPause);
+
+        let after_restart = renderer.effects[0].process(0.25).0;
+        assert!((after_restart - 0.25).abs() > 0.01);
+    }
+
+    #[test]
     fn active_drum_tail_still_advances_while_paused() {
         let status = Arc::new(AudioStatus::default());
         let mut renderer =
