@@ -19,10 +19,10 @@ use crate::{
     audio::{AudioCommand, ParameterSmoothing},
     generator::{Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
-        ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DelayDivision,
-        GlobalParameterId, LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT,
-        ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, STEP_ROW_SIZE, SYNTH_TRACK_START,
-        Scale, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
+        ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT,
+        DelayDivision, GlobalParameterId, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
+        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, STEP_ROW_SIZE,
+        SYNTH_TRACK_START, Scale, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
     },
     persistence,
     reducer::{Editor, Scope},
@@ -582,6 +582,26 @@ mod tests {
             track_jump_index(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::SHIFT)),
             Some(0)
         );
+    }
+
+    #[test]
+    fn pitched_navigation_starts_after_all_drum_rows() {
+        assert!(!input::is_pitched_track_row(DRUM_TRACK_COUNT));
+        assert!(input::is_pitched_track_row(DRUM_TRACK_COUNT + 1));
+    }
+
+    #[test]
+    fn chord_editor_uses_the_shifted_chord_row() {
+        let mut app = App::new(Project::new(), None);
+        app.row = CHORD_TRACK_INDEX + 1;
+        open_chord_editor(&mut app);
+        assert!(matches!(app.mode, Mode::ChordEdit { .. }));
+
+        app.mode = Mode::Navigation;
+        app.row = DRUM_TRACK_COUNT;
+        open_chord_editor(&mut app);
+        assert_eq!(app.mode, Mode::Navigation);
+        assert!(app.status.contains("Chord track only"));
     }
 
     #[test]

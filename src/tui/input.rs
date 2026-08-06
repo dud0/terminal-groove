@@ -17,10 +17,10 @@ use crate::{
     audio::{Audio, AudioCommand},
     generator::{Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
-        ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, LfoConfig,
-        LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent,
-        STEP_BANK_SIZE, STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition,
-        Waveform,
+        ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT,
+        LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue,
+        Percent, STEP_BANK_SIZE, STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind,
+        TriggerCondition, Waveform,
     },
     reducer::{Editor, Scope},
 };
@@ -336,27 +336,27 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             a.mode = Mode::TrackProbabilityEdit;
             a.status = format!("{} probability", a.editor.project.tracks[a.row - 1].name);
         }
-        KeyCode::Char('C') if a.row == 5 => open_chord_editor(a),
+        KeyCode::Char('C') if a.row == CHORD_TRACK_INDEX + 1 => open_chord_editor(a),
         KeyCode::Char(c) if a.row == 0 => {
             if let Some(id) = global_shortcut(c) {
                 a.global = id as usize;
                 enter_global_edit(a, id)
             }
         }
-        KeyCode::Char('[') if a.row > 3 => change_octave(a, audio, -1),
-        KeyCode::Char(']') if a.row > 3 => change_octave(a, audio, 1),
+        KeyCode::Char('[') if is_pitched_track_row(a.row) => change_octave(a, audio, -1),
+        KeyCode::Char(']') if is_pitched_track_row(a.row) => change_octave(a, audio, 1),
         KeyCode::Char(c) if a.row > 0 && active_parameter_shortcut(a, c).is_some() => {
             if let Some(parameter) = active_parameter_shortcut(a, c) {
                 enter_parameter_edit(a, parameter);
             }
         }
-        KeyCode::Char('t') if a.row > 3 => {
+        KeyCode::Char('t') if is_pitched_track_row(a.row) => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.toggle_tie(track, step)) {
                 sync_project(a, audio);
             }
         }
-        KeyCode::Char(c @ '1'..='8') if a.row > 3 => {
+        KeyCode::Char(c @ '1'..='8') if is_pitched_track_row(a.row) => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| {
                 e.set_note(track, step, c.to_digit(10).unwrap() as u8)
@@ -383,6 +383,10 @@ pub(super) fn move_step(a: &mut App, forward: bool) {
     } else {
         (a.step + length - 1) % length
     };
+}
+
+pub(super) fn is_pitched_track_row(row: usize) -> bool {
+    row > DRUM_TRACK_COUNT
 }
 
 pub(super) fn track_jump_index(k: KeyEvent) -> Option<usize> {
@@ -1330,7 +1334,7 @@ pub(super) fn move_chord_editor_step(a: &mut App, forward: bool) {
     move_step_page(a, forward);
     let shape = a
         .editor
-        .chord_shape_value(4, a.step)
+        .chord_shape_value(CHORD_TRACK_INDEX, a.step)
         .unwrap_or_else(|_| selected_chord_shape(a, a.row - 1).unwrap_or_default());
     a.mode = Mode::ChordEdit { shape };
 }
