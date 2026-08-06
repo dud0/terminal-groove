@@ -704,10 +704,7 @@ mod tests {
         app.row = 4;
         app.editor.set_note(3, 0, 1).unwrap();
         app.editor.toggle_accent(3, 0).unwrap();
-        assert_eq!(
-            articulation_title(&app, 3),
-            "[A] Accent on · [Shift+G] Slide off"
-        );
+        assert_eq!(articulation_title(&app, 3), "Accent on · Slide off");
         app.editor.toggle_tie(3, 1).unwrap();
         assert_eq!(selected_accent(&app, 3), Some((true, None)));
         app.step = 1;
@@ -722,7 +719,7 @@ mod tests {
         app.editor.toggle_accent(0, 0).unwrap();
 
         assert_eq!(selected_accent(&app, 0), Some((true, None)));
-        assert_eq!(articulation_title(&app, 0), "[A] Accent default on");
+        assert_eq!(articulation_title(&app, 0), "Accent default on");
     }
 
     #[test]
@@ -976,7 +973,7 @@ mod tests {
         let mut app = App::new(project, None);
         app.row = 5;
         let title_screen = rendered(&app, 120, 34);
-        assert!(title_screen.contains("[C] Chord trigger 3-5-7-1"));
+        assert!(title_screen.contains("Chord trigger 3-5-7-1"));
         app.mode = Mode::ChordEdit {
             shape: ChordShape::SeventhFirstInversion,
         };
@@ -1666,7 +1663,7 @@ mod tests {
     }
 
     #[test]
-    fn sixty_four_step_track_renders_as_two_compact_rows_with_scroll_hint() {
+    fn sixty_four_step_track_renders_as_two_compact_rows_without_shortcut_hints() {
         let mut project = Project::new();
         for track in &mut project.patterns[0].tracks {
             track.steps.resize(64, None);
@@ -1678,7 +1675,31 @@ mod tests {
         assert!(!screen.contains("LenRange"));
         assert!(screen.contains("01–32"));
         assert!(screen.contains("33–64"));
-        assert!(screen.contains("more tracks"));
-        assert!(screen.contains("Shift+D"));
+        assert!(!screen.contains("more tracks"));
+        assert!(!screen.contains("Shift+D"));
+    }
+
+    #[test]
+    fn main_layout_hides_non_parameter_shortcut_hints() {
+        let mut app = App::new(Project::new(), None);
+        app.row = 1;
+        let screen = rendered(&app, 120, 34);
+
+        assert!(screen.contains("[v]"));
+        for hint in [
+            "[←→] select",
+            "[Enter] edit",
+            "[Tab] bank",
+            "[p]",
+            "[m]",
+            "[o]",
+            "[Shift+Delete]",
+            "[Shift+D]",
+        ] {
+            assert!(
+                !screen.contains(hint),
+                "unexpected main-layout hint: {hint}"
+            );
+        }
     }
 }

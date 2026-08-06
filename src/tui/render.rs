@@ -186,17 +186,14 @@ pub(super) fn articulation_title(a: &App, track: usize) -> String {
         Some((accent, None)) => {
             let is_default = a.editor.project.tracks[track].steps[a.step].is_none();
             let mut text = format!(
-                "[A] Accent {}{}",
+                "Accent {}{}",
                 if is_default { "default " } else { "" },
                 if accent { "on" } else { "off" }
             );
             if let Some(StepEvent::BassNote { slide, .. }) =
                 a.editor.project.tracks[track].steps[a.step]
             {
-                text.push_str(&format!(
-                    " · [Shift+G] Slide {}",
-                    if slide { "on" } else { "off" }
-                ));
+                text.push_str(&format!(" · Slide {}", if slide { "on" } else { "off" }));
             }
             text
         }
@@ -1088,7 +1085,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         .chord_shape_value(track, a.step)
         .ok()
         .or_else(|| selected_chord_shape(a, track))
-        .map(|shape| format!(" · [C] Chord trigger {shape}"))
+        .map(|shape| format!(" · Chord trigger {shape}"))
         .unwrap_or_default();
     let bank_title = match a.parameter_bank {
         ParameterBank::Params => "PARAMS",
@@ -1096,7 +1093,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
     };
     let title = if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
         format!(
-            "{} · {} · Step {} · {}{} · [Tab] bank · [p] {} · [m] Mute {} · [o] Audition{}",
+            "{} · {} · Step {} · {}{} · {} · Mute {}{}",
             track_label(t),
             bank_title,
             a.step + 1,
@@ -1112,7 +1109,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         )
     } else {
         format!(
-            "{} · {} · Step {} · {} · [Tab] bank · [p] {} · [m] Mute {} · [o] Audition{}",
+            "{} · {} · Step {} · {} · {} · Mute {}{}",
             t.name,
             bank_title,
             a.step + 1,
@@ -1574,8 +1571,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         })
         .collect::<Vec<_>>();
     f.render_widget(
-        Paragraph::new(Line::from(line))
-            .block(Block::bordered().title("Globals [←→] select [Enter] edit")),
+        Paragraph::new(Line::from(line)).block(Block::bordered().title("Globals")),
         chunks[1],
     );
     let available_rows = chunks[2].height.saturating_sub(3) as usize;
@@ -1686,20 +1682,6 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     header_cells.extend((1..=STEP_BANK_SIZE).map(|n| format!(" {n:02}").into()));
     header_cells.push(ratatui::widgets::Cell::from("│"));
     header_cells.extend(((STEP_BANK_SIZE + 1)..=STEP_ROW_SIZE).map(|n| format!(" {n:02}").into()));
-    let scroll_hint = match (first_track > 0, last_track < TRACK_COUNT) {
-        (true, true) => "  ↑↓ more tracks",
-        (true, false) => "  ↑ more tracks",
-        (false, true) => "  ↓ more tracks",
-        (false, false) => "",
-    };
-    let clear_track_hint = if a.row > 0 && scroll_hint.is_empty() {
-        "  [Shift+Delete] clear"
-    } else {
-        ""
-    };
-    let pattern_help = format!(
-        "[↑↓] rows  [←→] step  [Shift+←→] bank  [Shift+1..6] track  [l] len  [Shift+D] dbl{clear_track_hint}{scroll_hint}"
-    );
     let trigger_summary = if a.row > 0 {
         let track = a.row - 1;
         a.editor.project.tracks[track].steps[a.step]
@@ -1724,7 +1706,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         String::new()
     };
     let pattern_title = Line::from(format!(
-        "Pattern  {pattern_help}{trigger_summary}{swing_summary}{probability_summary}"
+        "Pattern{trigger_summary}{swing_summary}{probability_summary}"
     ));
     f.render_widget(
         Table::new(rows, widths)
