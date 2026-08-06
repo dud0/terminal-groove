@@ -354,8 +354,11 @@ mod tests {
     }
 
     #[test]
-    fn bundled_legacy_projects_are_rejected_after_the_format_bump() {
-        for json in [include_str!("../test1"), include_str!("../test2")] {
+    fn legacy_projects_are_rejected_after_the_format_bump() {
+        for json in [
+            r#"{"format_version":15}"#,
+            r#"{"format_version":15,"globals":{},"tracks":[]}"#,
+        ] {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
             assert!(matches!(
