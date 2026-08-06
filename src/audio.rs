@@ -130,6 +130,7 @@ struct Renderer {
     sidechain: SidechainCompressor,
     delay: Delay,
     reverb: Reverb,
+    reverb_return: Smoother,
     dc: DcBlock,
     limiter: MasterLimiter,
     mute: [Smoother; TRACK_COUNT],
@@ -1083,6 +1084,46 @@ mod tests {
         assert!(
             wet_tail >= dry_tail * 4.0,
             "dry tail RMS {dry_tail}, wet tail RMS {wet_tail}"
+        );
+    }
+
+    #[test]
+    fn zero_reverb_return_suppresses_the_wet_signal() {
+        let mut dry_project = Project::new();
+        dry_project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        let mut wet_project = dry_project.clone();
+        wet_project.tracks[0].reverb_send = Percent::new(100).unwrap();
+        wet_project.globals.reverb_return = Percent::ZERO;
+
+        assert_eq!(
+            render_offline(&dry_project, 8_000, 10_000),
+            render_offline(&wet_project, 8_000, 10_000)
+        );
+    }
+
+    #[test]
+    fn delay_return_is_not_routed_into_reverb() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        project.tracks[0].delay_send = Percent::new(100).unwrap();
+        project.globals.delay_feedback = Percent::ZERO;
+        project.globals.reverb_return = Percent::new(100).unwrap();
+
+        let mut without_reverb_return = project.clone();
+        without_reverb_return.globals.reverb_return = Percent::ZERO;
+        assert_eq!(
+            render_offline(&project, 8_000, 10_000),
+            render_offline(&without_reverb_return, 8_000, 10_000)
         );
     }
 

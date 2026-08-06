@@ -1,5 +1,5 @@
 use super::effects::{modulated_percent, pitch_modulated_frequency};
-use super::voices::{CHORD_GROUP_SIZE, REVERB_RETURN_GAIN};
+use super::voices::CHORD_GROUP_SIZE;
 use super::{
     AudioProject, AudioStatus, ChordVoicePool, DrumVoice, ParameterId, Renderer, StepClock,
     SynthVoice, TRACK_COUNT, TrackEffectChain,
@@ -25,6 +25,7 @@ impl Renderer {
         retire: Producer<Box<AudioProject>>,
     ) -> Self {
         let tempo_bpm = project.globals.tempo_bpm;
+        let reverb_return = project.globals.reverb_return.normalized();
         let muted: [bool; TRACK_COUNT] = std::array::from_fn(|i| project.tracks[i].muted);
         let mut r = Self {
             project,
@@ -68,6 +69,7 @@ impl Renderer {
             sidechain: SidechainCompressor::new(sr),
             delay: Delay::new(sr),
             reverb: Reverb::new(sr),
+            reverb_return: Smoother::new(reverb_return),
             dc: Default::default(),
             limiter: MasterLimiter::new(sr),
             mute: std::array::from_fn(|i| Smoother::new((!muted[i]) as u8 as f32)),
@@ -534,12 +536,11 @@ impl Renderer {
         reverb_r += preview_effect_r * preview_rs * preview_gain;
 
         let (dl, dr) = self.delay.process(delay_l, delay_r);
-        let (rl, rr) = self
-            .reverb
-            .process(reverb_l + dl * 0.25, reverb_r + dr * 0.25);
+        let (rl, rr) = self.reverb.process(reverb_l, reverb_r);
+        let reverb_return = self.reverb_return.next_value();
         let (l, r) = self.dc.process(
-            dry_l + dl * 0.45 + rl * REVERB_RETURN_GAIN,
-            dry_r + dr * 0.45 + rr * REVERB_RETURN_GAIN,
+            dry_l + dl * 0.45 + rl * reverb_return,
+            dry_r + dr * 0.45 + rr * reverb_return,
         );
         if !(l.is_finite() && r.is_finite()) {
             self.status.non_finite.store(true, Ordering::Release);

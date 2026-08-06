@@ -271,17 +271,7 @@ pub(super) fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
 }
 
 pub(super) fn global_id(index: usize) -> GlobalParameterId {
-    [
-        GlobalParameterId::Tempo,
-        GlobalParameterId::DelayDivision,
-        GlobalParameterId::DelayFeedback,
-        GlobalParameterId::ReverbTime,
-        GlobalParameterId::ReverbTone,
-        GlobalParameterId::ReverbPreDelay,
-        GlobalParameterId::Ducking,
-        GlobalParameterId::Key,
-        GlobalParameterId::Scale,
-    ][index % GLOBAL_IDS.len()]
+    GLOBAL_IDS[index % GLOBAL_IDS.len()]
 }
 pub(super) fn global_shortcut(c: char) -> Option<GlobalParameterId> {
     match c {
@@ -291,6 +281,7 @@ pub(super) fn global_shortcut(c: char) -> Option<GlobalParameterId> {
         'r' => Some(GlobalParameterId::ReverbTime),
         'b' => Some(GlobalParameterId::ReverbTone),
         'p' => Some(GlobalParameterId::ReverbPreDelay),
+        'm' => Some(GlobalParameterId::ReverbReturn),
         'd' => Some(GlobalParameterId::Ducking),
         'k' => Some(GlobalParameterId::Key),
         's' => Some(GlobalParameterId::Scale),
@@ -329,6 +320,7 @@ pub(super) fn global_name(id: GlobalParameterId) -> &'static str {
         GlobalParameterId::ReverbTime => "reverb time",
         GlobalParameterId::ReverbTone => "reverb tone",
         GlobalParameterId::ReverbPreDelay => "reverb pre-delay",
+        GlobalParameterId::ReverbReturn => "reverb return",
         GlobalParameterId::Ducking => "ducking",
         GlobalParameterId::Key => "key",
         GlobalParameterId::Scale => "scale",
@@ -375,7 +367,9 @@ pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
                 enter_global_edit(a, next)
             } else if matches!(
                 id,
-                GlobalParameterId::DelayFeedback | GlobalParameterId::ReverbTone
+                GlobalParameterId::DelayFeedback
+                    | GlobalParameterId::ReverbTone
+                    | GlobalParameterId::ReverbReturn
             ) {
                 if let Some(v) = crate::reducer::percentage_key(c) {
                     let max = if id == GlobalParameterId::DelayFeedback {
@@ -386,8 +380,10 @@ pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
                     let v = Percent::new(v.get().min(max)).unwrap();
                     if id == GlobalParameterId::DelayFeedback {
                         edit_global(a, audio, id, move |g| g.delay_feedback = v);
-                    } else {
+                    } else if id == GlobalParameterId::ReverbTone {
                         edit_global(a, audio, id, move |g| g.reverb_tone = v);
+                    } else {
+                        edit_global(a, audio, id, move |g| g.reverb_return = v);
                     }
                     a.mode = Mode::Navigation
                 }
@@ -455,6 +451,16 @@ pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
                         g.reverb_pre_delay_ms = (g.reverb_pre_delay_ms as i16
                             + direction as i16 * d)
                             .clamp(0, 200) as u16
+                    })
+                }
+                GlobalParameterId::ReverbReturn => {
+                    let d: i16 = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                        10
+                    } else {
+                        1
+                    };
+                    edit_global(a, audio, id, move |g| {
+                        g.reverb_return = g.reverb_return.saturating_add(direction as i16 * d)
                     })
                 }
                 GlobalParameterId::Key => edit_global(a, audio, id, move |g| {

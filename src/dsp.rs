@@ -855,6 +855,11 @@ impl Biquad {
             0.0
         }
     }
+
+    fn clear(&mut self) {
+        self.z1 = 0.0;
+        self.z2 = 0.0;
+    }
 }
 
 impl Default for Biquad {
@@ -1057,8 +1062,12 @@ pub struct Reverb {
     pre_delay_fade_remaining: usize,
     pre_delay_fade_length: usize,
     damping: Smoother,
+    highpass_l: Biquad,
+    highpass_r: Biquad,
 }
 impl Reverb {
+    const HIGH_PASS_HZ: f32 = 180.0;
+
     pub fn new(sample_rate: u32) -> Self {
         let scale = sample_rate as f32 / 44_100.0;
         let size = |n: usize| (n as f32 * scale).round() as usize;
@@ -1105,6 +1114,24 @@ impl Reverb {
             pre_delay_fade_remaining: 0,
             pre_delay_fade_length: (sample_rate as usize / 200).max(1),
             damping: Smoother::new(0.32),
+            highpass_l: {
+                let mut filter = Biquad::new();
+                filter.set_highpass(
+                    Self::HIGH_PASS_HZ,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                    sample_rate as f32,
+                );
+                filter
+            },
+            highpass_r: {
+                let mut filter = Biquad::new();
+                filter.set_highpass(
+                    Self::HIGH_PASS_HZ,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                    sample_rate as f32,
+                );
+                filter
+            },
         };
         reverb.set_time(2.5);
         reverb.set_tone(0.5);
@@ -1168,6 +1195,9 @@ impl Reverb {
         self.pre_delay_r[self.pre_delay_pos] = r;
         self.pre_delay_pos = (self.pre_delay_pos + 1) % self.pre_delay_l.len();
 
+        input_l = self.highpass_l.process(input_l);
+        input_r = self.highpass_r.process(input_r);
+
         let center = (input_l + input_r) * 0.35;
         let input_l = center + input_l * 0.15;
         let input_r = center + input_r * 0.15;
@@ -1205,6 +1235,8 @@ impl Reverb {
         self.pre_delay_r.fill(0.0);
         self.pre_delay_pos = 0;
         self.pre_delay_fade_remaining = 0;
+        self.highpass_l.clear();
+        self.highpass_r.clear();
     }
 }
 impl Delay {
@@ -1452,6 +1484,16 @@ mod tests {
             }
             assert!(output.abs() < 0.0001);
         }
+    }
+    #[test]
+    fn reverb_highpass_rejects_dc_after_the_initial_transient() {
+        let mut reverb = Reverb::new(8_000);
+        let mut output = (0.0, 0.0);
+        for _ in 0..40_000 {
+            output = reverb.process(1.0, 1.0);
+            assert!(output.0.is_finite() && output.1.is_finite());
+        }
+        assert!(output.0.abs().max(output.1.abs()) < 0.0001, "{output:?}");
     }
     #[test]
     fn delay_exact() {

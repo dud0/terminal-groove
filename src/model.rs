@@ -449,6 +449,8 @@ pub struct Globals {
     pub reverb_tone: Percent,
     #[serde(default = "default_reverb_pre_delay_ms")]
     pub reverb_pre_delay_ms: u16,
+    #[serde(default = "default_reverb_return")]
+    pub reverb_return: Percent,
     pub sidechain: SidechainParameters,
     pub key: PitchClass,
     pub scale: Scale,
@@ -494,6 +496,10 @@ fn default_reverb_pre_delay_ms() -> u16 {
     20
 }
 
+fn default_reverb_return() -> Percent {
+    Percent(30)
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GlobalParameterId {
@@ -503,6 +509,7 @@ pub enum GlobalParameterId {
     ReverbTime,
     ReverbTone,
     ReverbPreDelay,
+    ReverbReturn,
     Ducking,
     Key,
     Scale,
@@ -516,6 +523,7 @@ impl Default for Globals {
             reverb_time_seconds: 2.5,
             reverb_tone: default_reverb_tone(),
             reverb_pre_delay_ms: default_reverb_pre_delay_ms(),
+            reverb_return: default_reverb_return(),
             sidechain: SidechainParameters::default(),
             key: PitchClass::C,
             scale: Scale::Major,
@@ -1860,6 +1868,7 @@ impl Project {
             || self.globals.delay_feedback.get() > 95
             || self.globals.reverb_tone.get() > 100
             || self.globals.reverb_pre_delay_ms > 200
+            || self.globals.reverb_return.get() > 100
         {
             return Err(ValidationError::TrackOrder(0, "valid globals"));
         }
@@ -2686,9 +2695,14 @@ mod tests {
 
         project.globals.reverb_tone = p(100);
         project.globals.reverb_pre_delay_ms = 200;
+        project.globals.reverb_return = p(100);
         assert!(project.validate().is_ok());
 
         project.globals.reverb_pre_delay_ms = 201;
+        assert!(project.validate().is_err());
+
+        project.globals.reverb_pre_delay_ms = 200;
+        project.globals.reverb_return = p(101);
         assert!(project.validate().is_err());
     }
     #[test]

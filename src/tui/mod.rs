@@ -801,6 +801,16 @@ mod tests {
             global_fader_segments(&globals, GlobalParameterId::ReverbPreDelay),
             Some(10)
         );
+        globals.reverb_return = Percent::ZERO;
+        assert_eq!(
+            global_fader_segments(&globals, GlobalParameterId::ReverbReturn),
+            Some(0)
+        );
+        globals.reverb_return = Percent::new(100).unwrap();
+        assert_eq!(
+            global_fader_segments(&globals, GlobalParameterId::ReverbReturn),
+            Some(10)
+        );
     }
 
     #[test]
@@ -1408,12 +1418,12 @@ mod tests {
         app.mode = Mode::GlobalEdit(GlobalParameterId::Tempo);
         let screen = rendered(&app, 120, 34);
         for key in [
-            "[t]", "[y]", "[f]", "[r]", "[b]", "[p]", "[d]", "[k]", "[s]",
+            "[t]", "[y]", "[f]", "[r]", "[b]", "[p]", "[m]", "[d]", "[k]", "[s]",
         ] {
             assert!(screen.contains(key), "missing {key}");
         }
         for value in [
-            "Tempo", "1/8", "30%", "2.5 s", "40%", "20 ms", "Off", "C", "Major",
+            "Tempo", "1/8", "30%", "2.5 s", "40%", "20 ms", "Return", "Off", "C", "Major",
         ] {
             assert!(screen.contains(value), "missing {value}");
         }
@@ -1621,6 +1631,7 @@ mod tests {
             global_shortcut('p'),
             Some(GlobalParameterId::ReverbPreDelay)
         );
+        assert_eq!(global_shortcut('m'), Some(GlobalParameterId::ReverbReturn));
         assert_eq!(global_shortcut('d'), Some(GlobalParameterId::Ducking));
         assert_eq!(global_shortcut('k'), Some(GlobalParameterId::Key));
         assert_eq!(global_shortcut('s'), Some(GlobalParameterId::Scale));

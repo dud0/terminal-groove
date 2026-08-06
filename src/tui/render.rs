@@ -879,19 +879,21 @@ pub(super) fn global_shortcut_text(id: GlobalParameterId) -> &'static str {
         GlobalParameterId::ReverbTime => "r",
         GlobalParameterId::ReverbTone => "b",
         GlobalParameterId::ReverbPreDelay => "p",
+        GlobalParameterId::ReverbReturn => "m",
         GlobalParameterId::Ducking => "d",
         GlobalParameterId::Key => "k",
         GlobalParameterId::Scale => "s",
     }
 }
 
-pub(super) const GLOBAL_IDS: [GlobalParameterId; 9] = [
+pub(super) const GLOBAL_IDS: [GlobalParameterId; 10] = [
     GlobalParameterId::Tempo,
     GlobalParameterId::DelayDivision,
     GlobalParameterId::DelayFeedback,
     GlobalParameterId::ReverbTime,
     GlobalParameterId::ReverbTone,
     GlobalParameterId::ReverbPreDelay,
+    GlobalParameterId::ReverbReturn,
     GlobalParameterId::Ducking,
     GlobalParameterId::Key,
     GlobalParameterId::Scale,
@@ -905,6 +907,7 @@ pub(super) fn global_display_name(id: GlobalParameterId) -> &'static str {
         GlobalParameterId::ReverbTime => "Reverb time",
         GlobalParameterId::ReverbTone => "Tone",
         GlobalParameterId::ReverbPreDelay => "Pre-delay",
+        GlobalParameterId::ReverbReturn => "Return",
         GlobalParameterId::Ducking => "Ducking",
         GlobalParameterId::Key => "Key",
         GlobalParameterId::Scale => "Scale",
@@ -919,6 +922,7 @@ pub(super) fn global_value_text(g: &crate::model::Globals, id: GlobalParameterId
         GlobalParameterId::ReverbTime => format!("{:.1} s", g.reverb_time_seconds),
         GlobalParameterId::ReverbTone => format!("{}%", g.reverb_tone.get()),
         GlobalParameterId::ReverbPreDelay => format!("{} ms", g.reverb_pre_delay_ms),
+        GlobalParameterId::ReverbReturn => format!("{}%", g.reverb_return.get()),
         GlobalParameterId::Ducking => {
             if g.sidechain.depth == crate::model::Percent::ZERO {
                 "Off".into()
@@ -937,6 +941,7 @@ fn global_fader_value(g: &crate::model::Globals, id: GlobalParameterId) -> Optio
         GlobalParameterId::ReverbTime => Some(g.reverb_time_seconds),
         GlobalParameterId::ReverbTone => Some(g.reverb_tone.get() as f32),
         GlobalParameterId::ReverbPreDelay => Some(g.reverb_pre_delay_ms as f32),
+        GlobalParameterId::ReverbReturn => Some(g.reverb_return.get() as f32),
         GlobalParameterId::Tempo
         | GlobalParameterId::DelayDivision
         | GlobalParameterId::Key
@@ -951,6 +956,7 @@ fn global_fader_bounds(id: GlobalParameterId) -> Option<(f32, f32)> {
         GlobalParameterId::ReverbTime => Some((0.2, 10.0)),
         GlobalParameterId::ReverbTone => Some((0.0, 100.0)),
         GlobalParameterId::ReverbPreDelay => Some((0.0, 200.0)),
+        GlobalParameterId::ReverbReturn => Some((0.0, 100.0)),
         GlobalParameterId::Tempo
         | GlobalParameterId::DelayDivision
         | GlobalParameterId::Key
@@ -1004,6 +1010,7 @@ fn global_selector_data(
         | GlobalParameterId::ReverbTime
         | GlobalParameterId::ReverbTone
         | GlobalParameterId::ReverbPreDelay
+        | GlobalParameterId::ReverbReturn
         | GlobalParameterId::Ducking => None,
     }
 }

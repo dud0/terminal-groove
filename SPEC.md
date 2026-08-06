@@ -277,9 +277,9 @@ Feedback ranges from 0% through 95% to prevent unity or unstable feedback. Defau
 
 #### Reverb
 
-The reverb is a stereo algorithmic Schroeder/Freeverb-style network using a stereo pre-delay, parallel feedback comb filters, and series all-pass filters. Reverb time specifies the low-frequency RT60. Tone controls the comb damping: 0% is darkest and 100% is brightest. Tone and pre-delay changes are smoothed or crossfaded to avoid clicks. It has no samples, convolution impulse, or independent return-level control.
+The reverb is a stereo algorithmic Schroeder/Freeverb-style network using a stereo pre-delay, a fixed 180 Hz stereo high-pass input filter, parallel feedback comb filters, and series all-pass filters. Reverb time specifies the low-frequency RT60. Tone controls the comb damping: 0% is darkest and 100% is brightest. Tone, pre-delay, and return changes are smoothed or crossfaded to avoid clicks. The reverb return is independent from the delay return; delay output is not injected into the reverb input. It has no samples or convolution impulse.
 
-Reverb time ranges from 0.2 through 10.0 seconds and defaults to 2.5 seconds. Reverb tone ranges from 0% through 100% and defaults to 40%. Reverb pre-delay ranges from 0 through 200 ms and defaults to 20 ms.
+Reverb time ranges from 0.2 through 10.0 seconds and defaults to 2.5 seconds. Reverb tone ranges from 0% through 100% and defaults to 40%. Reverb pre-delay ranges from 0 through 200 ms and defaults to 20 ms. Reverb return ranges from 0% through 100% and defaults to 30%.
 
 #### Master safety
 
@@ -295,6 +295,7 @@ The final output stage applies DC blocking, fixed +6 dB makeup gain, and a stere
 | Reverb time | 0.2–10.0 s | 2.5 s | Up/down by 0.1 s and Shift+up/down by 1 s |
 | Reverb tone | 0–100% | 40% | Percentage direct entry, or up/down by 1% and Shift+up/down by 10% |
 | Reverb pre-delay | 0–200 ms | 20 ms | Up/down by 1 ms and Shift+up/down by 10 ms |
+| Reverb return | 0–100% | 30% | Percentage direct entry, or up/down by 1% and Shift+up/down by 10% |
 | Key | C, C#, D, D#, E, F, F#, G, G#, A, A#, B | C | Up/down moves chromatically |
 | Scale | Major, natural minor | Major | Up/down or the shortcut toggles the value |
 
@@ -384,6 +385,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Global | `r` | Edit reverb time |
 | Global | `b` | Edit reverb tone |
 | Global | `p` | Edit reverb pre-delay |
+| Global | `m` | Edit reverb return |
 | Global | `k` | Edit musical key |
 | Global | `s` | Toggle/edit scale |
 | Global | `d` | Edit kick sidechain ducking |
@@ -431,9 +433,9 @@ Adding or replacing a trigger or note automatically auditions it while transport
 At `120x34` or larger, the normal screen contains:
 
 1. Header: one metadata-only line containing the application name, project filename or `Untitled`, dirty marker, audio device/status, transport state, pattern state, and tempo. If the current audio stream has had callback deadline overruns, the header also shows a text-visible warning badge with the cumulative count and maximum callback load percentage. Persistent command shortcut hints are not shown there; the `?` overlay contains the complete key map.
-2. Global row: all eight global controls and current values; their local shortcuts are shown in the detail cards.
+2. Global row: all ten global controls and current values; their local shortcuts are shown in the detail cards.
 3. Eight variable-length sequencer track blocks: track name, mute state, absolute step range, and compact fixed-width step cells. The displayed range communicates the track length.
-4. A selected-control panel: vertical parameter faders for the selected track, or eight titled global detail cards when the global row is selected. The global cards show a tempo numeric readout, delay-division/key/scale selectors, and faders for delay feedback, reverb time, reverb tone, and reverb pre-delay. Global faders use their model ranges (`0–95%`, `0.2–10.0 s`, `0–100%`, and `0–200 ms`) and show exact values with units beside the fader; every card retains its local shortcut.
+4. A selected-control panel: vertical parameter faders for the selected track, or ten titled global detail cards when the global row is selected. The global cards show a tempo numeric readout, delay-division/key/scale selectors, and faders for delay feedback, reverb time, reverb tone, reverb pre-delay, and reverb return. Global faders use their model ranges (`0–95%`, `0.2–10.0 s`, `0–100%`, `0–200 ms`, and `0–100%`) and show exact values with units beside the fader; every card retains its local shortcut.
 5. Status line: current mode, last successful operation or actionable error, and active-editor guidance. While a track parameter is being edited in `LOCK` scope, the selected-control panel and status line prominently show `LOCK PARAMETER EDITING` using contrasting styling.
 
 Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows event accent, the empty-step input accent default, inherited accent/source on ties, and Bass slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, envelope, distortion, phaser, and flanger groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout; flanger readouts show Hz, center delay/excursion in ms, feedback, and wet mix. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.
@@ -526,6 +528,7 @@ The top-level object is:
   "reverb_time_seconds": 2.5,
   "reverb_tone": 40,
   "reverb_pre_delay_ms": 20,
+  "reverb_return": 30,
   "sidechain": {
     "depth": 0,
     "attack": 20,

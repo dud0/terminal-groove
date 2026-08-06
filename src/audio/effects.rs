@@ -25,6 +25,10 @@ impl Renderer {
         );
         self.reverb
             .set_pre_delay_smoothed(self.project.globals.reverb_pre_delay_ms, smoothing_samples);
+        self.reverb_return.set(
+            self.project.globals.reverb_return.normalized(),
+            smoothing_samples,
+        );
         for track in 0..super::TRACK_COUNT {
             self.effects[track].configure(
                 self.project.tracks[track].effects,

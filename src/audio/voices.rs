@@ -203,7 +203,6 @@ impl ChordVoicePool {
 }
 
 pub(super) const DRUM_SILENCE: f32 = 0.0001;
-pub(super) const REVERB_RETURN_GAIN: f32 = 0.5;
 
 pub(super) struct DrumEnvelope {
     pub(super) value: f32,

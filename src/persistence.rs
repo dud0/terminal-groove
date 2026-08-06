@@ -219,6 +219,7 @@ mod tests {
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
         assert_eq!(value["globals"]["reverb_pre_delay_ms"], 20);
+        assert_eq!(value["globals"]["reverb_return"], 30);
         assert_eq!(value["tracks"].as_array().unwrap().len(), 8);
         assert_eq!(value["tracks"][0]["name"], "Kick");
         assert_eq!(value["tracks"][4]["kind"], "cymbal");
@@ -259,11 +260,16 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("reverb_pre_delay_ms");
+        value["globals"]
+            .as_object_mut()
+            .unwrap()
+            .remove("reverb_return");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
 
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.globals.reverb_tone.get(), 40);
         assert_eq!(loaded.globals.reverb_pre_delay_ms, 20);
+        assert_eq!(loaded.globals.reverb_return.get(), 30);
     }
 
     #[test]
