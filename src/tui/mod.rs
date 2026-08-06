@@ -644,23 +644,25 @@ mod tests {
     }
 
     #[test]
-    fn help_overlay_lists_contextual_shortcuts_and_direct_percentage_mapping() {
+    fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
         let mut app = App::new(Project::new(), None);
         app.mode = Mode::Help;
         let screen = rendered(&app, 240, 60);
 
-        assert!(screen.contains("Left/Right, Home, and End"));
-        assert!(screen.contains("Enter selects while stopped or queues while playing"));
-        assert!(screen.contains("Pitched tracks: 1–8 inserts notes"));
-        assert!(screen.contains("[`/1–9/0] enters 0/10–90/100%"));
+        assert!(screen.contains("PATTERNS  Ctrl+P open dialog"));
+        assert!(screen.contains("NAVIGATION  ↑/↓ rows"));
+        assert!(screen.contains("EVENTS & TRACKS  p BASE/LOCK"));
+        assert!(screen.contains("PARAMETERS  v level"));
+        assert!(screen.contains("GLOBAL  t tempo"));
         assert!(screen.contains("Ctrl+Shift+S save as"));
-        assert!(screen.contains("Ctrl+N new project"));
-        assert!(screen.contains("o audition"));
-        assert!(screen.contains("y delay division"));
-        assert!(screen.contains("Global: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale."));
-        assert!(screen.contains("filter envelope"));
-        assert!(screen.contains("Events: A toggles event accent or empty-step input default"));
-        assert!(!screen.contains("Events: Shift+A toggles accent"));
+        assert!(screen.contains("o audition selected step"));
+        assert!(screen.contains("[`/1–9/0] percent"));
+        assert!(screen.contains("Backspace/Delete remove lock/LFO"));
+        assert!(screen.contains("Esc close help"));
+
+        let minimum_screen = rendered(&app, 120, 34);
+        assert!(minimum_screen.contains("GLOBAL  t tempo"));
+        assert!(minimum_screen.contains("Esc in navigation resets scope to BASE"));
     }
 
     #[test]

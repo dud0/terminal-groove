@@ -69,6 +69,31 @@ pub(super) fn help_available(mode: &Mode) -> bool {
     )
 }
 
+const HELP_TEXT: &str =
+    "CORE  Space play/pause · . stop/reset · ? help · Esc close help
+      Ctrl+N new project · Ctrl+O open · Ctrl+S save · Ctrl+Shift+S save as
+      Ctrl+Q quit · Ctrl+Z undo · Ctrl+Y redo
+PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
+          N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
+NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
+           Shift+1..6 select track · Enter toggle/insert · Backspace/Delete clear
+           g pattern generator · o audition selected step
+EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
+                 A accent/default · Shift+G Bass slide · Shift+T condition/retrigger · Shift+S swing
+                 1–8 note · [ / ] octave · t tie · C Chord trigger editor
+PARAMETERS  v level · n pan · y delay send · b reverb send
+           Kick: u tune · d decay · a attack
+           Snare: u tune · t tone · s snappy · Hat: u tune · d decay
+           Bass: w waveform · c cutoff · R resonance · f filter env · d decay
+           Chord/Lead: w osc mix · Shift+P pulse · u sub · i pitch LFO
+           Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR
+           Chord: h chorus · e spread
+           Parameter edit: PageUp/Down step · Shift+L LFO · [`/1–9/0] percent
+           ↑/↓ adjust · ←/→ switch parameter · Enter/Esc finish · Backspace/Delete remove lock/LFO
+GLOBAL  t tempo · y delay division · f feedback · r reverb time
+        b reverb tone · p pre-delay · k key · s scale · ←/→ select · ↑/↓ adjust
+Help is available from navigation and track editors with ?; Esc in navigation resets scope to BASE.";
+
 pub(super) fn track_label(t: &crate::model::Track) -> String {
     if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
         format!("{} O{}", t.name, t.input_octave.unwrap_or(3))
@@ -1602,12 +1627,13 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     }
     f.render_widget(Paragraph::new(status_lines), chunks[4]);
     if a.mode == Mode::Help {
-        popup(
-            f,
-            area,
-            "Help",
-            "All sound is synthesized.\nPatterns: Ctrl+P opens the horizontal dialog; Left/Right, Home, and End move the cursor. Enter selects while stopped or queues while playing. N insert, D duplicate, C copy, X cut, V paste, Delete remove.\nNavigation: ↑/↓ changes rows, ←/→ changes steps, Shift+←/→ jumps 16 steps, Shift+1..6 selects a track. Enter toggles/inserts; Backspace/Delete clears. g opens the deterministic fill-only pattern idea generator (seed, target, density, ties, accents).\nPitched tracks: 1–8 inserts notes, [ / ] changes input octave, t edits ties. Events: A toggles event accent or empty-step input default; Shift+G toggles Bass slide; Shift+T edits condition/chance/retriggers.\nTracks: Shift+S edits 0–75% swing; l length, Shift+D double, p BASE/LOCK scope, v level, n pan, m mute, y delay send, b reverb send, o audition.\nParameter editing: PageUp/Down changes step; [`/1–9/0] enters 0/10–90/100%. Shift+L adds/edits an eligible track LFO; ~ marks an assignment.\nKick: u tune, d decay, a attack. Snare: u tune, t tone, s snappy. Hi-hat: u tune, d decay.\nBass: w waveform, c cutoff, R resonance, f filter envelope, d decay.\nChord/Lead: w oscillator mix, Shift+P pulse width, u sub, i pitch LFO, c/R/f cutoff/resonance/filter envelope, a/d/s/r ADSR. Chord: h chorus, e spread, C trigger editor (shape, arp, type, rate).\nGlobal: t tempo, y delay division, f delay feedback, r reverb time, b reverb tone, p reverb pre-delay, k key, s scale.\nCtrl commands outside Help, confirmation, and text-input dialogs: Ctrl+N new project, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open, Ctrl+Z undo, Ctrl+Y redo, Ctrl+Q quit. Space play/pause and . stop work from navigation and parameter/LFO editing.\n? opens Help from navigation, parameter, LFO, or trigger editing. Esc or ? closes Help.",
-        )
+        let help_area = Rect {
+            x: area.x + 2,
+            y: area.y + 1,
+            width: area.width.saturating_sub(4),
+            height: area.height.saturating_sub(2),
+        };
+        popup_at(f, help_area, "Help", HELP_TEXT)
     }
     if a.mode == Mode::QuitConfirm {
         popup_at(
