@@ -80,6 +80,8 @@ Notes are stored as scale degree and octave rather than absolute pitch. Changing
 
 Every note also owns the same `condition` and `retrigger_count` fields as a drum trigger. A skipped Bass, Chord, or Lead note acts as an empty step: it releases the active voice and applies no locks. A skipped drum trigger is silent.
 
+The shared track probability gate applies to both drum triggers and pitched notes. At a reached step, the engine evaluates the event condition first, then evaluates the track probability only for an eligible trigger or note whose condition passed. A successful gate schedules the base action and its complete retrigger burst. A rejected drum trigger is silent; a rejected Bass, Chord, or Lead note is processed exactly like an empty step and releases the active voice without applying locks. Ties bypass probability and retain the existing hold/release behavior.
+
 Bass and Lead are monophonic. Chord interprets the stored degree as the root of a selected diatonic shape. The available shapes are `1-3-5`, `1-3-5-7`, `1-3-5-6`, `1-2-5`, and `1-4-5`, plus their cyclic inversions. A shape is stored on each Chord note as an ordered scale-degree recipe, so its musical quality follows the current root and scale. For example, `1-3-5-7` can produce different seventh qualities depending on the root and scale.
 
 - A Bass or Lead note sets pitch, captures its accent, opens the gate, and retriggers its amplitude envelope.
@@ -227,8 +229,9 @@ Each track provides:
 - Delay send, default 0%
 - Reverb send, default 0% (20% for Chord and Lead)
 - Swing, default 0%, range 0–75%, shared across all patterns
+- Probability, default 100%, range 0–100%, shared across all patterns
 
-Swing delays only global offbeat sixteenths (clock steps 2, 4, …) by its percentage of the nominal step duration. It applies to the complete per-track action, including releases and locks, and remains aligned to the global clock for polymetric tracks. Conditions are evaluated once at the reached step. A successful event launches its full evenly-spaced retrigger burst before that track's next swing-adjusted slot. Cycle counters are per track and step; chance streams are deterministic per track. Both reset on Stop and pattern activation.
+Swing delays only global offbeat sixteenths (clock steps 2, 4, …) by its percentage of the nominal step duration. It applies to the complete per-track action, including releases and locks, and remains aligned to the global clock for polymetric tracks. Conditions are evaluated once at the reached step, followed by the probability gate. A successful event launches its full evenly-spaced retrigger burst before that track's next swing-adjusted slot. Cycle counters, event-Chance streams, and probability streams are deterministic and independent per track; all reset on Stop and pattern activation. Probability draws are not made at 0% or 100%, and never perturb event-Chance streams.
 
 Sends are post-fader and post-mute. Muting ramps the dry track and new send input to silence, but already-generated global effect tails continue. A muted synth voice continues its internal state, so unmuting may reveal a still-active voice.
 
@@ -322,6 +325,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Bass note | `Shift+G` | Toggle slide |
 | Trigger/note | `Shift+T` | Edit condition, cycle/chance values, and retrigger count |
 | Track | `Shift+S` | Edit 0–75% swing |
+| Track | `Shift+P` | Edit 0–100% probability |
 | Eligible parameter editor | `Shift+L` | Add or edit that parameter's track-level LFO |
 | Track | `v` | Edit level |
 | Track | `m` | Toggle mute immediately |
@@ -339,7 +343,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Effects bank | `d/t/x` | Edit distortion drive, tone, or mix |
 | Effects bank | `r/e/f/M` | Edit phaser rate, depth, feedback, or mix |
 | Effects bank | `R/q/E/F/N` | Edit flanger rate, center delay, depth, feedback, or mix |
-| Chord/Lead | `w` / `Shift+P` / `u` | Edit oscillator mix, pulse width, or sub-oscillator level |
+| Chord/Lead | `w` / `P` / `u` | Edit oscillator mix, pulse width, or sub-oscillator level (`Shift+P` is track probability) |
 | Chord/Lead | `c` / `R` / `f` | Edit cutoff, resonance, or filter-envelope amount |
 | Chord/Lead | `a` / `d` / `s` / `r` | Edit ADSR |
 | Chord | `h` | Edit chorus Off/I/II mode |
@@ -372,7 +376,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
-- `A` toggles accent immediately on a trigger or note, or toggles the selected track's persisted input accent default when the step is empty without creating an event. `Shift+G` toggles slide on a Bass note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. These edits are undoable; direct accent editing remains invalid on ties.
+- `A` toggles accent immediately on a trigger or note, or toggles the selected track's persisted input accent default when the step is empty without creating an event. `Shift+G` toggles slide on a Bass note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. `Shift+P` opens the selected-track probability editor with the same controls: Up/Down changes by 1%, Shift+Up/Down by 10%, and values clamp to 0–100%. Enter, Esc, or Shift+P closes while retaining immediate edits. These edits are undoable and repeated arrow changes coalesce into one transaction; direct accent editing remains invalid on ties. Lowercase `p` remains the BASE/LOCK scope toggle.
 
 The pattern-idea generator opens with `g` and is session-only; its settings are never written to project JSON. Its fields, in order, are `Target`, `Track`, `Seed`, `Density`, `Low octave`, `High octave`, `Ties`, and `Accents`. Up/down moves between fields and clamps at the first or last field; Tab and BackTab move through the same eight-field order and wrap. Target and Track use left/right, the Track selector wraps through all six tracks, and Seed accepts digits with Backspace (left also removes its last digit). Percentage fields change by 5 points and clamp to 0–100%. Low octave and High octave use left/right one octave at a time: Low is clamped to 0 through High, while High is clamped to Low through 7. Enter applies the generator and Esc closes it; range edits do not alter existing events. Defaults are the deterministic seed, 48% density, O2–O6, 18% ties, and 24% accents.
 
@@ -509,6 +513,8 @@ The top-level object is:
 - `muted`: Boolean
 - `delay_send`: integer 0–100
 - `reverb_send`: integer 0–100
+- `swing`: integer 0–75; omitted values load as 0
+- `probability`: integer 0–100; omitted values load as 100
 - `effects.distortion.drive`, `effects.distortion.tone`, `effects.distortion.mix`: integer 0–100
 - `effects.phaser.rate`, `effects.phaser.depth`, `effects.phaser.feedback`, `effects.phaser.mix`: integer 0–100; phaser feedback is limited to 90
 - `effects.flanger.rate`, `effects.flanger.delay`, `effects.flanger.depth`, `effects.flanger.feedback`, `effects.flanger.mix`: integer 0–100; flanger feedback is limited to 90
@@ -643,11 +649,11 @@ Use one binary package with testable modules for model/validation, reducer and h
 
 ### 12.1 Unit and reducer tests
 
-Cover musical degree/frequency mapping, input limits, tie creation/resolution/cleanup, Bass and Lead gates, Chord shapes and eight-voice overlap, retriggers, ties, releases, accents, audition, and Bass slide behavior. Cover lock overlay/compatibility, percentage editing, undo/redo/coalescing, dirty revisions, tempo accumulation, independent cycles, resize/doubling, delay divisions, track-effect parameter bounds, and LFO compatibility, rates, phase, clamping, pitch range, ties, and release tails.
+Cover musical degree/frequency mapping, input limits, tie creation/resolution/cleanup, Bass and Lead gates, Chord shapes and eight-voice overlap, retriggers, ties, releases, accents, audition, and Bass slide behavior. Cover probability defaults and bounds, undo/redo/coalescing, dirty revisions, condition-before-probability ordering, full-burst gating, pitched-note release behavior, tie immunity, deterministic reset, and independence from event-Chance RNG. Also cover lock overlay/compatibility, percentage editing, tempo accumulation, independent cycles, resize/doubling, delay divisions, track-effect parameter bounds, and LFO compatibility, rates, phase, clamping, pitch range, ties, and release tails.
 
 ### 12.2 Persistence tests
 
-Round-trip default and populated version-14 projects, including every event, lock, LFO, effect, flanger setting, and articulation variant. Reject unsupported versions, unknown fields, invalid ranges/layouts/events/locks/LFOs/ties, and malformed sequences; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, and history reset on load.
+Round-trip default and populated version-14 projects, including track probability, every event, lock, LFO, effect, flanger setting, and articulation variant. Missing `tracks[].probability` loads as 100%; new saves always include it. Reject unsupported versions, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, and history reset on load.
 
 ### 12.3 TUI tests
 
@@ -660,7 +666,7 @@ Cover bounded oscillator pitch, ADSR timing, filter stability, finite drum outpu
 ### 12.5 Manual acceptance scenarios
 
 1. Start an untitled project in a `120x34` terminal; navigate every row, enter events, and verify visible state, local shortcuts, playhead/cursor styling, and small-terminal behavior.
-2. Build a drum loop; edit all drum parameters, accents, mute, sends, conditions, retriggers, swing, and locks while stopped and playing.
+2. Build a drum loop; edit all drum parameters, accents, mute, sends, conditions, retriggers, swing, probability, and locks while stopped and playing. Verify 0% suppresses drums and retriggers, 100% preserves behavior, conditions are evaluated first, and pitched probability failures release active voices while ties remain held.
 3. Enter Bass, Chord, and Lead notes with octave changes, shapes, inversions, arpeggiation, accents, slide, ordinary and wrapped ties; verify gates, releases, inherited articulation, and the fixed-time Bass glide.
 4. Edit base values, locks, synced/free LFOs, and all track effects including flanger center delay/depth; verify faders, readouts, badges, modulation centers, smoothing, and next-pass live updates.
 5. Audition empty and occupied steps with `o` while stopped and playing, including Chord shapes; change key and scale and verify existing degrees are reinterpreted on future triggers.

@@ -14,6 +14,8 @@ impl Renderer {
         self.cycle_counts = [[0; MAX_STEP_COUNT]; TRACK_COUNT];
         self.condition_rng =
             std::array::from_fn(|i| 0x8a5c_9d31 ^ (i as u32).wrapping_mul(0x9e37_79b9));
+        self.probability_rng =
+            std::array::from_fn(|i| 0x3c6e_f372 ^ (i as u32).wrapping_mul(0x7f4a_7c15));
     }
     pub(super) fn condition_passes(
         &mut self,
@@ -34,6 +36,18 @@ impl Renderer {
                 (*state % 100) < u32::from(probability.get())
             }
         }
+    }
+    pub(super) fn probability_passes(&mut self, track: usize) -> bool {
+        let probability = self.project.tracks[track].probability.get();
+        if probability == 0 {
+            return false;
+        }
+        if probability == 100 {
+            return true;
+        }
+        let state = &mut self.probability_rng[track];
+        *state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (*state % 100) < u32::from(probability)
     }
     pub(super) fn enqueue(&mut self, action: ScheduledTrackAction) {
         if let Some(slot) = self.scheduled.iter_mut().find(|slot| slot.is_none()) {

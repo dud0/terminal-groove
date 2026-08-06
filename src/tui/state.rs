@@ -24,6 +24,7 @@ pub(crate) enum Mode {
         field: TriggerField,
     },
     SwingEdit,
+    TrackProbabilityEdit,
     GlobalEdit(GlobalParameterId),
     TempoInput(String),
     TrackLengthInput(String),

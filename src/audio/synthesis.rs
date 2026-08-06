@@ -800,10 +800,15 @@ impl Renderer {
             self.status.playheads[track].store(step as u8, Ordering::Release);
             let sequence = self.project.patterns[self.active_pattern].tracks[track];
             let event = sequence.steps[step];
-            let trigger_allowed = event
+            let condition_allowed = event
                 .and_then(|event| event.condition())
                 .map(|condition| self.condition_passes(track, step, condition))
                 .unwrap_or(true);
+            let trigger_allowed = match event.and_then(|event| event.condition()) {
+                Some(_) if condition_allowed => self.probability_passes(track),
+                Some(_) => false,
+                None => condition_allowed,
+            };
             let step_samples = self.clock.step_samples().round() as u32;
             let delay = if global_step % 2 == 1 {
                 step_samples * u32::from(self.project.tracks[track].swing.get()) / 100

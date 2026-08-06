@@ -70,6 +70,9 @@ impl Renderer {
             condition_rng: std::array::from_fn(|i| {
                 0x8a5c_9d31 ^ (i as u32).wrapping_mul(0x9e37_79b9)
             }),
+            probability_rng: std::array::from_fn(|i| {
+                0x3c6e_f372 ^ (i as u32).wrapping_mul(0x7f4a_7c15)
+            }),
             preview_scheduled: [None; 24],
         };
         r.configure_effects(0);

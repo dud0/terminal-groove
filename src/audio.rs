@@ -23,6 +23,7 @@ struct AudioTrack {
     delay_send: Percent,
     reverb_send: Percent,
     swing: Percent,
+    probability: Percent,
     instrument: Instrument,
     effects: TrackEffects,
     lfos: LfoAssignments,
@@ -75,6 +76,7 @@ impl AudioProject {
                     delay_send: t.delay_send,
                     reverb_send: t.reverb_send,
                     swing: t.swing,
+                    probability: t.probability,
                     instrument: t.instrument,
                     effects: t.effects,
                     lfos: t.lfos,
@@ -134,6 +136,7 @@ struct Renderer {
     scheduled: [Option<ScheduledTrackAction>; 32],
     cycle_counts: [[u32; MAX_STEP_COUNT]; TRACK_COUNT],
     condition_rng: [u32; TRACK_COUNT],
+    probability_rng: [u32; TRACK_COUNT],
     preview_scheduled: [Option<PreviewAction>; 24],
 }
 
@@ -495,6 +498,126 @@ mod tests {
         assert_eq!(initial.remaining, 749);
         assert_eq!(retrigger.remaining, 874);
         assert!(retrigger.remaining > initial.remaining);
+    }
+
+    #[test]
+    fn track_probability_gates_the_base_action_and_entire_retrigger_burst() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 4,
+            locks: Default::default(),
+        });
+        project.tracks[0].probability = Percent::ZERO;
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.boundary(0);
+        assert!(renderer.drums[0].envelope.is_idle());
+        assert!(
+            !renderer
+                .scheduled
+                .iter()
+                .flatten()
+                .any(|action| action.track == 0)
+        );
+
+        renderer.project.tracks[0].probability = Percent::new(100).unwrap();
+        renderer.next_steps[0] = 0;
+        renderer.boundary(1);
+        assert!(!renderer.drums[0].envelope.is_idle());
+        assert_eq!(
+            renderer
+                .scheduled
+                .iter()
+                .flatten()
+                .filter(|action| action.track == 0 && action.retrigger)
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn probability_is_evaluated_after_conditions_without_sharing_rng() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: crate::model::TriggerCondition::Chance {
+                probability: Percent::ZERO,
+            },
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        project.tracks[0].probability = Percent::new(50).unwrap();
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        let condition_before = renderer.condition_rng;
+        let probability_before = renderer.probability_rng;
+        renderer.boundary(0);
+        assert_ne!(renderer.condition_rng, condition_before);
+        assert_eq!(renderer.probability_rng, probability_before);
+        assert!(renderer.drums[0].envelope.is_idle());
+    }
+
+    #[test]
+    fn rejected_pitched_note_releases_but_tie_is_not_probability_gated() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        project.patterns[0].tracks[3].steps[1] = Some(StepEvent::BassNote {
+            degree: 2,
+            octave: 3,
+            accent: false,
+            slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.boundary(0);
+        assert!(renderer.synth[0].active);
+        renderer.project.tracks[3].probability = Percent::ZERO;
+        renderer.boundary(1);
+        assert!(!renderer.synth[0].active);
+
+        renderer.project.patterns[0].tracks[3].steps[1] = Some(StepEvent::Tie {
+            locks: Default::default(),
+        });
+        renderer.project.tracks[3].probability = Percent::new(100).unwrap();
+        renderer.next_steps[3] = 0;
+        renderer.boundary(2);
+        assert!(renderer.synth[0].active);
+        renderer.project.tracks[3].probability = Percent::ZERO;
+        renderer.next_steps[3] = 1;
+        renderer.boundary(3);
+        assert!(renderer.synth[0].active);
+    }
+
+    #[test]
+    fn probability_rng_resets_on_stop() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        project.tracks[0].probability = Percent::new(50).unwrap();
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        let initial = renderer.probability_rng;
+        renderer.boundary(0);
+        assert_ne!(renderer.probability_rng, initial);
+        renderer.command(AudioCommand::Stop);
+        assert_eq!(renderer.probability_rng, initial);
     }
 
     #[test]

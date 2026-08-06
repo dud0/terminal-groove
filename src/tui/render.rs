@@ -1,7 +1,7 @@
 use super::overlays::{
-    popup, popup_at, quit_popup_rect, render_chord_popup, render_generator_popup, render_lfo_popup,
-    render_lfo_selector, render_pattern_popup, render_trigger_popup, swing_popup_rect,
-    tempo_popup_rect,
+    popup, popup_at, probability_popup_rect, quit_popup_rect, render_chord_popup,
+    render_generator_popup, render_lfo_popup, render_lfo_selector, render_pattern_popup,
+    render_trigger_popup, swing_popup_rect, tempo_popup_rect,
 };
 use super::{
     controller::{global_name, resolved_path},
@@ -46,6 +46,7 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::ChordEdit { shape } => format!("Chord trigger edit ({shape})"),
         Mode::TriggerEdit { .. } => "Trigger editor".into(),
         Mode::SwingEdit => "Track swing edit".into(),
+        Mode::TrackProbabilityEdit => "Track probability edit".into(),
         Mode::GlobalEdit(id) => format!("Global edit ({})", global_name(*id)),
         Mode::TempoInput(_) => "Tempo numeric input".into(),
         Mode::TrackLengthInput(_) => "Track length input".into(),
@@ -67,6 +68,7 @@ pub(super) fn help_available(mode: &Mode) -> bool {
             | Mode::ChordEdit { .. }
             | Mode::TriggerEdit { .. }
             | Mode::SwingEdit
+            | Mode::TrackProbabilityEdit
     )
 }
 
@@ -81,7 +83,7 @@ NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/�
            g pattern generator · o audition selected step
            Shift+Delete clear selected track
 EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
-                 A accent/default · Shift+G Bass slide · Shift+T condition/retrigger · Shift+S swing
+                 A accent/default · Shift+G Bass slide · Shift+T condition/retrigger · Shift+S swing · Shift+P probability
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
 PARAMETERS  v level · n pan · y delay send · b reverb send
            Tab PARAMS/EFFECTS · EFFECTS: d drive · t tone · x distortion mix
@@ -90,7 +92,7 @@ PARAMETERS  v level · n pan · y delay send · b reverb send
            Kick: u tune · d decay · a attack
            Snare: u tune · t tone · s snappy · Hat: u tune · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
-           Chord/Lead: w osc mix · Shift+P pulse · u sub · i pitch LFO
+           Chord/Lead: w osc mix · P pulse · u sub · i pitch LFO
            Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR
            Chord: h chorus · e spread
            Parameter edit: PageUp/Down step · Shift+L LFO · [`/1–9/0] percent
@@ -1698,8 +1700,16 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     } else {
         String::new()
     };
+    let probability_summary = if a.row > 0 {
+        format!(
+            " · Probability {}",
+            a.editor.project.tracks[a.row - 1].probability
+        )
+    } else {
+        String::new()
+    };
     let pattern_title = Line::from(format!(
-        "Pattern  {pattern_help}{trigger_summary}{swing_summary}"
+        "Pattern  {pattern_help}{trigger_summary}{swing_summary}{probability_summary}"
     ));
     f.render_widget(
         Table::new(rows, widths)
@@ -1788,6 +1798,10 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         status_lines.push(Line::from(
             "Track swing · [↑/↓] ±1%  [Shift+↑/↓] ±10%  (0–75%)  [Enter/Esc] finish",
         ));
+    } else if a.mode == Mode::TrackProbabilityEdit {
+        status_lines.push(Line::from(
+            "Track probability · [↑/↓] ±1%  [Shift+↑/↓] ±10%  (0–100%)  [Enter/Esc/Shift+P] finish",
+        ));
     }
     f.render_widget(Paragraph::new(status_lines), chunks[4]);
     if a.mode == Mode::Help {
@@ -1841,6 +1855,16 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 "{}: {}\n\n[↑/↓] ±1%   [Shift+↑/↓] ±10%\n0–75% · applies to offbeat sixteenths",
                 a.editor.project.tracks[a.row - 1].name,
                 a.editor.project.tracks[a.row - 1].swing,
+            ),
+        ),
+        Mode::TrackProbabilityEdit => popup_at(
+            f,
+            probability_popup_rect(area),
+            "Track probability",
+            &format!(
+                "{}: {}\n\n[↑/↓] ±1%   [Shift+↑/↓] ±10%\n0–100% · evaluated after event conditions",
+                a.editor.project.tracks[a.row - 1].name,
+                a.editor.project.tracks[a.row - 1].probability,
             ),
         ),
         Mode::TempoInput(input) => popup_at(

@@ -86,22 +86,22 @@ use input::{
     duplicate_selected_track, enter_parameter_edit, flipped_waveform, generator_config,
     global_jump, handle_chord_key, handle_generator_dialog, handle_key, handle_lfo_key,
     handle_parameter_key, handle_pattern_dialog, handle_swing_key, handle_track_length_input,
-    handle_trigger_key, is_clear_track_shortcut, lfo_choice_index, move_chord_editor_step,
-    move_generator_field, move_generator_tab, move_parameter_editor, move_step, move_step_bank,
-    move_step_page, move_step_vertical, normalize_cursor, open_chord_editor, open_lfo_editor,
-    parameter_edit_passthrough, parameter_shortcut, parameter_supports_direct_percentage,
-    parameter_upper_bound, pattern_edit_at, select_global, select_track, set_lfo_config,
-    set_parameter, set_selected_track_length, switch_parameter_editor, toggle_parameter_bank,
-    track_jump_index,
+    handle_track_probability_key, handle_trigger_key, is_clear_track_shortcut, lfo_choice_index,
+    move_chord_editor_step, move_generator_field, move_generator_tab, move_parameter_editor,
+    move_step, move_step_bank, move_step_page, move_step_vertical, normalize_cursor,
+    open_chord_editor, open_lfo_editor, parameter_edit_passthrough, parameter_shortcut,
+    parameter_supports_direct_percentage, parameter_upper_bound, pattern_edit_at, select_global,
+    select_track, set_lfo_config, set_parameter, set_selected_track_length,
+    switch_parameter_editor, toggle_parameter_bank, track_jump_index,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
 use overlays::{
     generator_popup_rect, lfo_inactive_style, lfo_popup_rect, pattern_is_empty, popup, popup_at,
-    popup_rect, quit_popup_rect, render_chord_control, render_chord_popup, render_generator_popup,
-    render_lfo_control, render_lfo_fader, render_lfo_popup, render_lfo_selector, render_lfo_switch,
-    render_pattern_popup, render_trigger_popup, swing_popup_rect, tempo_popup_rect,
-    trigger_popup_rect,
+    popup_rect, probability_popup_rect, quit_popup_rect, render_chord_control, render_chord_popup,
+    render_generator_popup, render_lfo_control, render_lfo_fader, render_lfo_popup,
+    render_lfo_selector, render_lfo_switch, render_pattern_popup, render_trigger_popup,
+    swing_popup_rect, tempo_popup_rect, trigger_popup_rect,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -1053,6 +1053,7 @@ mod tests {
         assert_eq!(trigger_popup_rect(area), Rect::new(14, 9, 92, 20));
         assert_eq!(generator_popup_rect(area), Rect::new(31, 10, 58, 13));
         assert_eq!(swing_popup_rect(area), Rect::new(36, 14, 48, 6));
+        assert_eq!(probability_popup_rect(area), Rect::new(36, 14, 48, 6));
 
         assert_eq!(
             trigger_popup_rect(Rect::new(0, 0, 200, 50)),
@@ -1100,6 +1101,15 @@ mod tests {
             generator
                 .iter()
                 .any(|line| line.contains("[↑/↓]/[Tab] field  [←→] change  type seed"))
+        );
+        let _ = rendered_lines(&app, 40, 10);
+
+        app.mode = Mode::TrackProbabilityEdit;
+        let probability = rendered_lines(&app, 120, 34);
+        assert!(
+            probability
+                .iter()
+                .any(|line| line.contains("0–100% · evaluated after event conditions"))
         );
         let _ = rendered_lines(&app, 40, 10);
     }

@@ -89,6 +89,8 @@ pub enum ValidationError {
     Lfo(usize, &'static str),
     #[error("tracks[{0}]: swing must be between 0 and 75%")]
     Swing(usize),
+    #[error("tracks[{0}]: probability must be between 0 and 100%")]
+    Probability(usize),
     #[error("tracks[{0}].effects: invalid {1} range")]
     Effect(usize, &'static str),
     #[error("tracks[{0}].steps[{1}]: invalid trigger condition")]
@@ -1399,6 +1401,8 @@ pub struct Track {
     pub reverb_send: Percent,
     #[serde(default)]
     pub swing: Percent,
+    #[serde(default = "default_probability")]
+    pub probability: Percent,
     pub instrument: Instrument,
     #[serde(default)]
     pub effects: TrackEffects,
@@ -1467,6 +1471,7 @@ impl PartialEq for Project {
                     && left.delay_send == right.delay_send
                     && left.reverb_send == right.reverb_send
                     && left.swing == right.swing
+                    && left.probability == right.probability
                     && left.instrument == right.instrument
                     && left.effects == right.effects
                     && left.lfos == right.lfos
@@ -1486,6 +1491,9 @@ fn p(n: u8) -> Percent {
 }
 fn default_pan() -> Percent {
     Percent(50)
+}
+fn default_probability() -> Percent {
+    Percent(100)
 }
 fn default_step_cache() -> Vec<Step> {
     vec![None; STEP_BANK_SIZE]
@@ -1510,6 +1518,7 @@ impl Project {
             delay_send: p(0),
             reverb_send: p(0),
             swing: p(0),
+            probability: default_probability(),
             instrument,
             effects: TrackEffects::default(),
             lfos: LfoAssignments::default(),
@@ -1532,6 +1541,7 @@ impl Project {
                 _ => p(0),
             },
             swing: p(0),
+            probability: default_probability(),
             instrument,
             effects: TrackEffects::default(),
             lfos: LfoAssignments::default(),
@@ -1728,6 +1738,9 @@ impl Project {
             }
             if t.swing.get() > 75 {
                 return Err(ValidationError::Swing(ti));
+            }
+            if t.probability.get() > 100 {
+                return Err(ValidationError::Probability(ti));
             }
             if t.effects.phaser.feedback.get() > 90 {
                 return Err(ValidationError::Effect(ti, "phaser_feedback"));
@@ -2589,6 +2602,19 @@ mod tests {
     #[test]
     fn invalid_percent_is_rejected() {
         assert!(serde_json::from_str::<Percent>("101").is_err());
+    }
+
+    #[test]
+    fn track_probability_defaults_to_100_percent() {
+        let project = Project::new();
+        assert!(
+            project
+                .tracks
+                .iter()
+                .all(|track| track.probability == Percent::new(100).unwrap())
+        );
+        let value = serde_json::to_value(&project).unwrap();
+        assert_eq!(value["tracks"][0]["probability"], 100);
     }
 
     #[test]

@@ -260,6 +260,39 @@ mod tests {
     }
 
     #[test]
+    fn missing_track_probability_loads_as_100_percent() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("probability.groove.json");
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        for track in value["tracks"].as_array_mut().unwrap() {
+            track.as_object_mut().unwrap().remove("probability");
+        }
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let loaded = load(&path).unwrap();
+        assert!(
+            loaded
+                .tracks
+                .iter()
+                .all(|track| track.probability == crate::model::Percent::new(100).unwrap())
+        );
+    }
+
+    #[test]
+    fn track_probability_round_trips_and_rejects_invalid_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("probability.groove.json");
+        let mut project = Project::new();
+        project.tracks[3].probability = crate::model::Percent::new(37).unwrap();
+        save_atomic(&path, &project).unwrap();
+        assert_eq!(load(&path).unwrap(), project);
+
+        let mut value = serde_json::to_value(&project).unwrap();
+        value["tracks"][3]["probability"] = 101.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+    }
+
+    #[test]
     fn mixed_track_lengths_round_trip() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("mixed.groove.json");

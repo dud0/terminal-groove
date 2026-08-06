@@ -1207,6 +1207,22 @@ impl Editor {
         })
     }
 
+    pub fn set_track_probability(
+        &mut self,
+        track: usize,
+        value: Percent,
+        key: Option<CoalesceKey>,
+    ) -> Result<bool, EditError> {
+        self.edit(key, move |project| {
+            project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?
+                .probability = value;
+            Ok(())
+        })
+    }
+
     pub fn set_parameter(
         &mut self,
         track: usize,
@@ -1988,6 +2004,28 @@ mod tests {
         assert_eq!(
             editor.set_retrigger_count(3, 1, 2),
             Err(EditError::NoTriggerSettings)
+        );
+    }
+
+    #[test]
+    fn track_probability_is_undoable_dirty_and_coalescible() {
+        let mut editor = Editor::new(Project::new());
+        let key = Some(CoalesceKey(0, 0, 0xfe));
+        editor
+            .set_track_probability(0, Percent::new(90).unwrap(), key)
+            .unwrap();
+        editor
+            .set_track_probability(0, Percent::new(80).unwrap(), key)
+            .unwrap();
+        assert_eq!(editor.project.tracks[0].probability.get(), 80);
+        assert!(editor.is_dirty());
+        assert!(editor.undo());
+        assert_eq!(editor.project.tracks[0].probability.get(), 100);
+        assert!(editor.redo());
+        assert_eq!(editor.project.tracks[0].probability.get(), 80);
+        assert_eq!(
+            editor.set_track_probability(6, Percent::new(50).unwrap(), None),
+            Err(EditError::InvalidTrack)
         );
     }
 

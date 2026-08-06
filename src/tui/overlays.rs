@@ -908,6 +908,10 @@ pub(super) fn swing_popup_rect(area: Rect) -> Rect {
     compact_popup_rect(area, 48, 6)
 }
 
+pub(super) fn probability_popup_rect(area: Rect) -> Rect {
+    compact_popup_rect(area, 48, 6)
+}
+
 pub(super) fn popup_rect(area: Rect) -> Rect {
     Rect {
         x: area.x + 10,

@@ -162,6 +162,9 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     if a.mode == Mode::SwingEdit && handle_swing_key(a, audio, k)? {
         return Ok(());
     }
+    if a.mode == Mode::TrackProbabilityEdit && handle_track_probability_key(a, audio, k)? {
+        return Ok(());
+    }
     if matches!(a.mode, Mode::ParameterEdit(_)) && handle_parameter_key(a, audio, k)? {
         return Ok(());
     }
@@ -321,6 +324,11 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         KeyCode::Char('S') if a.row > 0 => {
             a.mode = Mode::SwingEdit;
             a.status = format!("{} swing", a.editor.project.tracks[a.row - 1].name);
+        }
+        KeyCode::Char('P') if a.row > 0 && k.modifiers.contains(KeyModifiers::SHIFT) => {
+            a.editor.end_coalescing();
+            a.mode = Mode::TrackProbabilityEdit;
+            a.status = format!("{} probability", a.editor.project.tracks[a.row - 1].name);
         }
         KeyCode::Char('C') if a.row == 5 => open_chord_editor(a),
         KeyCode::Char(c) if a.row == 0 => {
@@ -1475,6 +1483,52 @@ pub(super) fn handle_swing_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
             let value = Percent::new((current.get() as i16 + delta).clamp(0, 75) as u8).unwrap();
             if apply(a, audio, |editor| {
                 editor.set_track_swing(track, value, None)
+            }) {
+                sync_project(a, audio);
+            }
+            Ok(true)
+        }
+        _ => Ok(true),
+    }
+}
+
+pub(super) fn handle_track_probability_key(
+    a: &mut App,
+    audio: &mut Audio,
+    k: KeyEvent,
+) -> Result<bool> {
+    let track = a.row.saturating_sub(1);
+    match k.code {
+        KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o') => Ok(false),
+        KeyCode::Char('?') => {
+            a.mode = Mode::Help;
+            Ok(true)
+        }
+        KeyCode::Enter | KeyCode::Esc | KeyCode::Char('P') => {
+            a.editor.end_coalescing();
+            a.mode = Mode::Navigation;
+            a.status = "Track probability editing finished".into();
+            Ok(true)
+        }
+        KeyCode::Up | KeyCode::Down => {
+            let delta = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                10
+            } else {
+                1
+            };
+            let delta = if k.code == KeyCode::Down {
+                -delta
+            } else {
+                delta
+            };
+            let current = a.editor.project.tracks[track].probability;
+            let value = current.saturating_add(delta);
+            if apply(a, audio, |editor| {
+                editor.set_track_probability(
+                    track,
+                    value,
+                    Some(crate::reducer::CoalesceKey(track, 0, 0xfe)),
+                )
             }) {
                 sync_project(a, audio);
             }
