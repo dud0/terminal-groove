@@ -330,7 +330,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             a.mode = Mode::SwingEdit;
             a.status = format!("{} swing", a.editor.project.tracks[a.row - 1].name);
         }
-        KeyCode::Char('P') if a.row > 0 && k.modifiers.contains(KeyModifiers::SHIFT) => {
+        KeyCode::Char('Q') if a.row > 0 && k.modifiers.contains(KeyModifiers::SHIFT) => {
             a.editor.end_coalescing();
             a.mode = Mode::TrackProbabilityEdit;
             a.status = format!("{} probability", a.editor.project.tracks[a.row - 1].name);
@@ -1509,7 +1509,7 @@ pub(super) fn handle_track_probability_key(
             a.mode = Mode::Help;
             Ok(true)
         }
-        KeyCode::Enter | KeyCode::Esc | KeyCode::Char('P') => {
+        KeyCode::Enter | KeyCode::Esc | KeyCode::Char('Q') => {
             a.editor.end_coalescing();
             a.mode = Mode::Navigation;
             a.status = "Track probability editing finished".into();

@@ -331,7 +331,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Bass note | `Shift+G` | Toggle slide |
 | Trigger/note | `Shift+T` | Edit condition, cycle/chance values, and retrigger count |
 | Track | `Shift+S` | Edit 0–75% swing |
-| Track | `Shift+P` | Edit 0–100% probability |
+| Track | `Shift+Q` | Edit 0–100% probability |
 | Eligible parameter editor | `Shift+L` | Add or edit that parameter's track-level LFO |
 | Track | `v` | Edit level |
 | Track | `m` | Toggle mute immediately |
@@ -349,7 +349,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Effects bank | `d/t/x` | Edit distortion drive, tone, or mix |
 | Effects bank | `r/e/f/M` | Edit phaser rate, depth, feedback, or mix |
 | Effects bank | `R/q/E/F/N` | Edit flanger rate, center delay, depth, feedback, or mix |
-| Chord/Lead | `w` / `P` / `u` | Edit oscillator mix, pulse width, or sub-oscillator level (`Shift+P` is track probability) |
+| Chord/Lead | `w` / `P` / `u` | Edit oscillator mix, pulse width, or sub-oscillator level (`Shift+Q` is track probability) |
 | Chord/Lead | `c` / `R` / `f` | Edit cutoff, resonance, or filter-envelope amount |
 | Chord/Lead | `a` / `d` / `s` / `r` | Edit ADSR |
 | Chord | `h` | Edit chorus Off/I/II mode |
@@ -383,7 +383,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
-- `A` toggles accent immediately on a trigger or note, or toggles the selected track's persisted input accent default when the step is empty without creating an event. `Shift+G` toggles slide on a Bass note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. `Shift+P` opens the selected-track probability editor with the same controls: Up/Down changes by 1%, Shift+Up/Down by 10%, and values clamp to 0–100%. Enter, Esc, or Shift+P closes while retaining immediate edits. These edits are undoable and repeated arrow changes coalesce into one transaction; direct accent editing remains invalid on ties. Lowercase `p` remains the BASE/LOCK scope toggle.
+- `A` toggles accent immediately on a trigger or note, or toggles the selected track's persisted input accent default when the step is empty without creating an event. `Shift+G` toggles slide on a Bass note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. `Shift+Q` opens the selected-track probability editor with the same controls: Up/Down changes by 1%, Shift+Up/Down by 10%, and values clamp to 0–100%. Enter, Esc, or Shift+Q closes while retaining immediate edits. These edits are undoable and repeated arrow changes coalesce into one transaction; direct accent editing remains invalid on ties. Lowercase `p` remains the BASE/LOCK scope toggle, and `P` remains the Chord/Lead pulse-width shortcut.
 
 The pattern-idea generator opens with `g` and is session-only; its settings are never written to project JSON. Its fields, in order, are `Target`, `Track`, `Seed`, `Density`, `Low octave`, `High octave`, `Ties`, and `Accents`. Up/down moves between fields and clamps at the first or last field; Tab and BackTab move through the same eight-field order and wrap. Target and Track use left/right, the Track selector wraps through all six tracks, and Seed accepts digits with Backspace (left also removes its last digit). Percentage fields change by 5 points and clamp to 0–100%. Low octave and High octave use left/right one octave at a time: Low is clamped to 0 through High, while High is clamped to Low through 7. Enter applies the generator and Esc closes it; range edits do not alter existing events. Defaults are the deterministic seed, 48% density, O2–O6, 18% ties, and 24% accents.
 

@@ -84,7 +84,7 @@ NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/�
            g pattern generator · o audition selected step
            Shift+Delete clear selected track
 EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
-                 A accent/default · Shift+G Bass slide · Shift+T condition/retrigger · Shift+S swing · Shift+P probability
+                 A accent/default · Shift+G Bass slide · Shift+T condition/retrigger · Shift+S swing · Shift+Q probability
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
 PARAMETERS  v level · n pan · y delay send · b reverb send
            Tab PARAMS/EFFECTS · EFFECTS: d drive · t tone · x distortion mix
@@ -1819,7 +1819,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         ));
     } else if a.mode == Mode::TrackProbabilityEdit {
         status_lines.push(Line::from(
-            "Track probability · [↑/↓] ±1%  [Shift+↑/↓] ±10%  (0–100%)  [Enter/Esc/Shift+P] finish",
+            "Track probability · [↑/↓] ±1%  [Shift+↑/↓] ±10%  (0–100%)  [Enter/Esc/Shift+Q] finish",
         ));
     }
     f.render_widget(Paragraph::new(status_lines), chunks[4]);
