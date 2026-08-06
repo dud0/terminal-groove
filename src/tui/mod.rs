@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(effects[0].id, ParameterId::DistortionDrive);
         assert_eq!(effects[2].shortcut, "x");
         assert_eq!(effects[3].id, ParameterId::PhaserRate);
-        assert_eq!(effects[6].shortcut, "m");
+        assert_eq!(effects[6].shortcut, "M");
     }
 
     #[test]

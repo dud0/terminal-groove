@@ -218,7 +218,7 @@ All pitched tracks default to input degree 1 and octave 3. Their oscillators and
 
 Each track has a serial distortion-then-phaser chain before its fader, pan, and delay/reverb sends. Distortion drive maps exponentially from unity to approximately 31.6× pre-gain, followed by soft clipping; tone is a 700 Hz–18 kHz low-pass; and mix is dry/wet. The phaser is a four-stage stereo all-pass network with opposite-channel logarithmic modulation: rate maps exponentially from 0.05–8 Hz, depth controls a 300 Hz–8 kHz sweep, feedback is limited to 90%, and mix is dry/wet. Distortion defaults to drive 0%, tone 50%, mix 0%; phaser defaults to rate 25%, depth 50%, feedback 20%, mix 0%. Both chains are fixed-allocation, separately stateful for live playback and audition, smoothed on changes, and cleared by Stop and project reset.
 
-The track detail panel has `PARAMS` and `EFFECTS` banks. `Tab` toggles banks; the effects bank exposes distortion `d/t/x` and phaser `r/e/f/m` controls. Effects are shared across patterns and support BASE and per-step LOCK values, but not LFO modulation.
+The track detail panel has `PARAMS` and `EFFECTS` banks. `Tab` toggles banks; the effects bank exposes distortion `d/t/x` and phaser `r/e/f/M` controls. Effects are shared across patterns and support BASE and per-step LOCK values, but not LFO modulation.
 
 Each track provides:
 

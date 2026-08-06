@@ -84,7 +84,7 @@ EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
 PARAMETERS  v level · n pan · y delay send · b reverb send
            Tab PARAMS/EFFECTS · EFFECTS: d drive · t tone · x distortion mix
-           EFFECTS: r phaser rate · e depth · f feedback · m phaser mix
+           EFFECTS: r phaser rate · e depth · f feedback · M phaser mix
            Kick: u tune · d decay · a attack
            Snare: u tune · t tone · s snappy · Hat: u tune · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
@@ -560,7 +560,7 @@ const EFFECT_PARAMETERS: [ParameterDescriptor; 7] = [
     ParameterDescriptor {
         id: ParameterId::PhaserMix,
         label: "Mix",
-        shortcut: "m",
+        shortcut: "M",
         group: ParameterGroup::Phaser,
     },
 ];
