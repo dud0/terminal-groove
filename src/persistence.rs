@@ -38,23 +38,17 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
         path: path.into(),
         source,
     })?;
-    let mut value: serde_json::Value =
+    let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if !matches!(version, Some(11..=13)) {
+    if version != Some(14) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
         });
-    }
-    // v13 adds shared per-track effect settings. Updating the document tag
-    // before deserialization keeps the in-memory project canonical while
-    // serde defaults the absent effect blocks in v11/v12 documents.
-    if matches!(version, Some(11..=12)) {
-        value["format_version"] = serde_json::Value::from(13);
     }
     let project: Project =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
@@ -201,29 +195,26 @@ mod tests {
         ));
     }
     #[test]
-    fn reject_unknown() {
+    fn reject_unsupported_schema() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("x");
         fs::write(
             &f,
-            r#"{"format_version":1,"globals":{},"tracks":[],"wat":1}"#,
+            r#"{"format_version":15,"globals":{},"tracks":[],"wat":1}"#,
         )
         .unwrap();
-        assert!(load(&f).is_err());
-    }
-    #[test]
-    fn v10_rejects_legacy_top_level_track_steps() {
-        let d = tempfile::tempdir().unwrap();
-        let f = d.path().join("legacy-steps.groove.json");
-        let mut value = serde_json::to_value(Project::new()).unwrap();
-        value["tracks"][0]["steps"] = serde_json::json!(vec![serde_json::Value::Null; 16]);
-        fs::write(&f, serde_json::to_vec(&value).unwrap()).unwrap();
-        assert!(matches!(load(&f), Err(ProjectIoError::Json { .. })));
+        assert!(matches!(
+            load(&f),
+            Err(ProjectIoError::Validation {
+                source: crate::model::ValidationError::Version(15),
+                ..
+            })
+        ));
     }
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 13);
+        assert_eq!(value["format_version"], 14);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -249,9 +240,9 @@ mod tests {
     }
 
     #[test]
-    fn latest_projects_without_optional_reverb_controls_use_defaults() {
+    fn current_schema_without_optional_reverb_controls_uses_defaults() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("old-v6.groove.json");
+        let path = directory.path().join("current.groove.json");
         let mut value = serde_json::to_value(Project::new()).unwrap();
         value["globals"]
             .as_object_mut()
@@ -269,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_track_lengths_round_trip_and_format_v2_is_rejected() {
+    fn mixed_track_lengths_round_trip() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("mixed.groove.json");
         let mut project = Project::new();
@@ -278,64 +269,15 @@ mod tests {
         }
         save_atomic(&f, &project).unwrap();
         assert_eq!(load(&f).unwrap(), project);
-
-        let mut value = serde_json::to_value(project).unwrap();
-        value["format_version"] = 2.into();
-        fs::write(&f, serde_json::to_vec(&value).unwrap()).unwrap();
-        assert!(matches!(
-            load(&f),
-            Err(ProjectIoError::Validation {
-                source: crate::model::ValidationError::Version(2),
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn older_version_seven_projects_are_rejected() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("old-pattern-bank.groove.json");
-        let mut value = serde_json::to_value(Project::new()).unwrap();
-        value["format_version"] = 7.into();
-        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        assert!(matches!(
-            load(&path),
-            Err(ProjectIoError::Validation {
-                source: crate::model::ValidationError::Version(7),
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn older_project_versions_are_rejected_without_migration() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("legacy.groove.json");
-        for version in 1..=10 {
-            let mut value = serde_json::to_value(Project::new()).unwrap();
-            value["format_version"] = version.into();
-            fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-            assert!(matches!(
-                load(&path),
-                Err(ProjectIoError::Validation {
-                    source: crate::model::ValidationError::Version(v), ..
-                }) if v == version
-            ));
-        }
     }
 
     #[test]
     fn bundled_projects_are_valid_latest_format_files() {
-        for json in [
-            include_str!("../beat"),
-            include_str!("../beat2"),
-            include_str!("../test1"),
-            include_str!("../test2"),
-        ] {
+        for json in [include_str!("../test1"), include_str!("../test2")] {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
             let project = load(path.path()).unwrap();
-            assert_eq!(project.format_version, 13);
+            assert_eq!(project.format_version, 14);
             assert!(
                 (crate::model::MIN_PATTERN_COUNT..=crate::model::MAX_PATTERN_COUNT)
                     .contains(&project.patterns.len())
@@ -469,68 +411,26 @@ mod tests {
     }
 
     #[test]
-    fn v11_projects_migrate_trigger_defaults_and_swing() {
+    fn current_schema_defaults_missing_flanger_and_effect_schema_is_strict() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("v11.groove.json");
-        let mut project = Project::new();
-        project.tracks[0].input_accent = true;
-        project.patterns[0].tracks[0].steps[0] = Some(crate::model::StepEvent::Trigger {
-            accent: false,
-            condition: crate::model::TriggerCondition::Chance {
-                probability: crate::model::Percent::new(25).unwrap(),
-            },
-            retrigger_count: 4,
-            locks: Default::default(),
-        });
-        let mut value = serde_json::to_value(project).unwrap();
-        value["format_version"] = 11.into();
-        value["tracks"][0].as_object_mut().unwrap().remove("swing");
-        value["tracks"][0]
+        let path = directory.path().join("effects.groove.json");
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["tracks"][0]["effects"]
             .as_object_mut()
             .unwrap()
-            .remove("input_accent");
-        let event = value["patterns"][0]["tracks"][0]["steps"][0]
-            .as_object_mut()
-            .unwrap();
-        event.remove("condition");
-        event.remove("retrigger_count");
+            .remove("flanger");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 13);
-        assert_eq!(loaded.tracks[0].swing, crate::model::Percent::ZERO);
-        assert!(!loaded.tracks[0].input_accent);
+        assert_eq!(loaded.format_version, 14);
         assert_eq!(
-            loaded.tracks[0].steps[0]
-                .as_ref()
-                .and_then(crate::model::StepEvent::condition),
-            Some(crate::model::TriggerCondition::Always)
+            loaded.tracks[0].effects.flanger,
+            crate::model::FlangerParameters::default()
         );
-        assert_eq!(
-            loaded.tracks[0].steps[0]
-                .as_ref()
-                .and_then(crate::model::StepEvent::retrigger_count),
-            Some(1)
-        );
-    }
+        save_atomic(&path, &loaded).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("\"flanger\""));
 
-    #[test]
-    fn v12_projects_receive_default_effects_and_effect_schema_is_strict() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("v12.groove.json");
         let mut value = serde_json::to_value(Project::new()).unwrap();
-        value["format_version"] = 12.into();
-        for track in value["tracks"].as_array_mut().unwrap() {
-            track.as_object_mut().unwrap().remove("effects");
-        }
-        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 13);
-        assert_eq!(
-            loaded.tracks[0].effects,
-            crate::model::TrackEffects::default()
-        );
-
-        value["format_version"] = 13.into();
         value["tracks"][0]["effects"]["distortion"]["drive"] = 101.into();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));

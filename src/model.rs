@@ -1404,7 +1404,7 @@ pub struct Track {
     pub effects: TrackEffects,
     pub lfos: LfoAssignments,
     /// Transient editor cache for the selected pattern.  It is deliberately
-    /// excluded from v11 JSON; canonical sequence data is `patterns`.
+    /// excluded from project JSON; canonical sequence data is `patterns`.
     #[serde(skip, default = "default_step_cache")]
     pub steps: Vec<Step>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1543,7 +1543,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 13,
+            format_version: 14,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1668,7 +1668,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 13 {
+        if self.format_version != 14 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -2594,7 +2594,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 13);
+        assert_eq!(project.format_version, 14);
         assert_eq!(project.tracks[0].effects.distortion.drive, Percent::ZERO);
         assert_eq!(project.tracks[0].effects.distortion.tone, p(50));
         assert_eq!(project.tracks[0].effects.phaser.rate, p(25));

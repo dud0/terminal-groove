@@ -82,15 +82,16 @@ use controller::{
 #[allow(unused_imports)]
 use input::{
     active_parameter_shortcut, adjacent_pattern_in_count, apply, change_generator_value,
-    coalesce_key, commit_pattern, duplicate_selected_track, enter_parameter_edit, flipped_waveform,
-    global_jump, handle_chord_key, handle_generator_dialog, handle_key, handle_lfo_key,
-    handle_parameter_key, handle_pattern_dialog, handle_swing_key, handle_track_length_input,
-    handle_trigger_key, lfo_choice_index, move_chord_editor_step, move_generator_field,
-    move_parameter_editor, move_step, move_step_bank, move_step_page, move_step_vertical,
-    normalize_cursor, open_chord_editor, open_lfo_editor, parameter_edit_passthrough,
-    parameter_shortcut, parameter_supports_direct_percentage, parameter_upper_bound,
-    pattern_edit_at, select_global, select_track, set_lfo_config, set_parameter,
-    set_selected_track_length, switch_parameter_editor, toggle_parameter_bank, track_jump_index,
+    clamp_parameter_percentage, coalesce_key, commit_pattern, duplicate_selected_track,
+    enter_parameter_edit, flipped_waveform, global_jump, handle_chord_key, handle_generator_dialog,
+    handle_key, handle_lfo_key, handle_parameter_key, handle_pattern_dialog, handle_swing_key,
+    handle_track_length_input, handle_trigger_key, lfo_choice_index, move_chord_editor_step,
+    move_generator_field, move_parameter_editor, move_step, move_step_bank, move_step_page,
+    move_step_vertical, normalize_cursor, open_chord_editor, open_lfo_editor,
+    parameter_edit_passthrough, parameter_shortcut, parameter_supports_direct_percentage,
+    parameter_upper_bound, pattern_edit_at, select_global, select_track, set_lfo_config,
+    set_parameter, set_selected_track_length, switch_parameter_editor, toggle_parameter_bank,
+    track_jump_index,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -577,6 +578,19 @@ mod tests {
         assert!(!parameter_supports_direct_percentage(ParameterId::Chorus));
         assert!(!parameter_supports_direct_percentage(ParameterId::Spread));
         assert!(!parameter_supports_direct_percentage(ParameterId::Pitch));
+    }
+
+    #[test]
+    fn direct_feedback_percentage_entry_clamps_zero_key_to_ninety() {
+        let zero_key = crate::reducer::percentage_key('0').unwrap();
+        assert_eq!(
+            clamp_parameter_percentage(ParameterId::PhaserFeedback, zero_key),
+            Percent::new(90).unwrap()
+        );
+        assert_eq!(
+            clamp_parameter_percentage(ParameterId::FlangerFeedback, zero_key),
+            Percent::new(90).unwrap()
+        );
     }
 
     #[test]

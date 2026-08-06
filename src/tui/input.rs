@@ -968,7 +968,7 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
                         a,
                         audio,
                         parameter,
-                        ParameterValue::Percent(value),
+                        ParameterValue::Percent(clamp_parameter_percentage(parameter, value)),
                         true,
                         true,
                     );
@@ -1023,6 +1023,10 @@ pub(super) fn parameter_supports_direct_percentage(parameter: ParameterId) -> bo
         parameter,
         ParameterId::Waveform | ParameterId::Chorus | ParameterId::Spread | ParameterId::Pitch
     )
+}
+
+pub(super) fn clamp_parameter_percentage(parameter: ParameterId, value: Percent) -> Percent {
+    Percent::new(value.get().min(parameter_upper_bound(parameter))).unwrap()
 }
 
 pub(super) const fn parameter_upper_bound(parameter: ParameterId) -> u8 {

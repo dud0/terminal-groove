@@ -445,7 +445,7 @@ impl TrackEffectChain {
     fn flanger_delay_samples(&self, center_ms: f32, depth_ms: f32, phase: f32) -> f32 {
         let delay_ms = center_ms + (std::f32::consts::TAU * phase).sin() * depth_ms;
         (delay_ms.max(0.1) * self.sample_rate / 1_000.0)
-            .clamp(0.1, (self.flanger_l.len() - 2) as f32)
+            .clamp(1.0, (self.flanger_l.len() - 2) as f32)
     }
 
     fn read_delay(buffer: &[f32], write: usize, delay: f32) -> f32 {
@@ -1761,6 +1761,21 @@ mod tests {
             stereo |= (left - right).abs() > 0.000_001;
         }
         assert!(stereo);
+    }
+
+    #[test]
+    fn flanger_delay_is_at_least_one_sample_at_low_sample_rate() {
+        let mut chain = TrackEffectChain::new(100);
+        let delay = chain.flanger_delay_samples(0.2, 0.0, 0.0);
+        assert_eq!(delay, 1.0);
+
+        let last = chain.flanger_l.len() - 1;
+        chain.flanger_l[last] = 0.25;
+        chain.flanger_l[0] = 4.0;
+        assert_eq!(
+            TrackEffectChain::read_delay(&chain.flanger_l, 0, delay),
+            0.25
+        );
     }
 
     #[test]

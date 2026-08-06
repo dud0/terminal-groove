@@ -458,7 +458,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`, but the application does not silently alter a user-supplied filename.
-- Version 13 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. Versions 11 and 12 are imported with default effects and other newer optional fields; versions 1 through 10, missing versions, and unknown future versions are rejected without migration.
+- Version 14 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. Unsupported versions, missing versions, and unknown future versions are rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -468,7 +468,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 13,
+  "format_version": 14,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -550,7 +550,7 @@ For Chord or Lead pitch:
 }
 ```
 
-The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 13.
+The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 14.
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 
@@ -640,7 +640,7 @@ Cover musical degree/frequency mapping, input limits, tie creation/resolution/cl
 
 ### 12.2 Persistence tests
 
-Round-trip default and populated version-12 projects, including every event, lock, LFO, effect, flanger setting, and articulation variant. Reject unknown versions/fields, invalid ranges/layouts/events/locks/LFOs/ties, and malformed sequences; import version 11 with defaults; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, and history reset on load.
+Round-trip default and populated version-14 projects, including every event, lock, LFO, effect, flanger setting, and articulation variant. Reject unsupported versions, unknown fields, invalid ranges/layouts/events/locks/LFOs/ties, and malformed sequences; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, and history reset on load.
 
 ### 12.3 TUI tests
 
@@ -657,7 +657,7 @@ Cover bounded oscillator pitch, ADSR timing, filter stability, finite drum outpu
 3. Enter Bass, Chord, and Lead notes with octave changes, shapes, inversions, arpeggiation, accents, slide, ordinary and wrapped ties; verify gates, releases, inherited articulation, and the fixed-time Bass glide.
 4. Edit base values, locks, synced/free LFOs, and all track effects including flanger center delay/depth; verify faders, readouts, badges, modulation centers, smoothing, and next-pass live updates.
 5. Audition empty and occupied steps with `o` while stopped and playing, including Chord shapes; change key and scale and verify existing degrees are reinterpreted on future triggers.
-6. Exercise undo/redo, tie cleanup, coalesced parameter edits, dirty restoration, and version-12 save/load with all event, lock, LFO, effect, mixer, articulation, and input settings; verify v11 defaults and rejection of other versions.
+6. Exercise undo/redo, tie cleanup, coalesced parameter edits, dirty restoration, and version-14 save/load with all event, lock, LFO, effect, mixer, articulation, and input settings; verify rejection of other versions.
 7. List devices, use the default output, select a unique explicit device, and play for at least ten minutes at a supported low-latency configuration without stream errors, non-finite output, timing drift, or audible edit clicks.
 8. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored and project editing remains safe where supported.
 
