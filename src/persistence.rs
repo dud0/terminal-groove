@@ -44,17 +44,17 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if !matches!(version, Some(11 | 12)) {
+    if !matches!(version, Some(11..=13)) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
         });
     }
-    // v12 adds serde-defaulted event settings and per-track swing.  Updating
-    // the document tag before deserialization keeps the in-memory project
-    // canonical while preserving v11's strict schema validation.
-    if version == Some(11) {
-        value["format_version"] = serde_json::Value::from(12);
+    // v13 adds shared per-track effect settings. Updating the document tag
+    // before deserialization keeps the in-memory project canonical while
+    // serde defaults the absent effect blocks in v11/v12 documents.
+    if matches!(version, Some(11..=12)) {
+        value["format_version"] = serde_json::Value::from(13);
     }
     let project: Project =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 12);
+        assert_eq!(value["format_version"], 13);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -333,7 +333,7 @@ mod tests {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
             let project = load(path.path()).unwrap();
-            assert_eq!(project.format_version, 12);
+            assert_eq!(project.format_version, 13);
             assert!(
                 (crate::model::MIN_PATTERN_COUNT..=crate::model::MAX_PATTERN_COUNT)
                     .contains(&project.patterns.len())
@@ -494,7 +494,7 @@ mod tests {
         event.remove("retrigger_count");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 12);
+        assert_eq!(loaded.format_version, 13);
         assert_eq!(loaded.tracks[0].swing, crate::model::Percent::ZERO);
         assert!(!loaded.tracks[0].input_accent);
         assert_eq!(
@@ -509,5 +509,33 @@ mod tests {
                 .and_then(crate::model::StepEvent::retrigger_count),
             Some(1)
         );
+    }
+
+    #[test]
+    fn v12_projects_receive_default_effects_and_effect_schema_is_strict() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("v12.groove.json");
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["format_version"] = 12.into();
+        for track in value["tracks"].as_array_mut().unwrap() {
+            track.as_object_mut().unwrap().remove("effects");
+        }
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.format_version, 13);
+        assert_eq!(
+            loaded.tracks[0].effects,
+            crate::model::TrackEffects::default()
+        );
+
+        value["format_version"] = 13.into();
+        value["tracks"][0]["effects"]["distortion"]["drive"] = 101.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+
+        value["tracks"][0]["effects"]["distortion"]["drive"] = 0.into();
+        value["tracks"][0]["effects"]["phaser"]["unexpected"] = 1.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
     }
 }

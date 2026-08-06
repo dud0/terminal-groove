@@ -4,8 +4,13 @@ use super::{
         handle_global_key, handle_new_confirm, handle_open_confirm, handle_tempo_input,
         new_project, request_new_project, save, sync_project, sync_project_with_smoothing,
     },
-    render::{GLOBAL_IDS, parameter_descriptors, scope_name, selected_chord_shape},
-    state::{App, ChordField, FileAction, GeneratorDialog, LfoField, Mode, TriggerField},
+    render::{
+        GLOBAL_IDS, parameter_descriptors, scope_name, selected_chord_shape,
+        visible_parameter_descriptors,
+    },
+    state::{
+        App, ChordField, FileAction, GeneratorDialog, LfoField, Mode, ParameterBank, TriggerField,
+    },
 };
 use crate::{
     audio::{Audio, AudioCommand},
@@ -126,6 +131,13 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             }
             _ => {}
         }
+        return Ok(());
+    }
+    if matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_))
+        && a.row > 0
+        && matches!(k.code, KeyCode::Tab | KeyCode::BackTab)
+    {
+        toggle_parameter_bank(a);
         return Ok(());
     }
     if matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_)) && global_jump(k) {
@@ -258,7 +270,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 Scope::Base
             }
         }
-        KeyCode::Char('m') if a.row > 0 => {
+        KeyCode::Char('m') if a.row > 0 && a.parameter_bank == ParameterBank::Params => {
             let ti = a.row - 1;
             if audio.available_commands() == 0 {
                 a.status = "Audio command queue full; edit rejected".into();
@@ -313,9 +325,13 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         }
         KeyCode::Char('[') if a.row > 3 => change_octave(a, audio, -1),
         KeyCode::Char(']') if a.row > 3 => change_octave(a, audio, 1),
-        KeyCode::Char(c) if a.row > 0 && !(a.row > 3 && (c == 't' || ('1'..='8').contains(&c))) => {
-            if let Some(parameter) = parameter_shortcut(a.editor.project.tracks[a.row - 1].kind, c)
-            {
+        KeyCode::Char(c)
+            if a.row > 0
+                && !(a.parameter_bank == ParameterBank::Params
+                    && a.row > 3
+                    && (c == 't' || ('1'..='8').contains(&c))) =>
+        {
+            if let Some(parameter) = active_parameter_shortcut(a, c) {
                 enter_parameter_edit(a, parameter);
             }
         }
@@ -387,6 +403,7 @@ pub(super) fn select_global(a: &mut App) {
     a.editor.end_coalescing();
     a.row = 0;
     a.scope = Scope::Base;
+    a.parameter_bank = ParameterBank::Params;
     a.mode = Mode::Navigation;
 }
 
@@ -399,7 +416,11 @@ pub(super) fn select_track(a: &mut App, track: usize) {
         Mode::ParameterEdit(parameter)
             if !parameter.is_valid_for(a.editor.project.tracks[track].kind) =>
         {
-            let replacement = parameter_descriptors(a.editor.project.tracks[track].kind)[0].id;
+            let replacement = visible_parameter_descriptors(
+                a.parameter_bank,
+                a.editor.project.tracks[track].kind,
+            )[0]
+            .id;
             enter_parameter_edit(a, replacement);
         }
         _ => {}
@@ -936,7 +957,7 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
         }
         key if parameter_edit_passthrough(key) => Ok(false),
         KeyCode::Char(c) => {
-            if let Some(next) = parameter_shortcut(a.editor.project.tracks[track].kind, c) {
+            if let Some(next) = active_parameter_shortcut(a, c) {
                 switch_parameter_editor(a, next);
                 return Ok(true);
             }
@@ -1550,6 +1571,36 @@ pub(super) fn parameter_shortcut(kind: TrackKind, c: char) -> Option<ParameterId
         .map(|descriptor| descriptor.id)
 }
 
+fn active_parameter_shortcut(a: &App, c: char) -> Option<ParameterId> {
+    if a.parameter_bank == ParameterBank::Params {
+        return parameter_shortcut(a.editor.project.tracks[a.row - 1].kind, c);
+    }
+    visible_parameter_descriptors(a.parameter_bank, a.editor.project.tracks[a.row - 1].kind)
+        .iter()
+        .find(|descriptor| descriptor.shortcut.starts_with(c))
+        .map(|descriptor| descriptor.id)
+}
+
+pub(super) fn toggle_parameter_bank(a: &mut App) {
+    a.editor.end_coalescing();
+    a.parameter_bank = match a.parameter_bank {
+        ParameterBank::Params => ParameterBank::Effects,
+        ParameterBank::Effects => ParameterBank::Params,
+    };
+    if let Mode::ParameterEdit(_) = a.mode {
+        let parameter = visible_parameter_descriptors(
+            a.parameter_bank,
+            a.editor.project.tracks[a.row - 1].kind,
+        )[0]
+        .id;
+        enter_parameter_edit(a, parameter);
+    }
+    a.status = match a.parameter_bank {
+        ParameterBank::Params => "PARAMS bank".into(),
+        ParameterBank::Effects => "EFFECTS bank".into(),
+    };
+}
+
 pub(super) fn enter_parameter_edit(a: &mut App, parameter: ParameterId) {
     a.mode = Mode::ParameterEdit(parameter);
     a.status = format!("Editing {}", parameter.display_name());
@@ -1564,7 +1615,8 @@ pub(super) fn move_parameter_editor(a: &mut App, forward: bool) {
     let Mode::ParameterEdit(current) = a.mode else {
         return;
     };
-    let descriptors = parameter_descriptors(a.editor.project.tracks[a.row - 1].kind);
+    let descriptors =
+        visible_parameter_descriptors(a.parameter_bank, a.editor.project.tracks[a.row - 1].kind);
     let index = descriptors
         .iter()
         .position(|descriptor| descriptor.id == current)

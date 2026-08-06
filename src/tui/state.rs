@@ -35,6 +35,12 @@ pub(crate) enum Mode {
     QuitConfirm,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ParameterBank {
+    Params,
+    Effects,
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LfoField {
@@ -109,6 +115,7 @@ pub struct App {
     pub(super) step: usize,
     pub(super) global: usize,
     pub(super) scope: Scope,
+    pub(super) parameter_bank: ParameterBank,
     pub(super) mode: Mode,
     pub(super) chord_field: ChordField,
     pub(super) status: String,
@@ -158,6 +165,7 @@ impl App {
             step: 0,
             global: 0,
             scope: Scope::Base,
+            parameter_bank: ParameterBank::Params,
             mode: Mode::Navigation,
             chord_field: ChordField::Shape,
             status: "Ready".into(),

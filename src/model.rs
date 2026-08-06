@@ -89,6 +89,8 @@ pub enum ValidationError {
     Lfo(usize, &'static str),
     #[error("tracks[{0}]: swing must be between 0 and 75%")]
     Swing(usize),
+    #[error("tracks[{0}].effects: invalid {1} range")]
+    Effect(usize, &'static str),
     #[error("tracks[{0}].steps[{1}]: invalid trigger condition")]
     Condition(usize, usize),
     #[error("tracks[{0}].steps[{1}]: retrigger_count must be between 1 and 4")]
@@ -773,6 +775,53 @@ pub struct LeadParameters {
     pub release: Percent,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DistortionParameters {
+    pub drive: Percent,
+    pub tone: Percent,
+    pub mix: Percent,
+}
+
+impl Default for DistortionParameters {
+    fn default() -> Self {
+        Self {
+            drive: Percent::ZERO,
+            tone: Percent(50),
+            mix: Percent::ZERO,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhaserParameters {
+    pub rate: Percent,
+    pub depth: Percent,
+    pub feedback: Percent,
+    pub mix: Percent,
+}
+
+impl Default for PhaserParameters {
+    fn default() -> Self {
+        Self {
+            rate: Percent(25),
+            depth: Percent(50),
+            feedback: Percent(20),
+            mix: Percent::ZERO,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackEffects {
+    #[serde(default)]
+    pub distortion: DistortionParameters,
+    #[serde(default)]
+    pub phaser: PhaserParameters,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChorusMode {
@@ -803,6 +852,20 @@ pub struct ParameterLocks {
     pub delay_send: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverb_send: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distortion_drive: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distortion_tone: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distortion_mix: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phaser_rate: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phaser_depth: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phaser_feedback: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phaser_mix: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tune: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -895,6 +958,13 @@ impl LfoAssignments {
             ParameterId::Pitch => self.pitch,
             ParameterId::DelaySend
             | ParameterId::ReverbSend
+            | ParameterId::DistortionDrive
+            | ParameterId::DistortionTone
+            | ParameterId::DistortionMix
+            | ParameterId::PhaserRate
+            | ParameterId::PhaserDepth
+            | ParameterId::PhaserFeedback
+            | ParameterId::PhaserMix
             | ParameterId::Waveform
             | ParameterId::Chorus
             | ParameterId::Spread => None,
@@ -921,6 +991,13 @@ impl LfoAssignments {
             ParameterId::Pitch => &mut self.pitch,
             ParameterId::DelaySend
             | ParameterId::ReverbSend
+            | ParameterId::DistortionDrive
+            | ParameterId::DistortionTone
+            | ParameterId::DistortionMix
+            | ParameterId::PhaserRate
+            | ParameterId::PhaserDepth
+            | ParameterId::PhaserFeedback
+            | ParameterId::PhaserMix
             | ParameterId::Waveform
             | ParameterId::Chorus
             | ParameterId::Spread => {
@@ -942,6 +1019,13 @@ impl ParameterLocks {
             ParameterId::Level => self.level.map(ParameterValue::Percent),
             ParameterId::DelaySend => self.delay_send.map(ParameterValue::Percent),
             ParameterId::ReverbSend => self.reverb_send.map(ParameterValue::Percent),
+            ParameterId::DistortionDrive => self.distortion_drive.map(ParameterValue::Percent),
+            ParameterId::DistortionTone => self.distortion_tone.map(ParameterValue::Percent),
+            ParameterId::DistortionMix => self.distortion_mix.map(ParameterValue::Percent),
+            ParameterId::PhaserRate => self.phaser_rate.map(ParameterValue::Percent),
+            ParameterId::PhaserDepth => self.phaser_depth.map(ParameterValue::Percent),
+            ParameterId::PhaserFeedback => self.phaser_feedback.map(ParameterValue::Percent),
+            ParameterId::PhaserMix => self.phaser_mix.map(ParameterValue::Percent),
             ParameterId::Tune => self.tune.map(ParameterValue::Percent),
             ParameterId::Tone => self.tone.map(ParameterValue::Percent),
             ParameterId::Snappy => self.snappy.map(ParameterValue::Percent),
@@ -968,6 +1052,21 @@ impl ParameterLocks {
             (ParameterId::Level, ParameterValue::Percent(v)) => self.level = Some(v),
             (ParameterId::DelaySend, ParameterValue::Percent(v)) => self.delay_send = Some(v),
             (ParameterId::ReverbSend, ParameterValue::Percent(v)) => self.reverb_send = Some(v),
+            (ParameterId::DistortionDrive, ParameterValue::Percent(v)) => {
+                self.distortion_drive = Some(v)
+            }
+            (ParameterId::DistortionTone, ParameterValue::Percent(v)) => {
+                self.distortion_tone = Some(v)
+            }
+            (ParameterId::DistortionMix, ParameterValue::Percent(v)) => {
+                self.distortion_mix = Some(v)
+            }
+            (ParameterId::PhaserRate, ParameterValue::Percent(v)) => self.phaser_rate = Some(v),
+            (ParameterId::PhaserDepth, ParameterValue::Percent(v)) => self.phaser_depth = Some(v),
+            (ParameterId::PhaserFeedback, ParameterValue::Percent(v)) => {
+                self.phaser_feedback = Some(v)
+            }
+            (ParameterId::PhaserMix, ParameterValue::Percent(v)) => self.phaser_mix = Some(v),
             (ParameterId::Tune, ParameterValue::Percent(v)) => self.tune = Some(v),
             (ParameterId::Tone, ParameterValue::Percent(v)) => self.tone = Some(v),
             (ParameterId::Snappy, ParameterValue::Percent(v)) => self.snappy = Some(v),
@@ -1001,6 +1100,13 @@ impl ParameterLocks {
             ParameterId::Level => self.level = None,
             ParameterId::DelaySend => self.delay_send = None,
             ParameterId::ReverbSend => self.reverb_send = None,
+            ParameterId::DistortionDrive => self.distortion_drive = None,
+            ParameterId::DistortionTone => self.distortion_tone = None,
+            ParameterId::DistortionMix => self.distortion_mix = None,
+            ParameterId::PhaserRate => self.phaser_rate = None,
+            ParameterId::PhaserDepth => self.phaser_depth = None,
+            ParameterId::PhaserFeedback => self.phaser_feedback = None,
+            ParameterId::PhaserMix => self.phaser_mix = None,
             ParameterId::Tune => self.tune = None,
             ParameterId::Tone => self.tone = None,
             ParameterId::Snappy => self.snappy = None,
@@ -1227,6 +1333,8 @@ pub struct Track {
     #[serde(default)]
     pub swing: Percent,
     pub instrument: Instrument,
+    #[serde(default)]
+    pub effects: TrackEffects,
     pub lfos: LfoAssignments,
     /// Transient editor cache for the selected pattern.  It is deliberately
     /// excluded from v11 JSON; canonical sequence data is `patterns`.
@@ -1293,6 +1401,7 @@ impl PartialEq for Project {
                     && left.reverb_send == right.reverb_send
                     && left.swing == right.swing
                     && left.instrument == right.instrument
+                    && left.effects == right.effects
                     && left.lfos == right.lfos
                     && left.input_degree == right.input_degree
                     && left.input_octave == right.input_octave
@@ -1335,6 +1444,7 @@ impl Project {
             reverb_send: p(0),
             swing: p(0),
             instrument,
+            effects: TrackEffects::default(),
             lfos: LfoAssignments::default(),
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: None,
@@ -1356,6 +1466,7 @@ impl Project {
             },
             swing: p(0),
             instrument,
+            effects: TrackEffects::default(),
             lfos: LfoAssignments::default(),
             steps: vec![None; STEP_BANK_SIZE],
             input_degree: Some(1),
@@ -1365,7 +1476,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 12,
+            format_version: 13,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1490,7 +1601,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 12 {
+        if self.format_version != 13 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -1550,6 +1661,9 @@ impl Project {
             }
             if t.swing.get() > 75 {
                 return Err(ValidationError::Swing(ti));
+            }
+            if t.effects.phaser.feedback.get() > 90 {
+                return Err(ValidationError::Effect(ti, "phaser_feedback"));
             }
             validate_lfos(ti, t)?;
             if let Some(d) = t.input_degree {
@@ -1689,6 +1803,9 @@ fn validate_locks(
     kind: TrackKind,
     l: &ParameterLocks,
 ) -> Result<(), ValidationError> {
+    if l.phaser_feedback.is_some_and(|value| value.get() > 90) {
+        return Err(ValidationError::Lock(ti, si, "phaser_feedback"));
+    }
     let bad = ParameterId::ALL.into_iter().find_map(|parameter| {
         (l.get(parameter).is_some() && !parameter.is_valid_for(kind)).then_some(parameter.name())
     });
@@ -1741,6 +1858,13 @@ pub enum ParameterId {
     Pan,
     DelaySend,
     ReverbSend,
+    DistortionDrive,
+    DistortionTone,
+    DistortionMix,
+    PhaserRate,
+    PhaserDepth,
+    PhaserFeedback,
+    PhaserMix,
     Tune,
     Tone,
     Snappy,
@@ -1769,11 +1893,18 @@ pub enum ParameterValue {
 }
 
 impl ParameterId {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 28] = [
         Self::Level,
         Self::Pan,
         Self::DelaySend,
         Self::ReverbSend,
+        Self::DistortionDrive,
+        Self::DistortionTone,
+        Self::DistortionMix,
+        Self::PhaserRate,
+        Self::PhaserDepth,
+        Self::PhaserFeedback,
+        Self::PhaserMix,
         Self::Tune,
         Self::Tone,
         Self::Snappy,
@@ -1795,7 +1926,17 @@ impl ParameterId {
 
     pub const fn is_valid_for(self, kind: TrackKind) -> bool {
         match self {
-            Self::Level | Self::Pan | Self::DelaySend | Self::ReverbSend => true,
+            Self::Level
+            | Self::Pan
+            | Self::DelaySend
+            | Self::ReverbSend
+            | Self::DistortionDrive
+            | Self::DistortionTone
+            | Self::DistortionMix
+            | Self::PhaserRate
+            | Self::PhaserDepth
+            | Self::PhaserFeedback
+            | Self::PhaserMix => true,
             Self::Tune => matches!(kind, TrackKind::Kick | TrackKind::Snare | TrackKind::Hat),
             Self::Tone | Self::Snappy => matches!(kind, TrackKind::Snare),
             Self::Decay => matches!(
@@ -1836,6 +1977,13 @@ impl ParameterId {
                     self,
                     Self::DelaySend
                         | Self::ReverbSend
+                        | Self::DistortionDrive
+                        | Self::DistortionTone
+                        | Self::DistortionMix
+                        | Self::PhaserRate
+                        | Self::PhaserDepth
+                        | Self::PhaserFeedback
+                        | Self::PhaserMix
                         | Self::Waveform
                         | Self::Chorus
                         | Self::Spread
@@ -1848,6 +1996,13 @@ impl ParameterId {
             Self::Pan => "pan",
             Self::DelaySend => "delay_send",
             Self::ReverbSend => "reverb_send",
+            Self::DistortionDrive => "distortion_drive",
+            Self::DistortionTone => "distortion_tone",
+            Self::DistortionMix => "distortion_mix",
+            Self::PhaserRate => "phaser_rate",
+            Self::PhaserDepth => "phaser_depth",
+            Self::PhaserFeedback => "phaser_feedback",
+            Self::PhaserMix => "phaser_mix",
             Self::Tune => "tune",
             Self::Tone => "tone",
             Self::Snappy => "snappy",
@@ -1877,6 +2032,13 @@ impl ParameterId {
             Self::OscillatorMix => "oscillator mix",
             Self::PulseWidth => "pulse width",
             Self::SubOscillator => "sub oscillator",
+            Self::DistortionDrive => "distortion drive",
+            Self::DistortionTone => "distortion tone",
+            Self::DistortionMix => "distortion mix",
+            Self::PhaserRate => "phaser rate",
+            Self::PhaserDepth => "phaser depth",
+            Self::PhaserFeedback => "phaser feedback",
+            Self::PhaserMix => "phaser mix",
             _ => self.name(),
         }
     }
@@ -1889,6 +2051,13 @@ impl Track {
             ParameterId::Pan => ParameterValue::Percent(self.pan),
             ParameterId::DelaySend => ParameterValue::Percent(self.delay_send),
             ParameterId::ReverbSend => ParameterValue::Percent(self.reverb_send),
+            ParameterId::DistortionDrive => ParameterValue::Percent(self.effects.distortion.drive),
+            ParameterId::DistortionTone => ParameterValue::Percent(self.effects.distortion.tone),
+            ParameterId::DistortionMix => ParameterValue::Percent(self.effects.distortion.mix),
+            ParameterId::PhaserRate => ParameterValue::Percent(self.effects.phaser.rate),
+            ParameterId::PhaserDepth => ParameterValue::Percent(self.effects.phaser.depth),
+            ParameterId::PhaserFeedback => ParameterValue::Percent(self.effects.phaser.feedback),
+            ParameterId::PhaserMix => ParameterValue::Percent(self.effects.phaser.mix),
             ParameterId::Tune => match self.instrument {
                 Instrument::Kick(p) => ParameterValue::Percent(p.tune),
                 Instrument::Snare(p) => ParameterValue::Percent(p.tune),
@@ -2012,6 +2181,21 @@ impl Track {
             (ParameterId::Pan, ParameterValue::Percent(v)) => self.pan = v,
             (ParameterId::DelaySend, ParameterValue::Percent(v)) => self.delay_send = v,
             (ParameterId::ReverbSend, ParameterValue::Percent(v)) => self.reverb_send = v,
+            (ParameterId::DistortionDrive, ParameterValue::Percent(v)) => {
+                self.effects.distortion.drive = v
+            }
+            (ParameterId::DistortionTone, ParameterValue::Percent(v)) => {
+                self.effects.distortion.tone = v
+            }
+            (ParameterId::DistortionMix, ParameterValue::Percent(v)) => {
+                self.effects.distortion.mix = v
+            }
+            (ParameterId::PhaserRate, ParameterValue::Percent(v)) => self.effects.phaser.rate = v,
+            (ParameterId::PhaserDepth, ParameterValue::Percent(v)) => self.effects.phaser.depth = v,
+            (ParameterId::PhaserFeedback, ParameterValue::Percent(v)) => {
+                self.effects.phaser.feedback = v
+            }
+            (ParameterId::PhaserMix, ParameterValue::Percent(v)) => self.effects.phaser.mix = v,
             (ParameterId::Tune, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Kick(p) => p.tune = v,
                 Instrument::Snare(p) => p.tune = v,
@@ -2280,6 +2464,33 @@ mod tests {
     #[test]
     fn invalid_percent_is_rejected() {
         assert!(serde_json::from_str::<Percent>("101").is_err());
+    }
+
+    #[test]
+    fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
+        let project = Project::new();
+        assert_eq!(project.format_version, 13);
+        assert_eq!(project.tracks[0].effects.distortion.drive, Percent::ZERO);
+        assert_eq!(project.tracks[0].effects.distortion.tone, p(50));
+        assert_eq!(project.tracks[0].effects.phaser.rate, p(25));
+        assert!(ParameterId::PhaserMix.is_valid_for(TrackKind::Kick));
+        assert!(!ParameterId::PhaserMix.supports_lfo(TrackKind::Kick));
+
+        let mut locks = ParameterLocks::default();
+        assert!(locks.set(ParameterId::DistortionDrive, ParameterValue::Percent(p(80))));
+        assert_eq!(
+            locks.get(ParameterId::DistortionDrive),
+            Some(ParameterValue::Percent(p(80)))
+        );
+        assert!(locks.set(ParameterId::PhaserFeedback, ParameterValue::Percent(p(90))));
+        assert_eq!(locks.phaser_feedback, Some(p(90)));
+
+        let mut invalid = project;
+        invalid.tracks[0].effects.phaser.feedback = p(91);
+        assert_eq!(
+            invalid.validate(),
+            Err(ValidationError::Effect(0, "phaser_feedback"))
+        );
     }
     #[test]
     fn accent_and_slide_event_fields_are_strict() {

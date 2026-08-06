@@ -6,7 +6,7 @@ use super::overlays::{
 use super::{
     controller::{global_name, resolved_path},
     input::parameter_supports_direct_percentage,
-    state::{App, FileAction, Mode},
+    state::{App, FileAction, Mode, ParameterBank},
 };
 use crate::tui::DIRECT_PERCENTAGE_HINT;
 use crate::{
@@ -83,6 +83,8 @@ EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
                  A accent/default · Shift+G Bass slide · Shift+T condition/retrigger · Shift+S swing
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
 PARAMETERS  v level · n pan · y delay send · b reverb send
+           Tab PARAMS/EFFECTS · EFFECTS: d drive · t tone · x distortion mix
+           EFFECTS: r phaser rate · e depth · f feedback · m phaser mix
            Kick: u tune · d decay · a attack
            Snare: u tune · t tone · s snappy · Hat: u tune · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
@@ -243,6 +245,8 @@ pub(super) enum ParameterGroup {
     Instrument,
     Filter,
     Envelope,
+    Distortion,
+    Phaser,
 }
 
 impl ParameterGroup {
@@ -252,6 +256,8 @@ impl ParameterGroup {
             Self::Instrument => "INSTRUMENT",
             Self::Filter => "FILTER",
             Self::Envelope => "ENVELOPE",
+            Self::Distortion => "DISTORTION",
+            Self::Phaser => "PHASER",
         }
     }
 
@@ -261,6 +267,8 @@ impl ParameterGroup {
             Self::Instrument => Color::Green,
             Self::Filter => Color::Magenta,
             Self::Envelope => Color::Yellow,
+            Self::Distortion => Color::Red,
+            Self::Phaser => Color::Blue,
         }
     }
 }
@@ -512,6 +520,65 @@ pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescr
     }
 }
 
+const EFFECT_PARAMETERS: [ParameterDescriptor; 7] = [
+    ParameterDescriptor {
+        id: ParameterId::DistortionDrive,
+        label: "Drive",
+        shortcut: "d",
+        group: ParameterGroup::Distortion,
+    },
+    ParameterDescriptor {
+        id: ParameterId::DistortionTone,
+        label: "Tone",
+        shortcut: "t",
+        group: ParameterGroup::Distortion,
+    },
+    ParameterDescriptor {
+        id: ParameterId::DistortionMix,
+        label: "Mix",
+        shortcut: "x",
+        group: ParameterGroup::Distortion,
+    },
+    ParameterDescriptor {
+        id: ParameterId::PhaserRate,
+        label: "Rate",
+        shortcut: "r",
+        group: ParameterGroup::Phaser,
+    },
+    ParameterDescriptor {
+        id: ParameterId::PhaserDepth,
+        label: "Depth",
+        shortcut: "e",
+        group: ParameterGroup::Phaser,
+    },
+    ParameterDescriptor {
+        id: ParameterId::PhaserFeedback,
+        label: "Feedbk",
+        shortcut: "f",
+        group: ParameterGroup::Phaser,
+    },
+    ParameterDescriptor {
+        id: ParameterId::PhaserMix,
+        label: "Mix",
+        shortcut: "m",
+        group: ParameterGroup::Phaser,
+    },
+];
+
+pub(super) fn effect_descriptors() -> &'static [ParameterDescriptor] {
+    &EFFECT_PARAMETERS
+}
+
+pub(super) fn visible_parameter_descriptors(
+    bank: ParameterBank,
+    kind: TrackKind,
+) -> &'static [ParameterDescriptor] {
+    match bank {
+        ParameterBank::Params => parameter_descriptors(kind),
+        ParameterBank::Effects => effect_descriptors(),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ValueOrigin {
     Base,
@@ -611,6 +678,31 @@ pub(super) fn physical_parameter_readout(
         ParameterValue::Percent(value) => {
             let value = value.get();
             match (a.editor.project.tracks[track].kind, parameter) {
+                (_, ParameterId::DistortionDrive) => {
+                    format!(
+                        "{:.1}× pre-gain",
+                        crate::dsp::exp_map(value, 1.0, 31.622_776)
+                    )
+                }
+                (_, ParameterId::DistortionTone) => {
+                    format!(
+                        "{:.0} Hz low-pass",
+                        crate::dsp::exp_map(value, 700.0, 18_000.0)
+                    )
+                }
+                (_, ParameterId::DistortionMix) => format!("{value}% wet"),
+                (_, ParameterId::PhaserRate) => {
+                    format!("{:.2} Hz", crate::dsp::exp_map(value, 0.05, 8.0))
+                }
+                (_, ParameterId::PhaserDepth) => {
+                    format!(
+                        "{:.0}–{:.0} Hz sweep",
+                        300.0,
+                        crate::dsp::exp_map(value, 300.0, 8_000.0)
+                    )
+                }
+                (_, ParameterId::PhaserFeedback) => format!("{}% feedback", value),
+                (_, ParameterId::PhaserMix) => format!("{value}% wet"),
                 (TrackKind::Kick, ParameterId::Tune) => format!(
                     "peak {:.0} Hz · fundamental {:.0} Hz",
                     110.0 + value as f32 * 1.70,
@@ -927,6 +1019,7 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
 pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usize) {
     let t = &a.editor.project.tracks[track];
     let lock_editing = a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_));
+    let descriptors = visible_parameter_descriptors(a.parameter_bank, t.kind);
     let chord_shape = a
         .editor
         .chord_shape_value(track, a.step)
@@ -934,10 +1027,15 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         .or_else(|| selected_chord_shape(a, track))
         .map(|shape| format!(" · [C] Chord trigger {shape}"))
         .unwrap_or_default();
+    let bank_title = match a.parameter_bank {
+        ParameterBank::Params => "PARAMS",
+        ParameterBank::Effects => "EFFECTS",
+    };
     let title = if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
         format!(
-            "{} · Step {} · {}{} · [p] {} · [m] Mute {} · [o] Audition{}",
+            "{} · {} · Step {} · {}{} · [Tab] bank · [p] {} · [m] Mute {} · [o] Audition{}",
             track_label(t),
+            bank_title,
             a.step + 1,
             articulation_title(a, track),
             chord_shape,
@@ -951,8 +1049,9 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         )
     } else {
         format!(
-            "{} · Step {} · {} · [p] {} · [m] Mute {} · [o] Audition{}",
+            "{} · {} · Step {} · {} · [Tab] bank · [p] {} · [m] Mute {} · [o] Audition{}",
             t.name,
+            bank_title,
             a.step + 1,
             articulation_title(a, track),
             scope_name(a.scope),
@@ -985,7 +1084,6 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         );
     let inner = panel.inner(area);
     f.render_widget(panel, area);
-    let descriptors = parameter_descriptors(t.kind);
     let slot_width = (inner.width / descriptors.len() as u16).min(10);
     let bank_width = slot_width.saturating_mul(descriptors.len() as u16);
     let bank = Rect {

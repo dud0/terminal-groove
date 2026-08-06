@@ -110,7 +110,7 @@ Pressing a degree key replaces any existing event on the selected step with that
 Every track has base parameter values. A step may contain a sparse set of parameter locks that overlay those values for that step only.
 
 - Locks are permitted only on a drum trigger, synth note, or synth tie.
-- Instrument parameters, waveform, pan, level, delay send, and reverb send are lockable. Chord spread is also lockable on Chord steps.
+- Instrument parameters, waveform, pan, level, delay send, reverb send, distortion, and phaser parameters are lockable. Chord spread is also lockable on Chord steps. Effects are not LFO destinations.
 - Mute is never lockable.
 - At each boundary, the engine computes effective values by overlaying the current step's locks on the base values.
 - A track LFO then applies its bipolar offset around that effective base-or-lock value and clamps the result to 0–100%.
@@ -215,6 +215,10 @@ Chord defaults: 70% Saw mix, pulse width 50%, sub 0%, chorus I, cutoff 55%, reso
 All pitched tracks default to input degree 1 and octave 3. Their oscillators and filters run at 2x oversampling. Chord uses stable DCO pitch and a smoother resonance-compensated response; Lead uses stronger drive and feedback.
 
 ### 3.7 Mixer and effects
+
+Each track has a serial distortion-then-phaser chain before its fader, pan, and delay/reverb sends. Distortion drive maps exponentially from unity to approximately 31.6× pre-gain, followed by soft clipping; tone is a 700 Hz–18 kHz low-pass; and mix is dry/wet. The phaser is a four-stage stereo all-pass network with opposite-channel logarithmic modulation: rate maps exponentially from 0.05–8 Hz, depth controls a 300 Hz–8 kHz sweep, feedback is limited to 90%, and mix is dry/wet. Distortion defaults to drive 0%, tone 50%, mix 0%; phaser defaults to rate 25%, depth 50%, feedback 20%, mix 0%. Both chains are fixed-allocation, separately stateful for live playback and audition, smoothed on changes, and cleared by Stop and project reset.
+
+The track detail panel has `PARAMS` and `EFFECTS` banks. `Tab` toggles banks; the effects bank exposes distortion `d/t/x` and phaser `r/e/f/m` controls. Effects are shared across patterns and support BASE and per-step LOCK values, but not LFO modulation.
 
 Each track provides:
 
@@ -451,7 +455,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`, but the application does not silently alter a user-supplied filename.
-- Version 12 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. Version 11 is imported with defaults for newer optional fields; versions 1 through 10, missing versions, and unknown future versions are rejected without migration.
+- Version 13 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. Versions 11 and 12 are imported with default effects and other newer optional fields; versions 1 through 10, missing versions, and unknown future versions are rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -461,7 +465,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 12,
+  "format_version": 13,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -495,6 +499,8 @@ The top-level object is:
 - `muted`: Boolean
 - `delay_send`: integer 0–100
 - `reverb_send`: integer 0–100
+- `effects.distortion.drive`, `effects.distortion.tone`, `effects.distortion.mix`: integer 0–100
+- `effects.phaser.rate`, `effects.phaser.depth`, `effects.phaser.feedback`, `effects.phaser.mix`: integer 0–100
 - An `instrument` object with the applicable base values
 - A required sparse `lfos` object containing compatible per-destination assignments
 - Bass, Chord, and Lead additionally store `input_degree` and `input_octave`. Chord tracks may store `input_chord_shape` and `input_chord_arpeggio`; omitted values mean `1-3-5` and disabled/Up/`1/16`.
@@ -510,7 +516,7 @@ Chord notes may include an optional `chord_shape` string. Omitted values mean `t
 
 For example, a Chord note may contain `degree`, `octave`, `accent`, `chord_shape`, `arpeggio`, and `locks`; a tie contains only `locks`.
 
-The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. `pitch` is not a lock key. Chord chorus values are `off`, `i`, and `ii`; arpeggio settings are note-trigger values, not lock values. `mute`, `accent`, and `slide` are invalid in a lock object.
+The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `distortion_drive`, `distortion_tone`, `distortion_mix`, `phaser_rate`, `phaser_depth`, `phaser_feedback`, `phaser_mix`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. `pitch` is not a lock key. Chord chorus values are `off`, `i`, and `ii`; arpeggio settings are note-trigger values, not lock values. `mute`, `accent`, and `slide` are invalid in a lock object.
 
 An empty LFO collection is `{}`. Assignment keys are the compatible continuous instrument parameters plus `level`; Chord and Lead may additionally use the LFO-only `pitch` key. Bass waveform, Chord chorus, and mixer sends are excluded. A synchronized assignment is:
 
@@ -540,7 +546,7 @@ For Chord or Lead pitch:
 }
 ```
 
-The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 12.
+The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 13.
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 

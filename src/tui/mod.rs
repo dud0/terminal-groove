@@ -65,7 +65,9 @@ pub use state::App;
 #[cfg(test)]
 use state::FaderAnimation;
 #[allow(unused_imports)]
-pub(crate) use state::{ChordField, FileAction, GeneratorDialog, LfoField, Mode, TriggerField};
+pub(crate) use state::{
+    ChordField, FileAction, GeneratorDialog, LfoField, Mode, ParameterBank, TriggerField,
+};
 
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -88,7 +90,7 @@ use input::{
     open_chord_editor, open_lfo_editor, parameter_edit_passthrough, parameter_shortcut,
     parameter_supports_direct_percentage, pattern_edit_at, select_global, select_track,
     set_lfo_config, set_parameter, set_selected_track_length, switch_parameter_editor,
-    track_jump_index,
+    toggle_parameter_bank, track_jump_index,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -103,7 +105,7 @@ use overlays::{
 #[allow(unused_imports)]
 use render::{
     GLOBAL_IDS, ParameterDescriptor, ParameterGroup, ValueOrigin, articulation_title,
-    displayed_parameter, draw_with_device, fader_segments, global_control_text,
+    displayed_parameter, draw_with_device, effect_descriptors, fader_segments, global_control_text,
     global_display_name, global_fader_segments, global_shortcut_text, global_value_text,
     help_available, lock_has_parameter, mode_name, parameter_descriptors,
     physical_parameter_readout, render_centered, render_global_cards, render_parameter_bank,
@@ -242,6 +244,25 @@ mod tests {
             ParameterGroup::Mixer.color(),
             ParameterGroup::Filter.color()
         );
+        let effects = effect_descriptors();
+        assert_eq!(effects.len(), 7);
+        assert_eq!(effects[0].id, ParameterId::DistortionDrive);
+        assert_eq!(effects[2].shortcut, "x");
+        assert_eq!(effects[3].id, ParameterId::PhaserRate);
+        assert_eq!(effects[6].shortcut, "m");
+    }
+
+    #[test]
+    fn tab_switches_parameter_bank_and_selects_first_control_while_editing() {
+        let mut app = App::new(Project::new(), None);
+        app.row = 1;
+        app.mode = Mode::ParameterEdit(ParameterId::Level);
+        toggle_parameter_bank(&mut app);
+        assert_eq!(app.parameter_bank, ParameterBank::Effects);
+        assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::DistortionDrive));
+        toggle_parameter_bank(&mut app);
+        assert_eq!(app.parameter_bank, ParameterBank::Params);
+        assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Level));
     }
 
     #[test]

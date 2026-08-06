@@ -1,6 +1,6 @@
 use super::{
     render::GLOBAL_IDS,
-    state::{App, FileAction, Mode},
+    state::{App, FileAction, Mode, ParameterBank},
 };
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
@@ -218,6 +218,7 @@ pub(super) fn reset_project_ui(a: &mut App) {
     a.global = 0;
     a.step = 0;
     a.scope = Scope::Base;
+    a.parameter_bank = ParameterBank::Params;
     a.playing = false;
     a.paused = false;
     a.pattern_cursor = 0;

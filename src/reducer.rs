@@ -1599,6 +1599,57 @@ mod tests {
     }
 
     #[test]
+    fn effect_base_and_lock_edits_are_undoable_and_coalescible() {
+        let mut editor = Editor::new(Project::new());
+        let value = |n| ParameterValue::Percent(Percent::new(n).unwrap());
+        editor
+            .set_parameter(
+                0,
+                0,
+                Scope::Base,
+                ParameterId::DistortionDrive,
+                value(70),
+                Some(CoalesceKey(0, 0, ParameterId::DistortionDrive as u8)),
+            )
+            .unwrap();
+        editor
+            .set_parameter(
+                0,
+                0,
+                Scope::Base,
+                ParameterId::DistortionDrive,
+                value(80),
+                Some(CoalesceKey(0, 0, ParameterId::DistortionDrive as u8)),
+            )
+            .unwrap();
+        assert_eq!(
+            editor.project.tracks[0].effects.distortion.drive,
+            Percent::new(80).unwrap()
+        );
+        editor.toggle_event(0, 0).unwrap();
+        editor
+            .set_parameter(0, 0, Scope::Lock, ParameterId::PhaserMix, value(60), None)
+            .unwrap();
+        assert_eq!(
+            editor.project.tracks[0].steps[0]
+                .as_ref()
+                .unwrap()
+                .locks()
+                .phaser_mix,
+            Percent::new(60)
+        );
+        assert!(editor.undo());
+        assert!(
+            editor.project.tracks[0].steps[0]
+                .as_ref()
+                .unwrap()
+                .locks()
+                .phaser_mix
+                .is_none()
+        );
+    }
+
+    #[test]
     fn lock_edits_inherit_and_clear_one_parameter() {
         let mut e = Editor::new(Project::new());
         let p = |value| ParameterValue::Percent(Percent::new(value).unwrap());

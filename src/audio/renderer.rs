@@ -2,7 +2,7 @@ use super::effects::{modulated_percent, pitch_modulated_frequency};
 use super::voices::{CHORD_GROUP_SIZE, REVERB_RETURN_GAIN};
 use super::{
     AudioProject, AudioStatus, ChordVoicePool, DrumVoice, ParameterId, Renderer, StepClock,
-    SynthVoice, TRACK_COUNT,
+    SynthVoice, TRACK_COUNT, TrackEffectChain,
 };
 use crate::dsp::{
     Delay, EnvStage, Lfo, MasterLimiter, Reverb, Smoother, equal_power_pan, exp_map_f32,
@@ -46,6 +46,8 @@ impl Renderer {
             preview: std::array::from_fn(|_| SynthVoice::new(sr as f32)),
             chord: ChordVoicePool::new(sr),
             preview_chord: ChordVoicePool::new(sr),
+            effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
+            preview_effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
             delay: Delay::new(sr),
             reverb: Reverb::new(sr),
             dc: Default::default(),
@@ -123,9 +125,6 @@ impl Renderer {
             v.resonance_percent.next_value(),
             offsets[ParameterId::Resonance as usize],
         );
-        let level_percent =
-            modulated_percent(v.level.next_value(), offsets[ParameterId::Level as usize]);
-        let level = (level_percent / 100.0).powi(2);
         let accent_gain = v.accent_gain.next_value();
         let delay_send = v.delay_send.next_value();
         let reverb_send = v.reverb_send.next_value();
@@ -177,7 +176,6 @@ impl Renderer {
             filtered
                 * env
                 * accent_gain
-                * level
                 * if v.bass {
                     5.0
                 } else if v.chord {
@@ -189,11 +187,11 @@ impl Renderer {
             reverb_send,
         )
     }
-    pub(super) fn render_drum(
+    fn render_drum_raw(
         voice: &mut DrumVoice,
         track: usize,
         sr: f32,
-        level_offset: f32,
+        _level_offset: f32,
         pan_offset: f32,
     ) -> (f32, f32, f32, f32) {
         let raw = match track {
@@ -228,14 +226,27 @@ impl Renderer {
                 bright * 0.75 + voice.filter2.process(source) * 0.25
             }
         };
-        let level = modulated_percent(voice.level.next_value(), level_offset) / 100.0;
-        let sample = (raw * 1.15).tanh() * voice.envelope.next_value() * level.powi(2) * 1.40;
+        let sample = (raw * 1.15).tanh() * voice.envelope.next_value() * 1.40;
         (
             sample,
             voice.delay_send.next_value(),
             voice.reverb_send.next_value(),
             modulated_percent(voice.pan.next_value(), pan_offset),
         )
+    }
+
+    #[cfg(test)]
+    pub(super) fn render_drum(
+        voice: &mut DrumVoice,
+        track: usize,
+        sr: f32,
+        level_offset: f32,
+        pan_offset: f32,
+    ) -> (f32, f32, f32, f32) {
+        let (sample, delay_send, reverb_send, pan) =
+            Self::render_drum_raw(voice, track, sr, level_offset, pan_offset);
+        let level = modulated_percent(voice.level.next_value(), level_offset) / 100.0;
+        (sample * level.powi(2), delay_send, reverb_send, pan)
     }
     pub(super) fn next(&mut self) -> (f32, f32) {
         if self.playing {
@@ -259,67 +270,89 @@ impl Renderer {
         let mut reverb_l = 0.0;
         let mut reverb_r = 0.0;
         for i in 0..3 {
-            let (x, delay_send, reverb_send, pan) = Self::render_drum(
+            let (x, delay_send, reverb_send, pan) = Self::render_drum_raw(
                 &mut self.drums[i],
                 i,
                 self.sr,
                 self.lfo_offsets[i][ParameterId::Level as usize],
                 self.lfo_offsets[i][ParameterId::Pan as usize],
             );
+            let (effect_l, effect_r) = self.effects[i].process(x);
             let (pl, pr) = equal_power_pan(pan);
-            let gain = self.mute[i].next_value();
-            dry_l += x * pl * gain;
-            dry_r += x * pr * gain;
-            delay_l += x * pl * delay_send * gain;
-            delay_r += x * pr * delay_send * gain;
-            reverb_l += x * pl * reverb_send * gain;
-            reverb_r += x * pr * reverb_send * gain;
+            let level = modulated_percent(
+                self.drums[i].level.next_value(),
+                self.lfo_offsets[i][ParameterId::Level as usize],
+            ) / 100.0;
+            let gain = self.mute[i].next_value() * level.powi(2);
+            dry_l += effect_l * pl * gain;
+            dry_r += effect_r * pr * gain;
+            delay_l += effect_l * pl * delay_send * gain;
+            delay_r += effect_r * pr * delay_send * gain;
+            reverb_l += effect_l * pl * reverb_send * gain;
+            reverb_r += effect_r * pr * reverb_send * gain;
         }
         for i in 0..3 {
-            let (x, delay_send, reverb_send, pan) = Self::render_drum(
+            let (x, delay_send, reverb_send, pan) = Self::render_drum_raw(
                 &mut self.preview_drums[i],
                 i,
                 self.sr,
                 self.preview_lfo_offsets[i][ParameterId::Level as usize],
                 self.preview_lfo_offsets[i][ParameterId::Pan as usize],
             );
+            let (effect_l, effect_r) = self.preview_effects[i].process(x);
             let (pl, pr) = equal_power_pan(pan);
-            dry_l += x * pl;
-            dry_r += x * pr;
-            delay_l += x * pl * delay_send;
-            delay_r += x * pr * delay_send;
-            reverb_l += x * pl * reverb_send;
-            reverb_r += x * pr * reverb_send;
+            let level = modulated_percent(
+                self.preview_drums[i].level.next_value(),
+                self.preview_lfo_offsets[i][ParameterId::Level as usize],
+            ) / 100.0;
+            let gain = level.powi(2);
+            dry_l += effect_l * pl * gain;
+            dry_r += effect_r * pr * gain;
+            delay_l += effect_l * pl * delay_send * gain;
+            delay_r += effect_r * pr * delay_send * gain;
+            reverb_l += effect_l * pl * reverb_send * gain;
+            reverb_r += effect_r * pr * reverb_send * gain;
         }
         for i in [0, 2] {
             let (x, ds, rs) =
                 Self::render_synth(&mut self.synth[i], self.sr, &self.lfo_offsets[i + 3]);
+            let (effect_l, effect_r) = self.effects[i + 3].process(x);
             let (pl, pr) = equal_power_pan(modulated_percent(
                 self.synth[i].pan.next_value(),
                 self.lfo_offsets[i + 3][ParameterId::Pan as usize],
             ));
-            let gain = self.mute[i + 3].next_value();
-            dry_l += x * pl * gain;
-            dry_r += x * pr * gain;
-            delay_l += x * pl * ds * gain;
-            delay_r += x * pr * ds * gain;
-            reverb_l += x * pl * rs * gain;
-            reverb_r += x * pr * rs * gain;
+            let level = modulated_percent(
+                self.synth[i].level.next_value(),
+                self.lfo_offsets[i + 3][ParameterId::Level as usize],
+            ) / 100.0;
+            let gain = self.mute[i + 3].next_value() * level.powi(2);
+            dry_l += effect_l * pl * gain;
+            dry_r += effect_r * pr * gain;
+            delay_l += effect_l * pl * ds * gain;
+            delay_r += effect_r * pr * ds * gain;
+            reverb_l += effect_l * pl * rs * gain;
+            reverb_r += effect_r * pr * rs * gain;
             let (x, ds, rs) = Self::render_synth(
                 &mut self.preview[i],
                 self.sr,
                 &self.preview_lfo_offsets[i + 3],
             );
+            let (effect_l, effect_r) = self.preview_effects[i + 3].process(x);
             let (pl, pr) = equal_power_pan(modulated_percent(
                 self.preview[i].pan.next_value(),
                 self.preview_lfo_offsets[i + 3][ParameterId::Pan as usize],
             ));
-            dry_l += x * pl;
-            dry_r += x * pr;
-            delay_l += x * pl * ds;
-            delay_r += x * pr * ds;
-            reverb_l += x * pl * rs;
-            reverb_r += x * pr * rs;
+            let level = modulated_percent(
+                self.preview[i].level.next_value(),
+                self.preview_lfo_offsets[i + 3][ParameterId::Level as usize],
+            ) / 100.0;
+            let gain = level.powi(2);
+            dry_l += effect_l * pl * gain;
+            dry_r += effect_r * pr * gain;
+            delay_l += effect_l * pl * ds * gain;
+            delay_r += effect_r * pr * ds * gain;
+            reverb_l += effect_l * pl * rs * gain;
+            reverb_r += effect_r * pr * rs * gain;
         }
         let mut chord_left = 0.0;
         let mut chord_right = 0.0;
@@ -329,6 +362,7 @@ impl Renderer {
         let chord_end = chord_start + self.chord.voice_count;
         let mut chord_has_active_send = false;
         let mut chord_tail_send = None;
+        let mut chord_level = None;
         for (index, voice) in self.chord.voices.iter_mut().enumerate() {
             let (x, ds, rs) = Self::render_synth(voice, self.sr, &self.lfo_offsets[4]);
             let (pl, pr) = equal_power_pan(modulated_percent(
@@ -338,6 +372,11 @@ impl Renderer {
             chord_left += x * pl;
             chord_right += x * pr;
             if voice.env.stage != EnvStage::Idle {
+                let level = modulated_percent(
+                    voice.level.next_value(),
+                    self.lfo_offsets[4][ParameterId::Level as usize],
+                ) / 100.0;
+                chord_level.get_or_insert(level.powi(2));
                 if self.chord.active && (chord_start..chord_end).contains(&index) {
                     chord_ds = ds;
                     chord_rs = rs;
@@ -351,13 +390,14 @@ impl Renderer {
             (chord_ds, chord_rs) = chord_tail_send.unwrap_or((0.0, 0.0));
         }
         let (chord_l, chord_r) = self.chord.chorus.process_stereo(chord_left, chord_right);
-        let chord_gain = self.mute[4].next_value();
-        dry_l += chord_l * chord_gain;
-        dry_r += chord_r * chord_gain;
-        delay_l += chord_l * chord_ds * chord_gain;
-        delay_r += chord_r * chord_ds * chord_gain;
-        reverb_l += chord_l * chord_rs * chord_gain;
-        reverb_r += chord_r * chord_rs * chord_gain;
+        let (chord_effect_l, chord_effect_r) = self.effects[4].process((chord_l + chord_r) * 0.5);
+        let chord_gain = self.mute[4].next_value() * chord_level.unwrap_or(0.0);
+        dry_l += chord_effect_l * chord_gain;
+        dry_r += chord_effect_r * chord_gain;
+        delay_l += chord_effect_l * chord_ds * chord_gain;
+        delay_r += chord_effect_r * chord_ds * chord_gain;
+        reverb_l += chord_effect_l * chord_rs * chord_gain;
+        reverb_r += chord_effect_r * chord_rs * chord_gain;
 
         let mut preview_left = 0.0;
         let mut preview_right = 0.0;
@@ -367,6 +407,7 @@ impl Renderer {
         let preview_end = preview_start + self.preview_chord.voice_count;
         let mut preview_has_active_send = false;
         let mut preview_tail_send = None;
+        let mut preview_level = None;
         for (index, voice) in self.preview_chord.voices.iter_mut().enumerate() {
             let (x, ds, rs) = Self::render_synth(voice, self.sr, &self.preview_lfo_offsets[4]);
             let (pl, pr) = equal_power_pan(modulated_percent(
@@ -376,6 +417,11 @@ impl Renderer {
             preview_left += x * pl;
             preview_right += x * pr;
             if voice.env.stage != EnvStage::Idle {
+                let level = modulated_percent(
+                    voice.level.next_value(),
+                    self.preview_lfo_offsets[4][ParameterId::Level as usize],
+                ) / 100.0;
+                preview_level.get_or_insert(level.powi(2));
                 if self.preview_chord.active && (preview_start..preview_end).contains(&index) {
                     preview_ds = ds;
                     preview_rs = rs;
@@ -392,12 +438,15 @@ impl Renderer {
             .preview_chord
             .chorus
             .process_stereo(preview_left, preview_right);
-        dry_l += preview_l;
-        dry_r += preview_r;
-        delay_l += preview_l * preview_ds;
-        delay_r += preview_r * preview_ds;
-        reverb_l += preview_l * preview_rs;
-        reverb_r += preview_r * preview_rs;
+        let (preview_effect_l, preview_effect_r) =
+            self.preview_effects[4].process((preview_l + preview_r) * 0.5);
+        let preview_gain = preview_level.unwrap_or(0.0);
+        dry_l += preview_effect_l * preview_gain;
+        dry_r += preview_effect_r * preview_gain;
+        delay_l += preview_effect_l * preview_ds * preview_gain;
+        delay_r += preview_effect_r * preview_ds * preview_gain;
+        reverb_l += preview_effect_l * preview_rs * preview_gain;
+        reverb_r += preview_effect_r * preview_rs * preview_gain;
 
         let (dl, dr) = self.delay.process(delay_l, delay_r);
         let (rl, rr) = self

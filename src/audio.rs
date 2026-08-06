@@ -1,10 +1,10 @@
 pub use crate::model::PatternIndexMap;
 use crate::{
-    dsp::{DcBlock, Delay, Lfo, MasterLimiter, Reverb, Smoother},
+    dsp::{DcBlock, Delay, Lfo, MasterLimiter, Reverb, Smoother, TrackEffectChain},
     engine::StepClock,
     model::{
         ArpeggioConfig, ChordShape, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT,
-        ParameterId, Percent, Project, StepEvent, TRACK_COUNT,
+        ParameterId, Percent, Project, StepEvent, TRACK_COUNT, TrackEffects,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -24,6 +24,7 @@ struct AudioTrack {
     reverb_send: Percent,
     swing: Percent,
     instrument: Instrument,
+    effects: TrackEffects,
     lfos: LfoAssignments,
     input_degree: u8,
     input_octave: u8,
@@ -75,6 +76,7 @@ impl AudioProject {
                     reverb_send: t.reverb_send,
                     swing: t.swing,
                     instrument: t.instrument,
+                    effects: t.effects,
                     lfos: t.lfos,
                     input_degree: t.input_degree.unwrap_or(1),
                     input_octave: t.input_octave.unwrap_or(3),
@@ -118,6 +120,8 @@ struct Renderer {
     preview: [SynthVoice; 3],
     chord: ChordVoicePool,
     preview_chord: ChordVoicePool,
+    effects: [TrackEffectChain; TRACK_COUNT],
+    preview_effects: [TrackEffectChain; TRACK_COUNT],
     delay: Delay,
     reverb: Reverb,
     dc: DcBlock,

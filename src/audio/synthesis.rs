@@ -530,6 +530,30 @@ impl Renderer {
         pool.preview_remaining = 0;
     }
     pub(super) fn refresh_active_parameters(&mut self, smoothing: u32) {
+        for track in 0..TRACK_COUNT {
+            let live_locks = match track {
+                0..=2 => self.drums[track].locks,
+                3 | 5 => self.synth[track - 3].locks,
+                4 => self
+                    .chord
+                    .voices
+                    .get(self.chord.group * CHORD_GROUP_SIZE)
+                    .map_or(ParameterLocks::default(), |voice| voice.locks),
+                _ => ParameterLocks::default(),
+            };
+            let preview_locks = match track {
+                0..=2 => self.preview_drums[track].locks,
+                3 | 5 => self.preview[track - 3].locks,
+                4 => self
+                    .preview_chord
+                    .voices
+                    .get(self.preview_chord.group * CHORD_GROUP_SIZE)
+                    .map_or(ParameterLocks::default(), |voice| voice.locks),
+                _ => ParameterLocks::default(),
+            };
+            self.configure_track_effects(track, live_locks, smoothing, false);
+            self.configure_track_effects(track, preview_locks, smoothing, true);
+        }
         for track in 0..3 {
             let params = self.project.tracks[track];
             // Locks are captured at the step boundary. A live project snapshot may
@@ -622,6 +646,12 @@ impl Renderer {
             return;
         }
         self.reset_preview_lfos(track);
+        self.configure_track_effects(
+            track,
+            self.locks_at(track, step),
+            ParameterSmoothing::Default.samples(self.sr),
+            true,
+        );
         if track < 3 {
             let accent = match self.project.patterns[self.active_pattern].tracks[track].steps[step]
             {
@@ -822,6 +852,15 @@ impl Renderer {
     ) {
         let t = self.project.tracks[track];
         let sequence = self.project.patterns[self.active_pattern].tracks[track];
+        let locks = self.locks_at(track, step);
+        if !retrigger {
+            self.configure_track_effects(
+                track,
+                locks,
+                ParameterSmoothing::Default.samples(self.sr),
+                false,
+            );
+        }
         if track < 3 {
             if !retrigger {
                 self.update_drum_mix(track, step, ParameterSmoothing::Default.samples(self.sr));
@@ -862,7 +901,6 @@ impl Renderer {
                 chord_shape,
                 arpeggio,
             } => {
-                let locks = self.locks_at(track, step);
                 let trigger = SynthTrigger {
                     degree,
                     octave,
@@ -912,6 +950,12 @@ impl Renderer {
                 }
             }
             GateAction::Release if !retrigger => {
+                self.configure_track_effects(
+                    track,
+                    ParameterLocks::default(),
+                    ParameterSmoothing::Default.samples(self.sr),
+                    false,
+                );
                 if track == 4 {
                     for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
                         ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]

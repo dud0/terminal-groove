@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use crate::model::{LfoConfig, LfoWaveform};
+use crate::model::{LfoConfig, LfoWaveform, ParameterLocks, TrackEffects};
 
 pub fn exp_map(percent: u8, min: f32, max: f32) -> f32 {
     if percent == 0 {
@@ -142,6 +142,199 @@ impl Smoother {
             }
         }
         self.current
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EffectAllpass {
+    state: f32,
+}
+
+impl EffectAllpass {
+    const fn new() -> Self {
+        Self { state: 0.0 }
+    }
+
+    fn process(&mut self, input: f32, coefficient: f32) -> f32 {
+        let output = -coefficient * input + self.state;
+        self.state = input + coefficient * output;
+        if output.is_finite() && self.state.is_finite() {
+            output
+        } else {
+            self.state = 0.0;
+            0.0
+        }
+    }
+
+    fn clear(&mut self) {
+        self.state = 0.0;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TrackEffectChain {
+    distortion_drive: Smoother,
+    distortion_tone: Smoother,
+    distortion_mix: Smoother,
+    distortion_state: f32,
+    phaser_rate: Smoother,
+    phaser_depth: Smoother,
+    phaser_feedback: Smoother,
+    phaser_mix: Smoother,
+    phaser_phase: f32,
+    phaser_feedback_l: f32,
+    phaser_feedback_r: f32,
+    phaser_l: [EffectAllpass; 4],
+    phaser_r: [EffectAllpass; 4],
+    sample_rate: f32,
+}
+
+impl TrackEffectChain {
+    pub fn new(sample_rate: u32) -> Self {
+        Self {
+            distortion_drive: Smoother::new(0.0),
+            distortion_tone: Smoother::new(50.0),
+            distortion_mix: Smoother::new(0.0),
+            distortion_state: 0.0,
+            phaser_rate: Smoother::new(25.0),
+            phaser_depth: Smoother::new(50.0),
+            phaser_feedback: Smoother::new(20.0),
+            phaser_mix: Smoother::new(0.0),
+            phaser_phase: 0.0,
+            phaser_feedback_l: 0.0,
+            phaser_feedback_r: 0.0,
+            phaser_l: [EffectAllpass::new(); 4],
+            phaser_r: [EffectAllpass::new(); 4],
+            sample_rate: sample_rate as f32,
+        }
+    }
+
+    pub fn configure(&mut self, effects: TrackEffects, locks: ParameterLocks, samples: u32) {
+        self.distortion_drive.set(
+            locks
+                .distortion_drive
+                .unwrap_or(effects.distortion.drive)
+                .get() as f32,
+            samples,
+        );
+        self.distortion_tone.set(
+            locks
+                .distortion_tone
+                .unwrap_or(effects.distortion.tone)
+                .get() as f32,
+            samples,
+        );
+        self.distortion_mix.set(
+            locks.distortion_mix.unwrap_or(effects.distortion.mix).get() as f32,
+            samples,
+        );
+        self.phaser_rate.set(
+            locks.phaser_rate.unwrap_or(effects.phaser.rate).get() as f32,
+            samples,
+        );
+        self.phaser_depth.set(
+            locks.phaser_depth.unwrap_or(effects.phaser.depth).get() as f32,
+            samples,
+        );
+        self.phaser_feedback.set(
+            locks
+                .phaser_feedback
+                .unwrap_or(effects.phaser.feedback)
+                .get() as f32,
+            samples,
+        );
+        self.phaser_mix.set(
+            locks.phaser_mix.unwrap_or(effects.phaser.mix).get() as f32,
+            samples,
+        );
+    }
+
+    pub fn process(&mut self, input: f32) -> (f32, f32) {
+        let drive = self.distortion_drive.next_value();
+        let tone = self.distortion_tone.next_value();
+        let distortion_mix = self.distortion_mix.next_value() / 100.0;
+        let phaser_rate = self.phaser_rate.next_value();
+        let phaser_depth = self.phaser_depth.next_value();
+        let phaser_feedback = (self.phaser_feedback.next_value() / 100.0).clamp(0.0, 0.9);
+        let phaser_mix = self.phaser_mix.next_value() / 100.0;
+        if distortion_mix <= 0.0 && phaser_mix <= 0.0 {
+            return (input, input);
+        }
+
+        let gain = exp_map_f32(drive, 1.0, 31.622_776);
+        let clipped = (input * gain).tanh();
+        let cutoff = exp_map_f32(tone, 700.0, (18_000.0_f32).min(self.sample_rate * 0.45));
+        let coefficient = 1.0 - (-std::f32::consts::TAU * cutoff / self.sample_rate).exp();
+        self.distortion_state += (clipped - self.distortion_state) * coefficient;
+        let distorted = input * (1.0 - distortion_mix) + self.distortion_state * distortion_mix;
+
+        if phaser_mix <= 0.0 {
+            return (distorted, distorted);
+        }
+        let sweep = (8_000.0_f32 / 300.0).ln() * phaser_depth / 100.0;
+        let rate = exp_map_f32(phaser_rate, 0.05, 8.0);
+        let feedback = (self.phaser_feedback_l + self.phaser_feedback_r) * 0.5 * phaser_feedback;
+        let left_input = distorted + feedback;
+        let right_input = distorted - feedback;
+        let left = Self::phaser_sample(
+            &mut self.phaser_l,
+            left_input,
+            self.phaser_phase,
+            sweep,
+            self.sample_rate,
+        );
+        let right = Self::phaser_sample(
+            &mut self.phaser_r,
+            right_input,
+            (self.phaser_phase + 0.5).fract(),
+            sweep,
+            self.sample_rate,
+        );
+        self.phaser_feedback_l = left;
+        self.phaser_feedback_r = right;
+        self.phaser_phase = (self.phaser_phase + rate / self.sample_rate).fract();
+        (
+            distorted * (1.0 - phaser_mix) + left * phaser_mix,
+            distorted * (1.0 - phaser_mix) + right * phaser_mix,
+        )
+    }
+
+    fn phaser_sample(
+        stages: &mut [EffectAllpass; 4],
+        input: f32,
+        phase: f32,
+        sweep: f32,
+        sample_rate: f32,
+    ) -> f32 {
+        let frequency = 300.0 * (sweep_value(phase) * sweep).exp();
+        let frequency = frequency.clamp(300.0, (sample_rate * 0.45).max(301.0));
+        let tangent = (std::f32::consts::PI * frequency / sample_rate).tan();
+        let coefficient = ((1.0 - tangent) / (1.0 + tangent)).clamp(-0.98, 0.98);
+        let mut value = input;
+        for stage in stages {
+            value = stage.process(value, coefficient);
+        }
+        value
+    }
+
+    pub fn clear(&mut self) {
+        self.distortion_state = 0.0;
+        self.phaser_phase = 0.0;
+        self.phaser_feedback_l = 0.0;
+        self.phaser_feedback_r = 0.0;
+        for stage in self.phaser_l.iter_mut().chain(self.phaser_r.iter_mut()) {
+            stage.clear();
+        }
+    }
+}
+
+fn sweep_value(phase: f32) -> f32 {
+    (std::f32::consts::TAU * phase).sin() * 0.5 + 0.5
+}
+
+impl Default for TrackEffectChain {
+    fn default() -> Self {
+        Self::new(44_100)
     }
 }
 
@@ -1244,5 +1437,61 @@ mod tests {
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| chorus.tap(0.00001))).is_ok()
         );
+    }
+
+    #[test]
+    fn track_effect_chain_bypasses_exactly_and_remains_finite() {
+        let mut chain = TrackEffectChain::new(48_000);
+        chain.configure(TrackEffects::default(), ParameterLocks::default(), 0);
+        for sample in [0.0, 0.1, -0.7, 1.0] {
+            assert_eq!(chain.process(sample), (sample, sample));
+        }
+
+        let effects = TrackEffects {
+            distortion: crate::model::DistortionParameters {
+                drive: crate::model::Percent::new(100).unwrap(),
+                tone: crate::model::Percent::new(100).unwrap(),
+                mix: crate::model::Percent::new(100).unwrap(),
+            },
+            phaser: crate::model::PhaserParameters {
+                rate: crate::model::Percent::new(100).unwrap(),
+                depth: crate::model::Percent::new(100).unwrap(),
+                feedback: crate::model::Percent::new(90).unwrap(),
+                mix: crate::model::Percent::new(100).unwrap(),
+            },
+        };
+        chain.configure(effects, ParameterLocks::default(), 0);
+        let mut stereo = false;
+        for sample in 0..48_000 {
+            let (left, right) = chain.process(if sample == 0 { 1.0 } else { 0.0 });
+            assert!(left.is_finite() && right.is_finite());
+            stereo |= (left - right).abs() > 0.000_001;
+        }
+        assert!(stereo);
+    }
+
+    #[test]
+    fn track_effect_chain_is_deterministic() {
+        let effects = TrackEffects {
+            distortion: crate::model::DistortionParameters {
+                drive: crate::model::Percent::new(60).unwrap(),
+                tone: crate::model::Percent::new(30).unwrap(),
+                mix: crate::model::Percent::new(75).unwrap(),
+            },
+            phaser: crate::model::PhaserParameters {
+                rate: crate::model::Percent::new(25).unwrap(),
+                depth: crate::model::Percent::new(50).unwrap(),
+                feedback: crate::model::Percent::new(80).unwrap(),
+                mix: crate::model::Percent::new(60).unwrap(),
+            },
+        };
+        let mut first = TrackEffectChain::new(8_000);
+        let mut second = TrackEffectChain::new(8_000);
+        first.configure(effects, ParameterLocks::default(), 0);
+        second.configure(effects, ParameterLocks::default(), 0);
+        for sample in 0..10_000 {
+            let input = ((sample as f32) * 0.017).sin() * 0.4;
+            assert_eq!(first.process(input), second.process(input));
+        }
     }
 }

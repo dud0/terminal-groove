@@ -1,4 +1,5 @@
 use super::{AudioCommand, Renderer};
+use crate::model::ParameterLocks;
 use rtrb::Consumer;
 
 impl Renderer {
@@ -19,6 +20,43 @@ impl Renderer {
         );
         self.reverb
             .set_pre_delay_smoothed(self.project.globals.reverb_pre_delay_ms, smoothing_samples);
+        for track in 0..super::TRACK_COUNT {
+            self.effects[track].configure(
+                self.project.tracks[track].effects,
+                ParameterLocks::default(),
+                smoothing_samples,
+            );
+            self.preview_effects[track].configure(
+                self.project.tracks[track].effects,
+                ParameterLocks::default(),
+                smoothing_samples,
+            );
+        }
+    }
+
+    pub(super) fn configure_track_effects(
+        &mut self,
+        track: usize,
+        locks: ParameterLocks,
+        smoothing_samples: u32,
+        preview: bool,
+    ) {
+        let effects = self.project.tracks[track].effects;
+        if preview {
+            self.preview_effects[track].configure(effects, locks, smoothing_samples);
+        } else {
+            self.effects[track].configure(effects, locks, smoothing_samples);
+        }
+    }
+
+    pub(super) fn clear_track_effects(&mut self) {
+        for effect in self
+            .effects
+            .iter_mut()
+            .chain(self.preview_effects.iter_mut())
+        {
+            effect.clear();
+        }
     }
     pub(super) fn update_mutes(&mut self, immediate: bool) {
         let smoothing = if immediate {
