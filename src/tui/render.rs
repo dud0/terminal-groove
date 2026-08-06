@@ -1,6 +1,7 @@
 use super::overlays::{
     popup, popup_at, quit_popup_rect, render_chord_popup, render_generator_popup, render_lfo_popup,
-    render_lfo_selector, render_pattern_popup, render_trigger_popup, tempo_popup_rect,
+    render_lfo_selector, render_pattern_popup, render_trigger_popup, swing_popup_rect,
+    tempo_popup_rect,
 };
 use super::{
     controller::{global_name, resolved_path},
@@ -76,7 +77,7 @@ const HELP_TEXT: &str =
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
 NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
-           Shift+1..6 select track · Enter toggle/insert · Backspace/Delete clear
+           ~ select global row · Shift+1..6 select track · Enter toggle/insert · Backspace/Delete clear
            g pattern generator · o audition selected step
 EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
                  A accent/default · Shift+G Bass slide · Shift+T condition/retrigger · Shift+S swing
@@ -1669,9 +1670,9 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         }
         Mode::ChordEdit { shape } => render_chord_popup(f, chunks[3], *shape, a),
         Mode::TriggerEdit { field } => render_trigger_popup(f, area, a, *field),
-        Mode::SwingEdit => popup(
+        Mode::SwingEdit => popup_at(
             f,
-            area,
+            swing_popup_rect(area),
             "Track swing",
             &format!(
                 "{}: {}\n\n[↑/↓] ±1%   [Shift+↑/↓] ±10%\n0–75% · applies to offbeat sixteenths",

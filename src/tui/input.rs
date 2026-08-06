@@ -128,6 +128,10 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         }
         return Ok(());
     }
+    if matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_)) && global_jump(k) {
+        select_global(a);
+        return Ok(());
+    }
     if matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_))
         && let Some(track) = track_jump_index(k)
     {
@@ -373,6 +377,17 @@ pub(super) fn track_jump_index(k: KeyEvent) -> Option<usize> {
             .map(|track| track as usize - 1);
     }
     None
+}
+
+pub(super) fn global_jump(k: KeyEvent) -> bool {
+    matches!(k.code, KeyCode::Char('~'))
+}
+
+pub(super) fn select_global(a: &mut App) {
+    a.editor.end_coalescing();
+    a.row = 0;
+    a.scope = Scope::Base;
+    a.mode = Mode::Navigation;
 }
 
 pub(super) fn select_track(a: &mut App, track: usize) {
@@ -1245,7 +1260,6 @@ pub(super) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
             return Ok(true);
         }
     };
-    let direction: i16 = if k.code == KeyCode::Down { -1 } else { 1 };
     let mut changed = false;
     match field {
         TriggerField::Mode if matches!(k.code, KeyCode::Up | KeyCode::Down) => {
@@ -1264,14 +1278,16 @@ pub(super) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
                 TriggerCondition::Cycle { .. } => 1,
                 TriggerCondition::Chance { .. } => 2,
             };
-            let next = (index as i16 + direction).rem_euclid(modes.len() as i16) as usize;
+            let next = lfo_choice_index(index, modes.len(), k.code);
             changed = apply(a, audio, |editor| {
                 editor.set_trigger_condition(track, step, modes[next])
             });
         }
         TriggerField::CyclePosition if matches!(k.code, KeyCode::Up | KeyCode::Down) => {
             if let TriggerCondition::Cycle { position, length } = condition {
-                let position = (position as i16 + direction).clamp(1, length as i16) as u8;
+                let index = usize::from(position - 1);
+                let next = lfo_choice_index(index, usize::from(length), k.code);
+                let position = next as u8 + 1;
                 changed = apply(a, audio, |editor| {
                     editor.set_trigger_condition(
                         track,
@@ -1283,7 +1299,9 @@ pub(super) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
         }
         TriggerField::CycleLength if matches!(k.code, KeyCode::Up | KeyCode::Down) => {
             if let TriggerCondition::Cycle { position, length } = condition {
-                let length = (length as i16 + direction).clamp(2, 4) as u8;
+                let index = usize::from(length - 2);
+                let next = lfo_choice_index(index, 3, k.code);
+                let length = next as u8 + 2;
                 changed = apply(a, audio, |editor| {
                     editor.set_trigger_condition(
                         track,
@@ -1298,6 +1316,7 @@ pub(super) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
         }
         TriggerField::Chance => {
             if let TriggerCondition::Chance { probability } = condition {
+                let direction: i16 = if k.code == KeyCode::Down { -1 } else { 1 };
                 let value = match k.code {
                     KeyCode::Up | KeyCode::Down => probability.saturating_add(direction),
                     KeyCode::Char(c) => crate::reducer::percentage_key(c).unwrap_or(probability),
@@ -1316,7 +1335,9 @@ pub(super) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
         }
         TriggerField::Retrigger if matches!(k.code, KeyCode::Up | KeyCode::Down) => {
             let count = a.editor.retrigger_count_value(track, step).unwrap_or(1);
-            let count = (count as i16 + direction).clamp(1, 4) as u8;
+            let index = usize::from(count - 1);
+            let next = lfo_choice_index(index, 4, k.code);
+            let count = next as u8 + 1;
             changed = apply(a, audio, |editor| {
                 editor.set_retrigger_count(track, step, count)
             });

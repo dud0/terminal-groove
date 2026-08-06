@@ -80,22 +80,24 @@ use controller::{
 #[allow(unused_imports)]
 use input::{
     adjacent_pattern_in_count, apply, change_generator_value, coalesce_key, commit_pattern,
-    duplicate_selected_track, enter_parameter_edit, flipped_waveform, handle_chord_key,
-    handle_generator_dialog, handle_key, handle_lfo_key, handle_parameter_key,
+    duplicate_selected_track, enter_parameter_edit, flipped_waveform, global_jump,
+    handle_chord_key, handle_generator_dialog, handle_key, handle_lfo_key, handle_parameter_key,
     handle_pattern_dialog, handle_swing_key, handle_track_length_input, handle_trigger_key,
     lfo_choice_index, move_chord_editor_step, move_generator_field, move_parameter_editor,
     move_step, move_step_bank, move_step_page, move_step_vertical, normalize_cursor,
     open_chord_editor, open_lfo_editor, parameter_edit_passthrough, parameter_shortcut,
-    parameter_supports_direct_percentage, pattern_edit_at, select_track, set_lfo_config,
-    set_parameter, set_selected_track_length, switch_parameter_editor, track_jump_index,
+    parameter_supports_direct_percentage, pattern_edit_at, select_global, select_track,
+    set_lfo_config, set_parameter, set_selected_track_length, switch_parameter_editor,
+    track_jump_index,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
 use overlays::{
-    lfo_inactive_style, lfo_popup_rect, pattern_is_empty, popup, popup_at, popup_rect,
-    quit_popup_rect, render_chord_control, render_chord_popup, render_generator_popup,
+    generator_popup_rect, lfo_inactive_style, lfo_popup_rect, pattern_is_empty, popup, popup_at,
+    popup_rect, quit_popup_rect, render_chord_control, render_chord_popup, render_generator_popup,
     render_lfo_control, render_lfo_fader, render_lfo_popup, render_lfo_selector, render_lfo_switch,
-    render_pattern_popup, render_trigger_popup, tempo_popup_rect,
+    render_pattern_popup, render_trigger_popup, swing_popup_rect, tempo_popup_rect,
+    trigger_popup_rect,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -152,6 +154,21 @@ mod tests {
             .content
             .iter()
             .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    fn rendered_lines(app: &App, width: u16, height: u16) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_with_device(frame, app, "null"))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(usize::from(width))
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
             .collect()
     }
 
@@ -376,6 +393,52 @@ mod tests {
     }
 
     #[test]
+    fn trigger_dialog_renders_horizontal_cards() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: TriggerCondition::Cycle {
+                position: 1,
+                length: 2,
+            },
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        let mut app = App::new(project, None);
+        app.row = 1;
+        app.mode = Mode::TriggerEdit {
+            field: TriggerField::CycleLength,
+        };
+
+        let lines = rendered_lines(&app, 120, 34);
+        assert!(lines.iter().any(|line| {
+            ["Mode", "Phase", "Length", "Chance", "Retrigger"]
+                .iter()
+                .all(|label| line.contains(label))
+        }));
+        let screen = lines.join("");
+        assert!(screen.contains("Trigger · Step 1"));
+        assert!(screen.contains("[←/→] select"));
+        assert!(screen.contains("50%"));
+        assert!(screen.contains("···"));
+    }
+
+    #[test]
+    fn trigger_selector_arrows_follow_the_visual_order() {
+        let choices = ["Always", "Cycle", "Chance"];
+        assert_eq!(
+            choices[lfo_choice_index(1, choices.len(), KeyCode::Up)],
+            "Always"
+        );
+        assert_eq!(
+            choices[lfo_choice_index(1, choices.len(), KeyCode::Down)],
+            "Chance"
+        );
+        assert_eq!(lfo_choice_index(0, choices.len(), KeyCode::Up), 0);
+        assert_eq!(lfo_choice_index(2, choices.len(), KeyCode::Down), 2);
+    }
+
+    #[test]
     fn shifted_track_numbers_select_the_expected_track() {
         for (key, track) in ('1'..='6').zip(0..TRACK_COUNT) {
             assert_eq!(
@@ -395,6 +458,28 @@ mod tests {
             track_jump_index(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::SHIFT)),
             Some(0)
         );
+    }
+
+    #[test]
+    fn tilde_global_jump_selects_the_global_row() {
+        assert!(global_jump(KeyEvent::new(
+            KeyCode::Char('~'),
+            KeyModifiers::SHIFT
+        )));
+        assert!(!global_jump(KeyEvent::new(
+            KeyCode::Char('`'),
+            KeyModifiers::SHIFT
+        )));
+
+        let mut app = App::new(Project::new(), None);
+        app.row = 4;
+        app.scope = Scope::Lock;
+        app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
+        select_global(&mut app);
+
+        assert_eq!(app.row, 0);
+        assert_eq!(app.scope, Scope::Base);
+        assert_eq!(app.mode, Mode::Navigation);
     }
 
     #[test]
@@ -801,6 +886,56 @@ mod tests {
         assert_eq!(
             lfo_popup_rect(Rect::new(0, 0, 200, 50)),
             Rect::new(54, 25, 92, 20)
+        );
+    }
+
+    #[test]
+    fn compact_dialog_rectangles_fit_their_content() {
+        let area = Rect::new(0, 0, 120, 34);
+        assert_eq!(trigger_popup_rect(area), Rect::new(14, 9, 92, 20));
+        assert_eq!(generator_popup_rect(area), Rect::new(31, 11, 58, 12));
+        assert_eq!(swing_popup_rect(area), Rect::new(36, 14, 48, 6));
+
+        assert_eq!(
+            trigger_popup_rect(Rect::new(0, 0, 200, 50)),
+            Rect::new(54, 25, 92, 20)
+        );
+        assert_eq!(
+            generator_popup_rect(Rect::new(0, 0, 200, 50)),
+            Rect::new(71, 19, 58, 12)
+        );
+        assert_eq!(
+            swing_popup_rect(Rect::new(0, 0, 200, 50)),
+            Rect::new(76, 22, 48, 6)
+        );
+    }
+
+    #[test]
+    fn compact_swing_and_generator_dialogs_render_without_wrapping() {
+        let mut app = App::new(Project::new(), None);
+        app.row = 1;
+        app.mode = Mode::SwingEdit;
+        let swing = rendered_lines(&app, 120, 34);
+        assert!(
+            swing
+                .iter()
+                .any(|line| line.contains("0–75% · applies to offbeat sixteenths"))
+        );
+
+        app.mode = Mode::GeneratorDialog(GeneratorDialog {
+            target: GeneratorTarget::WholePattern,
+            track: 0,
+            seed: "123".into(),
+            density: Percent::new(48).unwrap(),
+            ties: Percent::new(18).unwrap(),
+            accents: Percent::new(24).unwrap(),
+            field: 3,
+        });
+        let generator = rendered_lines(&app, 120, 34);
+        assert!(
+            generator
+                .iter()
+                .any(|line| line.contains("[↑/↓]/[Tab] field  [←→] change  type seed"))
         );
     }
 

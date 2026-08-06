@@ -32,59 +32,172 @@ pub(super) fn render_trigger_popup(
         TriggerCondition::Chance { probability } => (1, 2, probability.get()),
         TriggerCondition::Always => (1, 2, 50),
     };
-    let mode = match condition {
-        TriggerCondition::Always => "Always",
-        TriggerCondition::Cycle { .. } => "Cycle",
-        TriggerCondition::Chance { .. } => "Chance",
-    };
-    let fields = [
-        (TriggerField::Mode, format!("Mode: {mode}"), false),
-        (
-            TriggerField::CyclePosition,
-            format!("Phase: {cycle_position}"),
-            !matches!(condition, TriggerCondition::Cycle { .. }),
-        ),
-        (
-            TriggerField::CycleLength,
-            format!("Length: {cycle_length}"),
-            !matches!(condition, TriggerCondition::Cycle { .. }),
-        ),
-        (
-            TriggerField::Chance,
-            format!("Chance: {chance}%"),
-            !matches!(condition, TriggerCondition::Chance { .. }),
-        ),
-        (
-            TriggerField::Retrigger,
-            format!("Retrigger: {count}"),
-            false,
-        ),
-    ];
-    let text = fields
-        .into_iter()
-        .map(|(candidate, value, disabled)| {
-            let marker = if candidate == field { "> " } else { "  " };
-            let suffix = if disabled { " (inactive)" } else { "" };
-            Line::from(Span::styled(
-                format!("{marker}{value}{suffix}"),
-                if disabled {
-                    Style::default().fg(Color::DarkGray)
-                } else if candidate == field {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                },
-            ))
-        })
-        .collect::<Vec<_>>();
-    let popup_area = lfo_popup_rect(area);
+    let popup_area = trigger_popup_rect(area);
     f.render_widget(Clear, popup_area);
+    let panel = Block::bordered().title(format!("Trigger · Step {}", a.step + 1));
+    let inner = panel.inner(popup_area);
+    f.render_widget(panel, popup_area);
+
+    let controls_area = Rect {
+        height: inner.height.saturating_sub(3),
+        ..inner
+    };
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1, 5); 5])
+        .split(controls_area);
+    let mode_choices = ["Always", "Cycle", "Chance"];
+    let mode_index = match condition {
+        TriggerCondition::Always => 0,
+        TriggerCondition::Cycle { .. } => 1,
+        TriggerCondition::Chance { .. } => 2,
+    };
+    render_trigger_selector(
+        f,
+        columns[0],
+        "Mode",
+        &mode_choices,
+        mode_index,
+        field == TriggerField::Mode,
+        false,
+    );
+
+    let phase_choices = (1..=cycle_length)
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    render_trigger_selector(
+        f,
+        columns[1],
+        "Phase",
+        &phase_choices,
+        usize::from(cycle_position - 1),
+        field == TriggerField::CyclePosition,
+        !matches!(condition, TriggerCondition::Cycle { .. }),
+    );
+
+    let length_choices = ["2", "3", "4"];
+    render_trigger_selector(
+        f,
+        columns[2],
+        "Length",
+        &length_choices,
+        usize::from(cycle_length - 2),
+        field == TriggerField::CycleLength,
+        !matches!(condition, TriggerCondition::Cycle { .. }),
+    );
+
+    render_trigger_fader(
+        f,
+        columns[3],
+        "Chance",
+        chance,
+        field == TriggerField::Chance,
+        !matches!(condition, TriggerCondition::Chance { .. }),
+    );
+
+    let retrigger_choices = ["1", "2", "3", "4"];
+    render_trigger_selector(
+        f,
+        columns[4],
+        "Retrigger",
+        &retrigger_choices,
+        usize::from(count - 1),
+        field == TriggerField::Retrigger,
+        false,
+    );
     f.render_widget(
-        Paragraph::new(text)
-            .block(Block::bordered().title(format!("Trigger · Step {}", a.step + 1))),
-        popup_area,
+        Paragraph::new(vec![
+            Line::from("[←/→] select   [↑/↓] adjust   [`/1–9/0] chance"),
+            Line::from("[Enter/Esc] close"),
+        ])
+        .alignment(Alignment::Center),
+        Rect {
+            x: inner.x,
+            y: inner.y + inner.height.saturating_sub(2),
+            width: inner.width,
+            height: 2.min(inner.height),
+        },
+    );
+}
+
+fn render_trigger_card(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    label: &str,
+    active: bool,
+    disabled: bool,
+) -> (Rect, Style) {
+    let accent = if disabled {
+        Color::DarkGray
+    } else {
+        Color::LightCyan
+    };
+    let style = if active {
+        Style::default()
+            .fg(accent)
+            .reversed()
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(accent).add_modifier(Modifier::BOLD)
+    };
+    let block = (if active {
+        Block::bordered()
+            .border_type(BorderType::Double)
+            .border_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .style(Style::default().reversed())
+    } else {
+        Block::bordered().border_style(Style::default().fg(accent))
+    })
+    .title(Line::from(Span::styled(label, style)));
+    let content = block.inner(area);
+    f.render_widget(block, area);
+    (content, style)
+}
+
+fn render_trigger_selector<T: AsRef<str>>(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    label: &str,
+    choices: &[T],
+    selected: usize,
+    active: bool,
+    disabled: bool,
+) {
+    let (content, style) = render_trigger_card(f, area, label, active, disabled);
+    render_lfo_selector(f, content, choices, selected, style);
+}
+
+fn render_trigger_fader(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    label: &str,
+    value: u8,
+    active: bool,
+    disabled: bool,
+) {
+    let (content, style) = render_trigger_card(f, area, label, active, disabled);
+    render_centered(
+        f,
+        &format!("{value}%"),
+        Rect {
+            height: 1.min(content.height),
+            ..content
+        },
+        style,
+    );
+    render_lfo_fader(
+        f,
+        Rect {
+            y: content.y + 1,
+            height: content.height.saturating_sub(1),
+            ..content
+        },
+        value,
+        style,
     );
 }
 
@@ -367,7 +480,7 @@ pub(super) fn render_generator_popup(
             Line::from("[Enter] apply  [Esc] cancel"),
         ])
         .collect::<Vec<_>>();
-    let popup_area = popup_rect(area);
+    let popup_area = generator_popup_rect(area);
     f.render_widget(Clear, popup_area);
     f.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false }).block(
@@ -769,6 +882,29 @@ pub(super) fn lfo_popup_rect(area: Rect) -> Rect {
         width,
         height,
     }
+}
+
+fn compact_popup_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
+}
+
+pub(super) fn trigger_popup_rect(area: Rect) -> Rect {
+    lfo_popup_rect(area)
+}
+
+pub(super) fn generator_popup_rect(area: Rect) -> Rect {
+    compact_popup_rect(area, 58, 12)
+}
+
+pub(super) fn swing_popup_rect(area: Rect) -> Rect {
+    compact_popup_rect(area, 48, 6)
 }
 
 pub(super) fn popup_rect(area: Rect) -> Rect {
