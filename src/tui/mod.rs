@@ -1630,7 +1630,7 @@ mod tests {
         std::fs::write(directory.path().join("zeta"), b"legacy").unwrap();
         std::fs::write(directory.path().join("alpha.groove.json"), b"current").unwrap();
         std::fs::write(
-            directory.path().join("ignored.groove.json.tmp"),
+            directory.path().join(".song.groove.json.1234.tmp"),
             b"temporary",
         )
         .unwrap();

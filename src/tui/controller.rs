@@ -18,7 +18,21 @@ use std::{
 
 pub(super) const PROJECT_DIRECTORY_NAME: &str = ".projects";
 pub(super) const PROJECT_EXTENSION: &str = ".groove.json";
-const PROJECT_TEMP_SUFFIX: &str = ".groove.json.tmp";
+
+fn is_atomic_save_temporary(name: &str) -> bool {
+    let Some(name) = name.strip_prefix('.') else {
+        return false;
+    };
+    let Some(name) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    let Some((project_name, pid)) = name.rsplit_once('.') else {
+        return false;
+    };
+    project_name.ends_with(PROJECT_EXTENSION)
+        && !pid.is_empty()
+        && pid.chars().all(|character| character.is_ascii_digit())
+}
 
 pub(super) fn project_directory() -> Result<PathBuf> {
     Ok(std::env::current_dir()?.join(PROJECT_DIRECTORY_NAME))
@@ -44,7 +58,7 @@ pub(super) fn list_projects(directory: &Path) -> io::Result<Vec<PathBuf>> {
         let is_temporary = path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(PROJECT_TEMP_SUFFIX));
+            .is_some_and(is_atomic_save_temporary);
         if !is_temporary {
             projects.push(path);
         }
