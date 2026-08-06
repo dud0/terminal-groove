@@ -295,6 +295,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `.` | Stop, reset, and clear effect tails |
 | Anywhere | `Ctrl+P` | Open the dynamic pattern dialog |
 | Anywhere | `Ctrl+N` | Create a new untitled project, with dirty confirmation |
+| Anywhere | `g` | Open the pattern-idea generator |
 | Pattern dialog | Left/right, `Home`, `End` | Move the pattern cursor |
 | Pattern dialog | `Enter` | Select or queue the cursor pattern and close |
 | Pattern dialog | `N` / `D` | Insert an empty pattern / duplicate the cursor pattern |
@@ -370,6 +371,10 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
 - `A` toggles accent immediately on a trigger or note, or toggles the selected track's persisted input accent default when the step is empty without creating an event. `Shift+G` toggles slide on a Bass note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. These edits are undoable; direct accent editing remains invalid on ties.
+
+The pattern-idea generator opens with `g` and is session-only; its settings are never written to project JSON. Its fields, in order, are `Target`, `Track`, `Seed`, `Density`, `Low octave`, `High octave`, `Ties`, and `Accents`. Up/down moves between fields and clamps at the first or last field; Tab and BackTab move through the same eight-field order and wrap. Target and Track use left/right, the Track selector wraps through all six tracks, and Seed accepts digits with Backspace (left also removes its last digit). Percentage fields change by 5 points and clamp to 0–100%. Low octave and High octave use left/right one octave at a time: Low is clamped to 0 through High, while High is clamped to Low through 7. Enter applies the generator and Esc closes it; range edits do not alter existing events. Defaults are the deterministic seed, 48% density, O2–O6, 18% ties, and 24% accents.
+
+The generator popup is a centered 58×13 rectangle at the standard terminal size and is capped to smaller terminals. The inclusive octave range controls Bass and Lead note octaves. Chord note roots are independently randomized across that same inclusive range; chord shape tones may then extend above the stored root octave according to the selected shape and inversion.
 
 ### 5.4 Audition behavior
 

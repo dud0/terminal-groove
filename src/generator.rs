@@ -45,6 +45,14 @@ pub struct Generated {
     pub inserted: usize,
 }
 
+const MAX_OCTAVE: u8 = 7;
+
+fn normalized_octave_range(config: Config) -> (u8, u8) {
+    let low = config.range_low.min(MAX_OCTAVE);
+    let high = config.range_high.min(MAX_OCTAVE).max(low);
+    (low, high)
+}
+
 #[derive(Clone, Copy)]
 struct Rng(u64);
 impl Rng {
@@ -70,6 +78,7 @@ impl Rng {
 
 pub fn generate(project: &Project, config: Config) -> Generated {
     let mut rng = Rng(config.seed);
+    let (range_low, range_high) = normalized_octave_range(config);
     let mut tracks: Vec<Vec<Step>> = project.tracks.iter().map(|t| t.steps.clone()).collect();
     let mut inserted = 0;
     let selected = |index: usize| {
@@ -90,8 +99,8 @@ pub fn generate(project: &Project, config: Config) -> Generated {
                 &mut rng,
                 config.density,
                 config.accents,
-                config.range_low,
-                config.range_high,
+                range_low,
+                range_high,
                 None,
             );
         }
@@ -132,8 +141,8 @@ pub fn generate(project: &Project, config: Config) -> Generated {
             &mut rng,
             config.density,
             config.accents,
-            config.range_low,
-            config.range_high,
+            range_low,
+            range_high,
             rhythm,
         );
         if matches!(
@@ -190,7 +199,7 @@ fn fill_track(
             },
             TrackKind::Bass => StepEvent::BassNote {
                 degree: rng.range(1, 5),
-                octave: rng.range(range_low.min(7), range_high.min(7).max(range_low.min(7))),
+                octave: rng.range(range_low, range_high),
                 accent,
                 slide: false,
                 condition: TriggerCondition::Always,
@@ -199,7 +208,7 @@ fn fill_track(
             },
             TrackKind::Chord => StepEvent::Note {
                 degree: rng.range(1, 7),
-                octave: range_low.min(7),
+                octave: rng.range(range_low, range_high),
                 accent,
                 chord_shape: None,
                 arpeggio: ArpeggioConfig::default(),
@@ -209,7 +218,7 @@ fn fill_track(
             },
             TrackKind::Lead => StepEvent::Note {
                 degree: rng.range(1, 8),
-                octave: rng.range(range_low.min(7), range_high.min(7).max(range_low.min(7))),
+                octave: rng.range(range_low, range_high),
                 accent,
                 chord_shape: None,
                 arpeggio: ArpeggioConfig::default(),
@@ -307,5 +316,81 @@ mod tests {
                 .iter()
                 .all(|s| s.iter().all(Option::is_none))
         );
+    }
+
+    fn generated_octaves(steps: &[Step]) -> Vec<u8> {
+        steps
+            .iter()
+            .filter_map(|event| match event {
+                Some(StepEvent::BassNote { octave, .. } | StepEvent::Note { octave, .. }) => {
+                    Some(*octave)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn custom_octave_bounds_are_inclusive_for_pitched_tracks() {
+        let p = Project::new();
+        let result = generate(
+            &p,
+            Config {
+                density: Percent::new(100).unwrap(),
+                range_low: 4,
+                range_high: 5,
+                ties: Percent::ZERO,
+                ..Config::default()
+            },
+        );
+
+        for track in [3, 4, 5] {
+            let octaves = generated_octaves(&result.tracks[track]);
+            assert!(!octaves.is_empty());
+            assert!(octaves.iter().all(|octave| (4..=5).contains(octave)));
+        }
+    }
+
+    #[test]
+    fn collapsed_octave_range_generates_only_that_octave() {
+        let p = Project::new();
+        let result = generate(
+            &p,
+            Config {
+                density: Percent::new(100).unwrap(),
+                range_low: 3,
+                range_high: 3,
+                ties: Percent::ZERO,
+                ..Config::default()
+            },
+        );
+
+        for track in [3, 4, 5] {
+            assert!(
+                generated_octaves(&result.tracks[track])
+                    .iter()
+                    .all(|octave| *octave == 3)
+            );
+        }
+    }
+
+    #[test]
+    fn chord_roots_are_randomized_within_the_configured_range() {
+        let mut p = Project::new();
+        p.tracks[4].steps.resize(64, None);
+        let result = generate(
+            &p,
+            Config {
+                target: Target::Track(4),
+                density: Percent::new(100).unwrap(),
+                range_low: 2,
+                range_high: 6,
+                ties: Percent::ZERO,
+                ..Config::default()
+            },
+        );
+        let octaves = generated_octaves(&result.tracks[4]);
+        assert!(octaves.iter().all(|octave| (2..=6).contains(octave)));
+        assert!(octaves.windows(2).any(|pair| pair[0] != pair[1]));
     }
 }

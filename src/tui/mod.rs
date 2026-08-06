@@ -83,15 +83,15 @@ use controller::{
 use input::{
     active_parameter_shortcut, adjacent_pattern_in_count, apply, change_generator_value,
     clamp_parameter_percentage, coalesce_key, commit_pattern, duplicate_selected_track,
-    enter_parameter_edit, flipped_waveform, global_jump, handle_chord_key, handle_generator_dialog,
-    handle_key, handle_lfo_key, handle_parameter_key, handle_pattern_dialog, handle_swing_key,
-    handle_track_length_input, handle_trigger_key, lfo_choice_index, move_chord_editor_step,
-    move_generator_field, move_parameter_editor, move_step, move_step_bank, move_step_page,
-    move_step_vertical, normalize_cursor, open_chord_editor, open_lfo_editor,
-    parameter_edit_passthrough, parameter_shortcut, parameter_supports_direct_percentage,
-    parameter_upper_bound, pattern_edit_at, select_global, select_track, set_lfo_config,
-    set_parameter, set_selected_track_length, switch_parameter_editor, toggle_parameter_bank,
-    track_jump_index,
+    enter_parameter_edit, flipped_waveform, generator_config, global_jump, handle_chord_key,
+    handle_generator_dialog, handle_key, handle_lfo_key, handle_parameter_key,
+    handle_pattern_dialog, handle_swing_key, handle_track_length_input, handle_trigger_key,
+    lfo_choice_index, move_chord_editor_step, move_generator_field, move_generator_tab,
+    move_parameter_editor, move_step, move_step_bank, move_step_page, move_step_vertical,
+    normalize_cursor, open_chord_editor, open_lfo_editor, parameter_edit_passthrough,
+    parameter_shortcut, parameter_supports_direct_percentage, parameter_upper_bound,
+    pattern_edit_at, select_global, select_track, set_lfo_config, set_parameter,
+    set_selected_track_length, switch_parameter_editor, toggle_parameter_bank, track_jump_index,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -399,14 +399,19 @@ mod tests {
         assert_eq!(move_generator_field(0, true), 0);
         assert_eq!(move_generator_field(0, false), 1);
         assert_eq!(move_generator_field(4, false), 5);
-        assert_eq!(move_generator_field(5, false), 5);
-        assert_eq!(move_generator_field(5, true), 4);
+        assert_eq!(move_generator_field(6, false), 7);
+        assert_eq!(move_generator_field(7, false), 7);
+        assert_eq!(move_generator_field(7, true), 6);
+        assert_eq!(move_generator_tab(7, false), 0);
+        assert_eq!(move_generator_tab(0, true), 7);
 
         let mut dialog = GeneratorDialog {
             target: GeneratorTarget::WholePattern,
             track: 0,
             seed: "123".into(),
             density: Percent::new(48).unwrap(),
+            range_low: 2,
+            range_high: 6,
             ties: Percent::new(18).unwrap(),
             accents: Percent::new(24).unwrap(),
             field: 3,
@@ -417,9 +422,34 @@ mod tests {
         assert_eq!(dialog.density, Percent::new(48).unwrap());
 
         dialog.field = 4;
+        change_generator_value(&mut dialog, true);
+        assert_eq!(dialog.range_low, 3);
+        change_generator_value(&mut dialog, false);
+        assert_eq!(dialog.range_low, 2);
+        dialog.range_low = 0;
+        change_generator_value(&mut dialog, false);
+        assert_eq!(dialog.range_low, 0);
+        dialog.range_low = 6;
+        change_generator_value(&mut dialog, true);
+        assert_eq!(dialog.range_low, 6);
+
+        dialog.field = 5;
+        change_generator_value(&mut dialog, false);
+        assert_eq!(dialog.range_high, 6);
+        change_generator_value(&mut dialog, true);
+        assert_eq!(dialog.range_high, 7);
+        change_generator_value(&mut dialog, true);
+        assert_eq!(dialog.range_high, 7);
+        dialog.range_high = 2;
+        change_generator_value(&mut dialog, false);
+        assert_eq!(dialog.range_high, 6);
+
+        dialog.range_low = 2;
+        dialog.range_high = 6;
+        dialog.field = 6;
         change_generator_value(&mut dialog, false);
         assert_eq!(dialog.ties, Percent::new(13).unwrap());
-        dialog.field = 5;
+        dialog.field = 7;
         dialog.accents = Percent::new(100).unwrap();
         change_generator_value(&mut dialog, true);
         assert_eq!(dialog.accents, Percent::new(100).unwrap());
@@ -434,6 +464,25 @@ mod tests {
     }
 
     #[test]
+    fn generator_dialog_submission_preserves_octave_bounds() {
+        let dialog = GeneratorDialog {
+            target: GeneratorTarget::WholePattern,
+            track: 0,
+            seed: "123".into(),
+            density: Percent::new(48).unwrap(),
+            range_low: 1,
+            range_high: 5,
+            ties: Percent::new(18).unwrap(),
+            accents: Percent::new(24).unwrap(),
+            field: 4,
+        };
+        let config = generator_config(&dialog);
+        assert_eq!(config.range_low, 1);
+        assert_eq!(config.range_high, 5);
+        assert_eq!(config.seed, 123);
+    }
+
+    #[test]
     fn generator_dialog_highlights_the_selected_field() {
         let mut app = App::new(Project::new(), None);
         app.mode = Mode::GeneratorDialog(GeneratorDialog {
@@ -441,13 +490,16 @@ mod tests {
             track: 0,
             seed: "123".into(),
             density: Percent::new(48).unwrap(),
+            range_low: 2,
+            range_high: 6,
             ties: Percent::new(18).unwrap(),
             accents: Percent::new(24).unwrap(),
             field: 4,
         });
 
         let screen = rendered(&app, 120, 34);
-        assert!(screen.contains("> Ties"));
+        assert!(screen.contains("> Low octave O2"));
+        assert!(screen.contains("High octave O6"));
         assert!(screen.contains("[↑/↓]/[Tab] field"));
         assert!(!screen.contains("> Target"));
     }
@@ -980,7 +1032,7 @@ mod tests {
     fn compact_dialog_rectangles_fit_their_content() {
         let area = Rect::new(0, 0, 120, 34);
         assert_eq!(trigger_popup_rect(area), Rect::new(14, 9, 92, 20));
-        assert_eq!(generator_popup_rect(area), Rect::new(31, 11, 58, 12));
+        assert_eq!(generator_popup_rect(area), Rect::new(31, 10, 58, 13));
         assert_eq!(swing_popup_rect(area), Rect::new(36, 14, 48, 6));
 
         assert_eq!(
@@ -989,7 +1041,11 @@ mod tests {
         );
         assert_eq!(
             generator_popup_rect(Rect::new(0, 0, 200, 50)),
-            Rect::new(71, 19, 58, 12)
+            Rect::new(71, 18, 58, 13)
+        );
+        assert_eq!(
+            generator_popup_rect(Rect::new(0, 0, 40, 10)),
+            Rect::new(0, 0, 40, 10)
         );
         assert_eq!(
             swing_popup_rect(Rect::new(0, 0, 200, 50)),
@@ -1014,6 +1070,8 @@ mod tests {
             track: 0,
             seed: "123".into(),
             density: Percent::new(48).unwrap(),
+            range_low: 2,
+            range_high: 6,
             ties: Percent::new(18).unwrap(),
             accents: Percent::new(24).unwrap(),
             field: 3,
@@ -1024,6 +1082,7 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("[↑/↓]/[Tab] field  [←→] change  type seed"))
         );
+        let _ = rendered_lines(&app, 40, 10);
     }
 
     #[test]

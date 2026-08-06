@@ -181,6 +181,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         }
         KeyCode::Char('g') => {
             let track = a.row.saturating_sub(1).min(TRACK_COUNT - 1);
+            let defaults = GeneratorConfig::default();
             a.mode = Mode::GeneratorDialog(GeneratorDialog {
                 target: if a.row == 0 {
                     GeneratorTarget::WholePattern
@@ -188,10 +189,12 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                     GeneratorTarget::Track(track)
                 },
                 track,
-                seed: GeneratorConfig::default().seed.to_string(),
-                density: GeneratorConfig::default().density,
-                ties: GeneratorConfig::default().ties,
-                accents: GeneratorConfig::default().accents,
+                seed: defaults.seed.to_string(),
+                density: defaults.density,
+                range_low: defaults.range_low,
+                range_high: defaults.range_high,
+                ties: defaults.ties,
+                accents: defaults.accents,
                 field: 0,
             });
             a.status = "Generator ready".into();
@@ -529,8 +532,8 @@ pub(super) fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEven
     };
     match k.code {
         KeyCode::Esc => a.mode = Mode::Navigation,
-        KeyCode::Tab => dialog.field = (dialog.field + 1) % 6,
-        KeyCode::BackTab => dialog.field = (dialog.field + 5) % 6,
+        KeyCode::Tab => dialog.field = move_generator_tab(dialog.field, false),
+        KeyCode::BackTab => dialog.field = move_generator_tab(dialog.field, true),
         KeyCode::Up | KeyCode::Down => {
             dialog.field = move_generator_field(dialog.field, k.code == KeyCode::Up);
         }
@@ -552,23 +555,15 @@ pub(super) fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEven
             dialog.seed.pop();
         }
         KeyCode::Right if dialog.field == 2 => {}
-        KeyCode::Left | KeyCode::Right if (3..=5).contains(&dialog.field) => {
+        KeyCode::Left | KeyCode::Right if (4..=5).contains(&dialog.field) => {
+            change_generator_value(dialog, k.code == KeyCode::Right);
+        }
+        KeyCode::Left | KeyCode::Right if (3..=7).contains(&dialog.field) => {
             change_generator_value(dialog, k.code == KeyCode::Right);
         }
         KeyCode::Enter => {
-            let seed = dialog
-                .seed
-                .parse::<u64>()
-                .unwrap_or(GeneratorConfig::default().seed);
-            let config = GeneratorConfig {
-                target: dialog.target,
-                seed,
-                density: dialog.density,
-                range_low: 2,
-                range_high: 6,
-                ties: dialog.ties,
-                accents: dialog.accents,
-            };
+            let config = generator_config(dialog);
+            let seed = config.seed;
             if audio.available_commands() == 0 {
                 a.status = "Audio command queue full; generation rejected".into();
             } else {
@@ -592,7 +587,32 @@ pub(super) fn move_generator_field(field: usize, up: bool) -> usize {
     if up {
         field.saturating_sub(1)
     } else {
-        field.saturating_add(1).min(5)
+        field.saturating_add(1).min(GENERATOR_FIELD_COUNT - 1)
+    }
+}
+
+const GENERATOR_FIELD_COUNT: usize = 8;
+
+pub(super) fn move_generator_tab(field: usize, backward: bool) -> usize {
+    if backward {
+        (field + GENERATOR_FIELD_COUNT - 1) % GENERATOR_FIELD_COUNT
+    } else {
+        (field + 1) % GENERATOR_FIELD_COUNT
+    }
+}
+
+pub(super) fn generator_config(dialog: &GeneratorDialog) -> GeneratorConfig {
+    GeneratorConfig {
+        target: dialog.target,
+        seed: dialog
+            .seed
+            .parse::<u64>()
+            .unwrap_or(GeneratorConfig::default().seed),
+        density: dialog.density,
+        range_low: dialog.range_low,
+        range_high: dialog.range_high,
+        ties: dialog.ties,
+        accents: dialog.accents,
     }
 }
 
@@ -611,12 +631,27 @@ pub(super) fn change_generator_value(dialog: &mut GeneratorDialog, right: bool) 
                 dialog.target = GeneratorTarget::Track(dialog.track);
             }
         }
-        3..=5 => {
+        4 => {
+            if right {
+                dialog.range_low = dialog.range_low.saturating_add(1).min(dialog.range_high);
+            } else {
+                dialog.range_low = dialog.range_low.saturating_sub(1);
+            }
+        }
+        5 => {
+            if right {
+                dialog.range_high = dialog.range_high.saturating_add(1).min(7);
+            } else {
+                dialog.range_high = dialog.range_high.saturating_sub(1).max(dialog.range_low);
+            }
+        }
+        3 | 6 | 7 => {
             let delta = if right { 5 } else { -5 };
             match dialog.field {
                 3 => dialog.density = dialog.density.saturating_add(delta),
-                4 => dialog.ties = dialog.ties.saturating_add(delta),
-                _ => dialog.accents = dialog.accents.saturating_add(delta),
+                6 => dialog.ties = dialog.ties.saturating_add(delta),
+                7 => dialog.accents = dialog.accents.saturating_add(delta),
+                _ => unreachable!(),
             }
         }
         _ => {}

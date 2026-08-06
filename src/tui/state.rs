@@ -105,6 +105,8 @@ pub(crate) struct GeneratorDialog {
     pub(crate) track: usize,
     pub(crate) seed: String,
     pub(crate) density: Percent,
+    pub(crate) range_low: u8,
+    pub(crate) range_high: u8,
     pub(crate) ties: Percent,
     pub(crate) accents: Percent,
     pub(crate) field: usize,
