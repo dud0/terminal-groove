@@ -611,7 +611,7 @@ The Rust model must validate these domain concepts rather than untyped maps. The
 ## 9. Command-line interface
 
 ```text
-terminal-groove [PROJECT] [--audio-device <exact-name>]
+terminal-groove [PROJECT] [--audio-device <exact-name>] [--audio-buffer <frames>]
 terminal-groove --list-audio-devices
 terminal-groove --help
 terminal-groove --version
@@ -620,6 +620,10 @@ terminal-groove --version
 - With no project argument, start a new untitled project using all defaults.
 - With a project argument, validate the entire project before entering the TUI.
 - The default output device is used unless `--audio-device` is given.
+- The output callback requests an automatic 512-frame buffer, clamped to the selected
+  device's supported range. `--audio-buffer <frames>` requests an exact supported
+  buffer size for low-latency tuning; zero and unsupported values are rejected. If a
+  device reports no buffer range, automatic mode retains the device default.
 - `--list-audio-devices` prints available output-device names and exits without entering raw terminal mode.
 - An audio-device override requires one unique exact name. No match or multiple identical matches produces an error and lists candidates.
 - Failure to open the requested output device or build its stream exits nonzero with an actionable message.
@@ -663,12 +667,18 @@ Use one binary package with testable modules for model/validation, reducer and h
 - Project files are parsed and validated on the main thread. Opening or creating a project queues a stop followed by its immutable snapshot; the callback applies the snapshot at a command boundary and reuses its preallocated audio state.
 - The callback must not allocate or free heap-backed project snapshots, lock a mutex, block, access the filesystem, format text, or log. Replaced snapshots are returned through a bounded retirement queue and reclaimed on the main thread.
 - Noise generators use preallocated deterministic PRNG state local to each voice.
+- Idle drum voices do not advance oscillators, filters, or noise state; their mixer
+  smoothers continue advancing so live parameter changes remain synchronized.
+- Track effect chains bypass all DSP when every wet mix is settled at zero. Chorus,
+  delay, and reverb use allocation-free activity gates: silent processors are skipped,
+  and active processors continue for their preallocated effect tails before sleeping.
 - Queue exhaustion is handled on the UI side before committing the model change.
 - CPAL stream errors are forwarded to the UI through a non-blocking error path and shown prominently.
 
 ### 10.4 Audio format and scheduling
 
-- Use the selected device's default output configuration and sample rate.
+- Use the selected device's default output configuration and sample rate, requesting the
+  automatic or explicitly selected callback buffer described in section 9.
 - Support the common `f32`, `i16`, and `u16` device sample formats; reject other formats clearly in the Linux-first MVP.
 - Render all DSP as `f32` stereo internally and convert only at the final device boundary.
 - Allocate voices, filter state, delay memory, and reverb buffers before stream playback.

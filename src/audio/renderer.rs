@@ -288,9 +288,8 @@ impl Renderer {
         sr: f32,
         level_offset: f32,
         pan_offset: f32,
-        paused: bool,
     ) -> (f32, f32, f32, f32) {
-        if paused && voice.envelope.is_idle() {
+        if voice.envelope.is_idle() {
             return (
                 0.0,
                 voice.delay_send.next_value(),
@@ -335,7 +334,6 @@ impl Renderer {
         let mut delay_r = 0.0;
         let mut reverb_l = 0.0;
         let mut reverb_r = 0.0;
-        let paused = !self.playing;
         for i in 0..super::DRUM_TRACK_COUNT {
             let (x, delay_send, reverb_send, pan) = Self::render_drum_input(
                 &mut self.drums[i],
@@ -343,7 +341,6 @@ impl Renderer {
                 self.sr,
                 self.lfo_offsets[i][ParameterId::Level as usize],
                 self.lfo_offsets[i][ParameterId::Pan as usize],
-                paused,
             );
             let (effect_l, effect_r) = self.effects[i].process(x);
             let (pl, pr) = equal_power_pan(pan);
@@ -370,7 +367,6 @@ impl Renderer {
                 self.sr,
                 self.preview_lfo_offsets[i][ParameterId::Level as usize],
                 self.preview_lfo_offsets[i][ParameterId::Pan as usize],
-                paused,
             );
             let (effect_l, effect_r) = self.preview_effects[i].process(x);
             let (pl, pr) = equal_power_pan(pan);

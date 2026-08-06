@@ -248,6 +248,7 @@ struct FlangerControls {
 
 #[derive(Debug)]
 pub struct TrackEffectChain {
+    processing: bool,
     distortion_drive: Smoother,
     distortion_tone: Smoother,
     distortion_mix: Smoother,
@@ -279,6 +280,7 @@ impl TrackEffectChain {
         let flanger_l = vec![0.0; FLANGER_BUFFER_SIZE].into_boxed_slice();
         let flanger_r = vec![0.0; FLANGER_BUFFER_SIZE].into_boxed_slice();
         Self {
+            processing: false,
             distortion_drive: Smoother::new(0.0),
             distortion_tone: Smoother::new(50.0),
             distortion_mix: Smoother::new(0.0),
@@ -307,6 +309,10 @@ impl TrackEffectChain {
     }
 
     pub fn configure(&mut self, effects: TrackEffects, locks: ParameterLocks, samples: u32) {
+        let was_processing = self.processing
+            || self.distortion_mix.current > 0.0
+            || self.phaser_mix.current > 0.0
+            || self.flanger_mix.current > 0.0;
         self.distortion_drive.set(
             locks
                 .distortion_drive
@@ -367,6 +373,10 @@ impl TrackEffectChain {
             locks.flanger_mix.unwrap_or(effects.flanger.mix).get() as f32,
             samples,
         );
+        self.processing = was_processing
+            || self.distortion_mix.target > 0.0
+            || self.phaser_mix.target > 0.0
+            || self.flanger_mix.target > 0.0;
     }
 
     pub fn process(&mut self, input: f32) -> (f32, f32) {
@@ -374,6 +384,9 @@ impl TrackEffectChain {
     }
 
     pub fn process_stereo(&mut self, input_l: f32, input_r: f32) -> (f32, f32) {
+        if !self.processing {
+            return (input_l, input_r);
+        }
         let drive = self.distortion_drive.next_value();
         let tone = self.distortion_tone.next_value();
         let distortion_mix = self.distortion_mix.next_value() / 100.0;
@@ -387,6 +400,7 @@ impl TrackEffectChain {
         let flanger_feedback = (self.flanger_feedback.next_value() / 100.0).clamp(0.0, 0.9);
         let flanger_mix = self.flanger_mix.next_value() / 100.0;
         if distortion_mix <= 0.0 && phaser_mix <= 0.0 && flanger_mix <= 0.0 {
+            self.processing = false;
             return (input_l, input_r);
         }
 
@@ -536,6 +550,7 @@ impl TrackEffectChain {
         self.flanger_write = 0;
         self.flanger_l.fill(0.0);
         self.flanger_r.fill(0.0);
+        self.processing = false;
     }
 }
 
@@ -880,6 +895,8 @@ pub struct StereoChorus {
     old_mode: u8,
     fade_remaining: u32,
     fade_length: u32,
+    active: bool,
+    tail_remaining: usize,
 }
 
 impl StereoChorus {
@@ -894,6 +911,8 @@ impl StereoChorus {
             old_mode: 0,
             fade_remaining: 0,
             fade_length: (sample_rate as f32 * 0.005).round().max(1.0) as u32,
+            active: false,
+            tail_remaining: 0,
         }
     }
 
@@ -938,6 +957,14 @@ impl StereoChorus {
     }
 
     pub fn process_stereo(&mut self, left_input: f32, right_input: f32) -> (f32, f32) {
+        let input_peak = safety(left_input).abs().max(safety(right_input).abs());
+        if !self.active && self.fade_remaining == 0 && input_peak <= SILENCE_THRESHOLD {
+            return (left_input, right_input);
+        }
+        if input_peak > SILENCE_THRESHOLD {
+            self.active = true;
+            self.tail_remaining = self.buffer.len();
+        }
         let input = (left_input + right_input) * 0.5;
         self.buffer[self.pos] = input;
         let next = self.mode_sample(input, self.mode, self.phase);
@@ -957,6 +984,12 @@ impl StereoChorus {
         let old_rate = if self.old_mode == 2 { 0.8 } else { 0.5 };
         self.phase = (self.phase + rate / self.sample_rate).fract();
         self.old_phase = (self.old_phase + old_rate / self.sample_rate).fract();
+        if input_peak <= SILENCE_THRESHOLD {
+            self.tail_remaining = self.tail_remaining.saturating_sub(1);
+            if self.tail_remaining == 0 && self.fade_remaining == 0 {
+                self.active = false;
+            }
+        }
         output
     }
 
@@ -966,6 +999,8 @@ impl StereoChorus {
         self.phase = 0.0;
         self.old_phase = 0.0;
         self.fade_remaining = 0;
+        self.active = false;
+        self.tail_remaining = 0;
     }
 }
 
@@ -986,6 +1021,9 @@ pub struct Delay {
     highpass_x_r: f32,
     highpass_y_l: f32,
     highpass_y_r: f32,
+    active: bool,
+    tail_remaining: usize,
+    tail_samples: usize,
 }
 
 struct Comb {
@@ -1064,6 +1102,10 @@ pub struct Reverb {
     damping: Smoother,
     highpass_l: Biquad,
     highpass_r: Biquad,
+    active: bool,
+    tail_remaining: usize,
+    tail_samples: usize,
+    tail_seconds: f32,
 }
 impl Reverb {
     const HIGH_PASS_HZ: f32 = 180.0;
@@ -1132,6 +1174,10 @@ impl Reverb {
                 );
                 filter
             },
+            active: false,
+            tail_remaining: 0,
+            tail_samples: 1,
+            tail_seconds: 2.5,
         };
         reverb.set_time(2.5);
         reverb.set_tone(0.5);
@@ -1144,6 +1190,8 @@ impl Reverb {
     }
     pub(crate) fn set_time_smoothed(&mut self, seconds: f32, smoothing_samples: u32) {
         let seconds = seconds.clamp(0.2, 10.0);
+        self.tail_seconds = seconds;
+        self.tail_samples = self.estimated_tail_samples();
         for comb in self.left.iter_mut().chain(self.right.iter_mut()) {
             comb.set_time(seconds, self.sample_rate, smoothing_samples);
         }
@@ -1167,6 +1215,7 @@ impl Reverb {
             self.pre_delay = next;
             self.pre_delay_fade_remaining = self.pre_delay_fade_length;
         }
+        self.tail_samples = self.estimated_tail_samples();
     }
     fn pre_delay_tap(buffer: &[f32], pos: usize, delay: usize, input: f32) -> f32 {
         if delay == 0 {
@@ -1176,6 +1225,16 @@ impl Reverb {
         }
     }
     pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let input_peak = safety(l).abs().max(safety(r).abs());
+        if !self.active {
+            if input_peak <= SILENCE_THRESHOLD {
+                return (0.0, 0.0);
+            }
+            self.active = true;
+        }
+        if input_peak > SILENCE_THRESHOLD {
+            self.tail_remaining = self.tail_samples;
+        }
         let mut input_l =
             Self::pre_delay_tap(&self.pre_delay_l, self.pre_delay_pos, self.pre_delay, l);
         let mut input_r =
@@ -1216,6 +1275,12 @@ impl Reverb {
         for ap in &mut self.allpass_r {
             or = ap.process(or);
         }
+        if input_peak <= SILENCE_THRESHOLD {
+            self.tail_remaining = self.tail_remaining.saturating_sub(1);
+            if self.tail_remaining == 0 {
+                self.active = false;
+            }
+        }
         (safety(ol * 0.125), safety(or * 0.125))
     }
     pub fn clear(&mut self) {
@@ -1237,6 +1302,14 @@ impl Reverb {
         self.pre_delay_fade_remaining = 0;
         self.highpass_l.clear();
         self.highpass_r.clear();
+        self.active = false;
+        self.tail_remaining = 0;
+    }
+
+    fn estimated_tail_samples(&self) -> usize {
+        (self.pre_delay as f32 + self.sample_rate * self.tail_seconds * 4.0)
+            .ceil()
+            .max(1.0) as usize
     }
 }
 impl Delay {
@@ -1259,6 +1332,9 @@ impl Delay {
             highpass_x_r: 0.0,
             highpass_y_l: 0.0,
             highpass_y_r: 0.0,
+            active: false,
+            tail_remaining: 0,
+            tail_samples: 1,
         }
     }
     pub fn configure(&mut self, samples: usize, feedback: f32) {
@@ -1271,9 +1347,20 @@ impl Delay {
             self.delay = next;
         }
         self.configured = true;
-        self.feedback = feedback.clamp(0.0, 0.95)
+        self.feedback = feedback.clamp(0.0, 0.95);
+        self.tail_samples = self.estimated_tail_samples();
     }
     pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let input_peak = safety(l).abs().max(safety(r).abs());
+        if !self.active {
+            if input_peak <= SILENCE_THRESHOLD {
+                return (0.0, 0.0);
+            }
+            self.active = true;
+        }
+        if input_peak > SILENCE_THRESHOLD {
+            self.tail_remaining = self.tail_samples;
+        }
         let read = (self.pos + self.left.len() - self.delay) % self.left.len();
         let mut dl = self.left[read];
         let mut dr = self.right[read];
@@ -1295,6 +1382,12 @@ impl Delay {
         self.left[self.pos] = l + high_r * self.feedback;
         self.right[self.pos] = r + high_l * self.feedback;
         self.pos = (self.pos + 1) % self.left.len();
+        if input_peak <= SILENCE_THRESHOLD {
+            self.tail_remaining = self.tail_remaining.saturating_sub(1);
+            if self.tail_remaining == 0 {
+                self.active = false;
+            }
+        }
         (dl, dr)
     }
     pub fn clear(&mut self) {
@@ -1306,6 +1399,17 @@ impl Delay {
         self.highpass_x_r = 0.0;
         self.highpass_y_l = 0.0;
         self.highpass_y_r = 0.0;
+        self.active = false;
+        self.tail_remaining = 0;
+    }
+
+    fn estimated_tail_samples(&self) -> usize {
+        let feedback = self.feedback.max(SILENCE_THRESHOLD);
+        let repeats = (SILENCE_THRESHOLD.ln() / feedback.ln()).ceil().max(1.0) as usize;
+        self.delay
+            .saturating_mul(repeats.saturating_add(1))
+            .saturating_add(self.fade_length)
+            .max(1)
     }
 }
 
@@ -1342,6 +1446,8 @@ impl Default for DcBlock {
 pub fn safety(x: f32) -> f32 {
     if x.is_finite() { x } else { 0.0 }
 }
+
+const SILENCE_THRESHOLD: f32 = 1.0e-7;
 
 /// A fixed, stereo-linked lookahead limiter. All storage is allocated at construction.
 pub struct MasterLimiter {
@@ -1504,6 +1610,21 @@ mod tests {
             assert_eq!(d.process(0., 0.).0, 0.)
         }
         assert_eq!(d.process(0., 0.).0, 1.);
+    }
+
+    #[test]
+    fn silent_effects_do_not_advance_when_inactive() {
+        let mut chorus = StereoChorus::new(1_000);
+        chorus.process(0.0);
+        assert_eq!(chorus.pos, 0);
+
+        let mut delay = Delay::new(1_000);
+        delay.process(0.0, 0.0);
+        assert_eq!(delay.pos, 0);
+
+        let mut reverb = Reverb::new(1_000);
+        reverb.process(0.0, 0.0);
+        assert_eq!(reverb.pre_delay_pos, 0);
     }
     #[test]
     fn nonfinite_safe() {

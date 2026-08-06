@@ -12,7 +12,7 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, StreamConfig};
+use cpal::{BufferSize, Device, SampleFormat, StreamConfig, SupportedBufferSize};
 use rtrb::{Producer, RingBuffer};
 use std::sync::{
     Arc,
@@ -222,6 +222,37 @@ pub fn output_device_names() -> Result<Vec<String>> {
     names.sort();
     Ok(names)
 }
+
+const AUTO_BUFFER_FRAMES: u32 = 512;
+
+fn select_buffer_size(
+    supported: &SupportedBufferSize,
+    requested: Option<u32>,
+) -> Result<BufferSize> {
+    let frames = requested.unwrap_or(AUTO_BUFFER_FRAMES);
+    if frames == 0 {
+        bail!("audio buffer must contain at least one frame")
+    }
+    match supported {
+        SupportedBufferSize::Range { min, max } => {
+            if let Some(requested) = requested {
+                if requested < *min || requested > *max {
+                    bail!(
+                        "audio buffer {requested} frames is unsupported; device accepts {min}–{max} frames"
+                    )
+                }
+                Ok(BufferSize::Fixed(requested))
+            } else {
+                Ok(BufferSize::Fixed(frames.clamp(*min, *max)))
+            }
+        }
+        SupportedBufferSize::Unknown => Ok(if requested.is_some() {
+            BufferSize::Fixed(frames)
+        } else {
+            BufferSize::Default
+        }),
+    }
+}
 #[allow(deprecated)]
 fn choose_device(requested: Option<&str>) -> Result<Device> {
     let host = cpal::default_host();
@@ -255,14 +286,20 @@ fn choose_device(requested: Option<&str>) -> Result<Device> {
 }
 
 #[allow(deprecated)]
-pub fn open(requested: Option<&str>, project: &Project) -> Result<Audio> {
+pub fn open(
+    requested: Option<&str>,
+    project: &Project,
+    audio_buffer: Option<u32>,
+) -> Result<Audio> {
     let device = choose_device(requested)?;
     let name = device.name().unwrap_or_else(|_| "unknown".into());
     let supported = device
         .default_output_config()
         .with_context(|| format!("could not query audio output `{name}`"))?;
     let format = supported.sample_format();
-    let config: StreamConfig = supported.into();
+    let mut config: StreamConfig = supported.clone().into();
+    config.buffer_size = select_buffer_size(supported.buffer_size(), audio_buffer)
+        .with_context(|| format!("invalid audio buffer for output `{name}`"))?;
     let channels = config.channels as usize;
     let sr = config.sample_rate;
     let status = Arc::new(AudioStatus::default());
@@ -302,6 +339,57 @@ pub fn render_offline(project: &Project, sample_rate: u32, frames: usize) -> Vec
 mod tests {
     use super::*;
     use crate::model::LEAD_TRACK_INDEX;
+
+    #[test]
+    fn automatic_audio_buffer_is_clamped_to_device_limits() {
+        assert_eq!(
+            select_buffer_size(&SupportedBufferSize::Range { min: 128, max: 256 }, None).unwrap(),
+            BufferSize::Fixed(256)
+        );
+        assert_eq!(
+            select_buffer_size(
+                &SupportedBufferSize::Range {
+                    min: 1024,
+                    max: 2048
+                },
+                None
+            )
+            .unwrap(),
+            BufferSize::Fixed(1024)
+        );
+    }
+
+    #[test]
+    fn explicit_audio_buffer_must_be_supported() {
+        assert_eq!(
+            select_buffer_size(
+                &SupportedBufferSize::Range {
+                    min: 128,
+                    max: 1024
+                },
+                Some(512)
+            )
+            .unwrap(),
+            BufferSize::Fixed(512)
+        );
+        assert!(
+            select_buffer_size(
+                &SupportedBufferSize::Range { min: 128, max: 256 },
+                Some(512)
+            )
+            .is_err()
+        );
+        assert_eq!(
+            select_buffer_size(&SupportedBufferSize::Unknown, None).unwrap(),
+            BufferSize::Default
+        );
+    }
+
+    #[test]
+    fn zero_audio_buffer_is_rejected() {
+        assert!(select_buffer_size(&SupportedBufferSize::Unknown, Some(0)).is_err());
+    }
+
     #[test]
     fn drum_envelope_reaches_peak_and_silence_at_programmed_times() {
         let mut envelope = DrumEnvelope::new();
@@ -706,6 +794,32 @@ mod tests {
                 renderer.preview_drums[0].noise,
             ),
             preview_before
+        );
+    }
+
+    #[test]
+    fn idle_drums_stop_advancing_while_playing() {
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer =
+            Renderer::new(AudioProject::from_project(&Project::new()), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        let before = (
+            renderer.drums[0].phase,
+            renderer.drums[0].phase2,
+            renderer.drums[0].noise,
+        );
+
+        for _ in 0..128 {
+            renderer.next();
+        }
+
+        assert_eq!(
+            (
+                renderer.drums[0].phase,
+                renderer.drums[0].phase2,
+                renderer.drums[0].noise,
+            ),
+            before
         );
     }
 

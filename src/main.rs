@@ -16,6 +16,8 @@ struct Cli {
     audio_device: Option<String>,
     #[arg(long)]
     list_audio_devices: bool,
+    #[arg(long, value_name = "FRAMES")]
+    audio_buffer: Option<u32>,
 }
 
 fn main() -> Result<()> {
@@ -31,6 +33,6 @@ fn main() -> Result<()> {
             .with_context(|| format!("startup project validation failed for {}", path.display()))?,
         None => Project::new(),
     };
-    let mut audio = audio::open(cli.audio_device.as_deref(), &project)?;
+    let mut audio = audio::open(cli.audio_device.as_deref(), &project, cli.audio_buffer)?;
     tui::run(project, cli.project, &mut audio)
 }
