@@ -312,7 +312,7 @@ impl Renderer {
             let gain = self.mute[i].next_value() * level.powi(2);
             if i == 0 {
                 self.sidechain
-                    .process_stereo(effect_l * pl * gain, effect_r * pr * gain);
+                    .process_stereo(effect_l * gain, effect_r * gain);
             }
             dry_l += effect_l * pl * gain;
             dry_r += effect_r * pr * gain;

@@ -66,7 +66,12 @@ impl SidechainCompressor {
     }
 
     pub fn process_stereo(&mut self, input_l: f32, input_r: f32) -> f32 {
-        let peak = input_l.abs().max(input_r.abs()).clamp(0.0, 1.0);
+        let peak = input_l.abs().max(input_r.abs());
+        if !peak.is_finite() {
+            self.envelope = 0.0;
+            return self.current_gain();
+        }
+        let peak = peak.clamp(0.0, 1.0);
         let time = if peak > self.envelope {
             self.attack_seconds
         } else {
@@ -1926,5 +1931,22 @@ mod tests {
         compressor.reset();
         assert_eq!(compressor.envelope(), 0.0);
         assert_eq!(compressor.current_gain(), 10.0_f32.powf(-0.0));
+    }
+
+    #[test]
+    fn sidechain_recovers_after_nonfinite_detector_input() {
+        let mut compressor = SidechainCompressor::new(48_000);
+        compressor.configure(SidechainParameters {
+            depth: crate::model::Percent::new(100).unwrap(),
+            attack: crate::model::Percent::new(0).unwrap(),
+            ..SidechainParameters::default()
+        });
+        assert_eq!(compressor.process_stereo(f32::NAN, f32::NAN), 1.0);
+        assert_eq!(compressor.envelope(), 0.0);
+        for _ in 0..1_000 {
+            compressor.process_stereo(1.0, 1.0);
+        }
+        assert!(compressor.envelope() > 0.99);
+        assert!(compressor.current_gain() < 0.13);
     }
 }
