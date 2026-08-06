@@ -17,9 +17,10 @@ use crate::{
     audio::{Audio, AudioCommand},
     generator::{Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
-        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, LfoConfig, LfoDivision, LfoRate,
-        LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE,
-        STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
+        ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, LfoConfig,
+        LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent,
+        STEP_BANK_SIZE, STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition,
+        Waveform,
     },
     reducer::{Editor, Scope},
 };
@@ -395,6 +396,8 @@ pub(super) fn track_jump_index(k: KeyEvent) -> Option<usize> {
         '$' => Some(3),
         '%' => Some(4),
         '^' => Some(5),
+        '&' => Some(6),
+        '*' => Some(7),
         _ => None,
     };
     if shifted_symbol.is_some() {
@@ -403,7 +406,7 @@ pub(super) fn track_jump_index(k: KeyEvent) -> Option<usize> {
     if k.modifiers.contains(KeyModifiers::SHIFT) {
         return c
             .to_digit(10)
-            .filter(|&track| (1..=6).contains(&track))
+            .filter(|&track| (1..=8).contains(&track))
             .map(|track| track as usize - 1);
     }
     None
@@ -1014,7 +1017,7 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
             a.mode = Mode::Help;
             Ok(true)
         }
-        KeyCode::Char('C') if track == 4 => {
+        KeyCode::Char('C') if track == CHORD_TRACK_INDEX => {
             a.mode = Mode::Navigation;
             open_chord_editor(a);
             Ok(true)
@@ -1157,18 +1160,23 @@ pub(super) fn open_lfo_editor(a: &mut App, audio: &mut Audio, parameter: Paramet
 }
 
 pub(super) fn open_chord_editor(a: &mut App) {
-    if a.row != 5 {
+    if a.row != CHORD_TRACK_INDEX + 1 {
         a.status = "Chord editor is available on the Chord track only".into();
         return;
     }
-    let track = &a.editor.project.tracks[4];
+    let track = &a.editor.project.tracks[CHORD_TRACK_INDEX];
     let shape = match track.steps[a.step].as_ref() {
         Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or_default(),
-        Some(StepEvent::Tie { .. }) => selected_chord_shape(a, 4).unwrap_or_default(),
+        Some(StepEvent::Tie { .. }) => {
+            selected_chord_shape(a, CHORD_TRACK_INDEX).unwrap_or_default()
+        }
         None => track.input_chord_shape.unwrap_or_default(),
         _ => return,
     };
-    let shape = a.editor.chord_shape_value(4, a.step).unwrap_or(shape);
+    let shape = a
+        .editor
+        .chord_shape_value(CHORD_TRACK_INDEX, a.step)
+        .unwrap_or(shape);
     a.chord_field = ChordField::Shape;
     a.mode = Mode::ChordEdit { shape };
     a.status = if matches!(track.steps[a.step], Some(StepEvent::Tie { .. })) {

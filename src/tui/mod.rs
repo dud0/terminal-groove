@@ -19,10 +19,10 @@ use crate::{
     audio::{AudioCommand, ParameterSmoothing},
     generator::{Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
-        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, DelayDivision, GlobalParameterId,
-        LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue,
-        Percent, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
-        TriggerCondition, Waveform,
+        ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DelayDivision,
+        GlobalParameterId, LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT,
+        ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, STEP_ROW_SIZE, SYNTH_TRACK_START,
+        Scale, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
     },
     persistence,
     reducer::{Editor, Scope},
@@ -206,6 +206,16 @@ mod tests {
         assert_eq!(drum[0].group, ParameterGroup::Mixer);
         assert_eq!(drum[4].shortcut, "u");
         assert_eq!(drum[4].group, ParameterGroup::Instrument);
+        let tom = parameter_descriptors(TrackKind::Tom);
+        assert_eq!(tom.len(), 7);
+        assert_eq!(tom[4].id, ParameterId::Tune);
+        assert_eq!(tom[5].id, ParameterId::Tone);
+        assert_eq!(tom[6].id, ParameterId::Decay);
+        let cymbal = parameter_descriptors(TrackKind::Cymbal);
+        assert_eq!(cymbal.len(), tom.len());
+        assert_eq!(cymbal[4].id, ParameterId::Tune);
+        assert_eq!(cymbal[5].id, ParameterId::Tone);
+        assert_eq!(cymbal[6].id, ParameterId::Decay);
         let synth = parameter_descriptors(TrackKind::Chord);
         assert_eq!(synth.len(), 17);
         assert_eq!(synth[4].id, ParameterId::OscillatorMix);
@@ -275,7 +285,7 @@ mod tests {
     #[test]
     fn effects_bank_does_not_claim_pitched_note_keys() {
         let mut app = App::new(Project::new(), None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.parameter_bank = ParameterBank::Effects;
 
         for key in '1'..='8' {
@@ -319,7 +329,7 @@ mod tests {
         move_parameter_editor(&mut app, true);
         assert!(matches!(app.mode, Mode::ParameterEdit(ParameterId::Level)));
 
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         move_parameter_editor(&mut app, true);
         move_parameter_editor(&mut app, true);
         move_parameter_editor(&mut app, true);
@@ -554,7 +564,7 @@ mod tests {
 
     #[test]
     fn shifted_track_numbers_select_the_expected_track() {
-        for (key, track) in ('1'..='6').zip(0..TRACK_COUNT) {
+        for (key, track) in ('1'..='9').zip(0..TRACK_COUNT) {
             assert_eq!(
                 track_jump_index(KeyEvent::new(KeyCode::Char(key), KeyModifiers::SHIFT)),
                 Some(track)
@@ -586,7 +596,7 @@ mod tests {
         )));
 
         let mut app = App::new(Project::new(), None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.scope = Scope::Lock;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         select_global(&mut app);
@@ -601,7 +611,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps.resize(4, None);
         let mut app = App::new(project, None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.step = 15;
         app.scope = Scope::Lock;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
@@ -650,9 +660,9 @@ mod tests {
     #[test]
     fn pitch_lfo_parameter_card_advertises_assignment_removal() {
         let mut project = Project::new();
-        project.tracks[4].lfos.pitch = Some(LfoConfig::default());
+        project.tracks[CHORD_TRACK_INDEX].lfos.pitch = Some(LfoConfig::default());
         let mut app = App::new(project, None);
-        app.row = 5;
+        app.row = CHORD_TRACK_INDEX + 1;
         app.mode = Mode::ParameterEdit(ParameterId::Pitch);
 
         let screen = rendered(&app, 220, 34);
@@ -662,19 +672,19 @@ mod tests {
     #[test]
     fn pitch_lfo_card_is_visible_for_chord_and_lead_only() {
         let mut project = Project::new();
-        project.tracks[4].lfos.pitch = Some(LfoConfig {
+        project.tracks[CHORD_TRACK_INDEX].lfos.pitch = Some(LfoConfig {
             depth: Percent::new(100).unwrap(),
             ..Default::default()
         });
         let mut app = App::new(project, None);
-        app.row = 5;
+        app.row = CHORD_TRACK_INDEX + 1;
         let chord = rendered(&app, 220, 34);
         assert!(chord.contains("Pitch"));
         assert!(chord.contains("[i]"));
         assert!(chord.contains("100%"));
         assert!(chord.contains("±2st"));
 
-        app.row = 6;
+        app.row = TRACK_COUNT;
         let lead = rendered(&app, 220, 34);
         assert!(lead.contains("Pitch"));
         app.row = 1;
@@ -701,15 +711,24 @@ mod tests {
     #[test]
     fn accent_readout_resolves_ties_to_their_source_note() {
         let mut app = App::new(Project::new(), None);
-        app.row = 4;
-        app.editor.set_note(3, 0, 1).unwrap();
-        app.editor.toggle_accent(3, 0).unwrap();
-        assert_eq!(articulation_title(&app, 3), "Accent on · Slide off");
-        app.editor.toggle_tie(3, 1).unwrap();
-        assert_eq!(selected_accent(&app, 3), Some((true, None)));
+        app.row = SYNTH_TRACK_START + 1;
+        app.editor.set_note(SYNTH_TRACK_START, 0, 1).unwrap();
+        app.editor.toggle_accent(SYNTH_TRACK_START, 0).unwrap();
+        assert_eq!(
+            articulation_title(&app, SYNTH_TRACK_START),
+            "Accent on · Slide off"
+        );
+        app.editor.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
+        assert_eq!(selected_accent(&app, SYNTH_TRACK_START), Some((true, None)));
         app.step = 1;
-        assert_eq!(selected_accent(&app, 3), Some((true, Some(0))));
-        assert_eq!(articulation_title(&app, 3), "Accent on from step 1");
+        assert_eq!(
+            selected_accent(&app, SYNTH_TRACK_START),
+            Some((true, Some(0)))
+        );
+        assert_eq!(
+            articulation_title(&app, SYNTH_TRACK_START),
+            "Accent on from step 1"
+        );
     }
 
     #[test]
@@ -788,8 +807,8 @@ mod tests {
     fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
         let backend = TestBackend::new(120, 34);
         let mut project = Project::new();
-        project.tracks[3].input_octave = Some(4);
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Note {
+        project.tracks[SYNTH_TRACK_START].input_octave = Some(4);
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -799,7 +818,7 @@ mod tests {
             retrigger_count: 1,
             locks: Default::default(),
         });
-        project.patterns[0].tracks[3].steps[1] = Some(StepEvent::Note {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Note {
             degree: 2,
             octave: 4,
             accent: false,
@@ -814,7 +833,7 @@ mod tests {
         });
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new(project, None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         terminal
             .draw(|frame| draw_with_device(frame, &app, "null"))
             .unwrap();
@@ -930,7 +949,7 @@ mod tests {
         let locked = rendered(&app, 220, 34);
         assert!(locked.contains("[Backspace/Del] remove lock"));
 
-        app.row = 5;
+        app.row = CHORD_TRACK_INDEX + 1;
         app.scope = Scope::Base;
         app.mode = Mode::ParameterEdit(ParameterId::Spread);
         let spread = rendered(&app, 220, 34);
@@ -941,9 +960,9 @@ mod tests {
     #[test]
     fn lfo_modal_and_fader_badge_render_at_minimum_size() {
         let mut project = Project::new();
-        project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
+        project.tracks[SYNTH_TRACK_START].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.mode = Mode::LfoEdit {
             parameter: ParameterId::Cutoff,
             field: LfoField::Depth,
@@ -960,7 +979,7 @@ mod tests {
     #[test]
     fn chord_shape_modal_and_title_render_at_minimum_size() {
         let mut project = Project::new();
-        project.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -971,7 +990,7 @@ mod tests {
             locks: Default::default(),
         });
         let mut app = App::new(project, None);
-        app.row = 5;
+        app.row = CHORD_TRACK_INDEX + 1;
         let title_screen = rendered(&app, 120, 34);
         assert!(title_screen.contains("Chord trigger 3-5-7-1"));
         app.mode = Mode::ChordEdit {
@@ -987,7 +1006,7 @@ mod tests {
     #[test]
     fn chord_shape_editor_page_navigation_follows_each_step() {
         let mut project = Project::new();
-        project.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -997,7 +1016,7 @@ mod tests {
             retrigger_count: 1,
             locks: Default::default(),
         });
-        project.patterns[0].tracks[4].steps[1] = Some(StepEvent::Note {
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[1] = Some(StepEvent::Note {
             degree: 2,
             octave: 3,
             accent: false,
@@ -1008,7 +1027,7 @@ mod tests {
             locks: Default::default(),
         });
         let mut app = App::new(project, None);
-        app.row = 5;
+        app.row = CHORD_TRACK_INDEX + 1;
         app.mode = Mode::ChordEdit {
             shape: ChordShape::TriadRoot,
         };
@@ -1131,9 +1150,9 @@ mod tests {
     #[test]
     fn lfo_control_bank_reports_synced_and_physical_free_rates() {
         let mut project = Project::new();
-        project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
+        project.tracks[SYNTH_TRACK_START].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.mode = Mode::LfoEdit {
             parameter: ParameterId::Cutoff,
             field: LfoField::Rate,
@@ -1145,7 +1164,7 @@ mod tests {
         assert!(synced.contains("○ 1/16T"));
         assert!(synced.contains("2.000 Hz"));
 
-        app.editor.project.tracks[3].lfos.cutoff = Some(LfoConfig {
+        app.editor.project.tracks[SYNTH_TRACK_START].lfos.cutoff = Some(LfoConfig {
             rate: LfoRate::Free {
                 rate_percent: Percent::new(100).unwrap(),
             },
@@ -1159,12 +1178,12 @@ mod tests {
     #[test]
     fn pitch_lfo_modal_shows_physical_depth_range() {
         let mut project = Project::new();
-        project.tracks[4].lfos.pitch = Some(LfoConfig {
+        project.tracks[CHORD_TRACK_INDEX].lfos.pitch = Some(LfoConfig {
             depth: Percent::new(100).unwrap(),
             ..Default::default()
         });
         let mut app = App::new(project, None);
-        app.row = 5;
+        app.row = CHORD_TRACK_INDEX + 1;
         app.mode = Mode::LfoEdit {
             parameter: ParameterId::Pitch,
             field: LfoField::Depth,
@@ -1206,9 +1225,9 @@ mod tests {
     #[test]
     fn lfo_controls_are_laid_out_left_to_right() {
         let mut project = Project::new();
-        project.tracks[3].lfos.cutoff = Some(LfoConfig::default());
+        project.tracks[SYNTH_TRACK_START].lfos.cutoff = Some(LfoConfig::default());
         let mut app = App::new(project, None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.mode = Mode::LfoEdit {
             parameter: ParameterId::Cutoff,
             field: LfoField::Enabled,
@@ -1228,7 +1247,7 @@ mod tests {
     #[test]
     fn lock_scope_labels_explicit_and_inherited_values() {
         let mut project = Project::new();
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -1242,10 +1261,12 @@ mod tests {
             },
         });
         let mut app = App::new(project, None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.scope = Scope::Lock;
-        let (_, cutoff_origin) = displayed_parameter(&app, 3, 0, ParameterId::Cutoff).unwrap();
-        let (_, level_origin) = displayed_parameter(&app, 3, 0, ParameterId::Level).unwrap();
+        let (_, cutoff_origin) =
+            displayed_parameter(&app, SYNTH_TRACK_START, 0, ParameterId::Cutoff).unwrap();
+        let (_, level_origin) =
+            displayed_parameter(&app, SYNTH_TRACK_START, 0, ParameterId::Level).unwrap();
         assert_eq!(cutoff_origin, ValueOrigin::Lock);
         assert_eq!(level_origin, ValueOrigin::Base);
     }
@@ -1277,7 +1298,7 @@ mod tests {
     #[test]
     fn active_parameter_gets_a_visible_fader_outline_and_physical_readout() {
         let mut app = App::new(Project::new(), None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
         assert!(screen.contains("║"));
@@ -1316,7 +1337,7 @@ mod tests {
     #[test]
     fn lock_parameter_editing_has_a_prominent_banner() {
         let mut app = App::new(Project::new(), None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.scope = Scope::Lock;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
@@ -1341,7 +1362,7 @@ mod tests {
     #[test]
     fn base_parameter_editing_does_not_show_lock_editing_banner() {
         let mut app = App::new(Project::new(), None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
         let screen = rendered(&app, 120, 34);
         assert!(!screen.contains("LOCK PARAMETER EDITING"));
@@ -1350,7 +1371,7 @@ mod tests {
     #[test]
     fn locked_badge_uses_a_distinct_color() {
         let mut project = Project::new();
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -1364,7 +1385,7 @@ mod tests {
             },
         });
         let mut app = App::new(project, None);
-        app.row = 4;
+        app.row = SYNTH_TRACK_START + 1;
         app.scope = Scope::Lock;
         let backend = TestBackend::new(120, 34);
         let mut terminal = Terminal::new(backend).unwrap();

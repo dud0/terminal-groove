@@ -5,7 +5,11 @@ pub const MIN_STEP_COUNT: usize = 1;
 pub const MAX_STEP_COUNT: usize = 64;
 pub const STEP_BANK_SIZE: usize = 16;
 pub const STEP_ROW_SIZE: usize = 32;
-pub const TRACK_COUNT: usize = 6;
+pub const DRUM_TRACK_COUNT: usize = 5;
+pub const SYNTH_TRACK_START: usize = DRUM_TRACK_COUNT;
+pub const CHORD_TRACK_INDEX: usize = SYNTH_TRACK_START + 1;
+pub const LEAD_TRACK_INDEX: usize = SYNTH_TRACK_START + 2;
+pub const TRACK_COUNT: usize = 8;
 pub const MIN_PATTERN_COUNT: usize = 1;
 pub const MAX_PATTERN_COUNT: usize = 100;
 
@@ -69,7 +73,7 @@ impl PatternIndexMap {
 pub enum ValidationError {
     #[error("unsupported format_version {0}")]
     Version(u32),
-    #[error("tracks: expected exactly six tracks")]
+    #[error("tracks: expected exactly eight tracks")]
     TrackCount,
     #[error("patterns: expected between 1 and 100 patterns, got {0}")]
     PatternCount(usize),
@@ -525,6 +529,8 @@ pub enum TrackKind {
     Kick,
     Snare,
     Hat,
+    Tom,
+    Cymbal,
     Bass,
     Chord,
     Lead,
@@ -772,6 +778,20 @@ pub struct HatParameters {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TomParameters {
+    pub tune: Percent,
+    pub tone: Percent,
+    pub decay: Percent,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CymbalParameters {
+    pub tune: Percent,
+    pub tone: Percent,
+    pub decay: Percent,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BassParameters {
     pub waveform: Waveform,
     pub cutoff: Percent,
@@ -897,6 +917,8 @@ pub enum Instrument {
     Kick(KickParameters),
     Snare(SnareParameters),
     Hat(HatParameters),
+    Tom(TomParameters),
+    Cymbal(CymbalParameters),
     Bass(BassParameters),
     Chord(ChordParameters),
     Lead(LeadParameters),
@@ -1423,7 +1445,7 @@ impl StepEvent {
 }
 pub type Step = Option<StepEvent>;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Track {
     pub kind: TrackKind,
@@ -1458,7 +1480,92 @@ pub struct Track {
     pub input_chord_arpeggio: Option<ArpeggioConfig>,
 }
 
-/// A pattern owns only its six sequences. Instrument and mixer settings live
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrackWire {
+    kind: TrackKind,
+    name: String,
+    level: Percent,
+    #[serde(default = "default_pan")]
+    pan: Percent,
+    muted: bool,
+    delay_send: Percent,
+    reverb_send: Percent,
+    #[serde(default)]
+    swing: Percent,
+    #[serde(default = "default_probability")]
+    probability: Percent,
+    instrument: serde_json::Value,
+    #[serde(default)]
+    effects: TrackEffects,
+    lfos: LfoAssignments,
+    #[serde(skip, default = "default_step_cache")]
+    steps: Vec<Step>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_degree: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_octave: Option<u8>,
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    input_accent: bool,
+    #[serde(default, skip_serializing_if = "chord_shape_is_default")]
+    input_chord_shape: Option<ChordShape>,
+    #[serde(default, skip_serializing_if = "arpeggio_is_default")]
+    input_chord_arpeggio: Option<ArpeggioConfig>,
+}
+
+impl<'de> Deserialize<'de> for Track {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = TrackWire::deserialize(deserializer)?;
+        let instrument = match wire.kind {
+            TrackKind::Kick => Instrument::Kick(
+                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+            ),
+            TrackKind::Snare => Instrument::Snare(
+                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+            ),
+            TrackKind::Hat => Instrument::Hat(
+                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+            ),
+            TrackKind::Tom => Instrument::Tom(
+                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+            ),
+            TrackKind::Cymbal => Instrument::Cymbal(
+                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+            ),
+            TrackKind::Bass => Instrument::Bass(
+                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+            ),
+            TrackKind::Chord => Instrument::Chord(
+                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+            ),
+            TrackKind::Lead => Instrument::Lead(
+                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+            ),
+        };
+        Ok(Self {
+            kind: wire.kind,
+            name: wire.name,
+            level: wire.level,
+            pan: wire.pan,
+            muted: wire.muted,
+            delay_send: wire.delay_send,
+            reverb_send: wire.reverb_send,
+            swing: wire.swing,
+            probability: wire.probability,
+            instrument,
+            effects: wire.effects,
+            lfos: wire.lfos,
+            steps: wire.steps,
+            input_degree: wire.input_degree,
+            input_octave: wire.input_octave,
+            input_accent: wire.input_accent,
+            input_chord_shape: wire.input_chord_shape,
+            input_chord_arpeggio: wire.input_chord_arpeggio,
+        })
+    }
+}
+
+/// A pattern owns only its eight sequences. Instrument and mixer settings live
 /// on the project tracks and are consequently shared by every pattern.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1588,7 +1695,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 15,
+            format_version: 16,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1615,6 +1722,24 @@ impl Project {
                     Instrument::Hat(HatParameters {
                         tune: p(50),
                         decay: p(20),
+                    }),
+                ),
+                track(
+                    TrackKind::Tom,
+                    "Tom",
+                    Instrument::Tom(TomParameters {
+                        tune: p(50),
+                        tone: p(50),
+                        decay: p(40),
+                    }),
+                ),
+                track(
+                    TrackKind::Cymbal,
+                    "Cymbal",
+                    Instrument::Cymbal(CymbalParameters {
+                        tune: p(50),
+                        tone: p(55),
+                        decay: p(30),
                     }),
                 ),
                 synth(
@@ -1713,7 +1838,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 15 {
+        if self.format_version != 16 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -1723,6 +1848,8 @@ impl Project {
             (TrackKind::Kick, "Kick"),
             (TrackKind::Snare, "Snare"),
             (TrackKind::Hat, "Hi-hat"),
+            (TrackKind::Tom, "Tom"),
+            (TrackKind::Cymbal, "Cymbal"),
             (TrackKind::Bass, "Bass"),
             (TrackKind::Chord, "Chord"),
             (TrackKind::Lead, "Lead"),
@@ -1759,6 +1886,8 @@ impl Project {
                 (TrackKind::Kick, Instrument::Kick(_))
                     | (TrackKind::Snare, Instrument::Snare(_))
                     | (TrackKind::Hat, Instrument::Hat(_))
+                    | (TrackKind::Tom, Instrument::Tom(_))
+                    | (TrackKind::Cymbal, Instrument::Cymbal(_))
                     | (TrackKind::Bass, Instrument::Bass(_))
                     | (TrackKind::Chord, Instrument::Chord(_))
                     | (TrackKind::Lead, Instrument::Lead(_))
@@ -1809,7 +1938,11 @@ impl Project {
                         let event_ok = matches!(
                             (track.kind, event),
                             (
-                                TrackKind::Kick | TrackKind::Snare | TrackKind::Hat,
+                                TrackKind::Kick
+                                    | TrackKind::Snare
+                                    | TrackKind::Hat
+                                    | TrackKind::Tom
+                                    | TrackKind::Cymbal,
                                 StepEvent::Trigger { .. }
                             ) | (TrackKind::Bass, StepEvent::BassNote { .. })
                                 | (TrackKind::Bass, StepEvent::Tie { .. })
@@ -2073,12 +2206,22 @@ impl ParameterId {
             | Self::FlangerDepth
             | Self::FlangerFeedback
             | Self::FlangerMix => true,
-            Self::Tune => matches!(kind, TrackKind::Kick | TrackKind::Snare | TrackKind::Hat),
-            Self::Tone | Self::Snappy => matches!(kind, TrackKind::Snare),
+            Self::Tune => matches!(
+                kind,
+                TrackKind::Kick
+                    | TrackKind::Snare
+                    | TrackKind::Hat
+                    | TrackKind::Tom
+                    | TrackKind::Cymbal
+            ),
+            Self::Tone => matches!(kind, TrackKind::Snare | TrackKind::Tom | TrackKind::Cymbal),
+            Self::Snappy => matches!(kind, TrackKind::Snare),
             Self::Decay => matches!(
                 kind,
                 TrackKind::Kick
                     | TrackKind::Hat
+                    | TrackKind::Tom
+                    | TrackKind::Cymbal
                     | TrackKind::Bass
                     | TrackKind::Chord
                     | TrackKind::Lead
@@ -2218,10 +2361,14 @@ impl Track {
                 Instrument::Kick(p) => ParameterValue::Percent(p.tune),
                 Instrument::Snare(p) => ParameterValue::Percent(p.tune),
                 Instrument::Hat(p) => ParameterValue::Percent(p.tune),
+                Instrument::Tom(p) => ParameterValue::Percent(p.tune),
+                Instrument::Cymbal(p) => ParameterValue::Percent(p.tune),
                 _ => return None,
             },
             ParameterId::Tone => match self.instrument {
                 Instrument::Snare(p) => ParameterValue::Percent(p.tone),
+                Instrument::Tom(p) => ParameterValue::Percent(p.tone),
+                Instrument::Cymbal(p) => ParameterValue::Percent(p.tone),
                 _ => return None,
             },
             ParameterId::Snappy => match self.instrument {
@@ -2231,6 +2378,8 @@ impl Track {
             ParameterId::Decay => match self.instrument {
                 Instrument::Kick(p) => ParameterValue::Percent(p.decay),
                 Instrument::Hat(p) => ParameterValue::Percent(p.decay),
+                Instrument::Tom(p) => ParameterValue::Percent(p.decay),
+                Instrument::Cymbal(p) => ParameterValue::Percent(p.decay),
                 Instrument::Bass(p) => ParameterValue::Percent(p.decay),
                 Instrument::Chord(p) => ParameterValue::Percent(p.decay),
                 Instrument::Lead(p) => ParameterValue::Percent(p.decay),
@@ -2373,10 +2522,14 @@ impl Track {
                 Instrument::Kick(p) => p.tune = v,
                 Instrument::Snare(p) => p.tune = v,
                 Instrument::Hat(p) => p.tune = v,
+                Instrument::Tom(p) => p.tune = v,
+                Instrument::Cymbal(p) => p.tune = v,
                 _ => return false,
             },
             (ParameterId::Tone, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Snare(p) => p.tone = v,
+                Instrument::Tom(p) => p.tone = v,
+                Instrument::Cymbal(p) => p.tone = v,
                 _ => return false,
             },
             (ParameterId::Snappy, ParameterValue::Percent(v)) => match &mut self.instrument {
@@ -2386,6 +2539,8 @@ impl Track {
             (ParameterId::Decay, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Kick(p) => p.decay = v,
                 Instrument::Hat(p) => p.decay = v,
+                Instrument::Tom(p) => p.decay = v,
+                Instrument::Cymbal(p) => p.decay = v,
                 Instrument::Bass(p) => p.decay = v,
                 Instrument::Chord(p) => p.decay = v,
                 Instrument::Lead(p) => p.decay = v,
@@ -2603,8 +2758,8 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps = vec![None; 1];
         project.patterns[0].tracks[1].steps = vec![None; MAX_STEP_COUNT];
-        project.patterns[0].tracks[3].steps = vec![None; 3];
-        project.patterns[0].tracks[3].steps[2] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps = vec![None; 3];
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[2] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: false,
@@ -2613,10 +2768,13 @@ mod tests {
             retrigger_count: 1,
             locks: Default::default(),
         });
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Tie {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::Tie {
             locks: Default::default(),
         });
-        assert_eq!(tie_source(&project.patterns[0].tracks[3].steps, 0), Some(2));
+        assert_eq!(
+            tie_source(&project.patterns[0].tracks[SYNTH_TRACK_START].steps, 0),
+            Some(2)
+        );
         project.validate().unwrap();
 
         project.patterns[0].tracks[0].steps.clear();
@@ -2655,7 +2813,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 15);
+        assert_eq!(project.format_version, 16);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
@@ -2751,9 +2909,9 @@ mod tests {
                 .all(|track| { track.get("input_accent").is_none() })
         );
 
-        project.tracks[3].input_accent = true;
+        project.tracks[SYNTH_TRACK_START].input_accent = true;
         let value = serde_json::to_value(&project).unwrap();
-        assert_eq!(value["tracks"][3]["input_accent"], true);
+        assert_eq!(value["tracks"][SYNTH_TRACK_START]["input_accent"], true);
         assert_eq!(serde_json::from_value::<Project>(value).unwrap(), project);
     }
     #[test]
@@ -2774,7 +2932,7 @@ mod tests {
         ));
 
         let mut synth = Project::new();
-        synth.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
+        synth.patterns[0].tracks[CHORD_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -2789,7 +2947,7 @@ mod tests {
         });
         assert!(matches!(
             synth.validate(),
-            Err(ValidationError::Lock(4, 0, "tone"))
+            Err(ValidationError::Lock(CHORD_TRACK_INDEX, 0, "tone"))
         ));
     }
 
@@ -2911,16 +3069,19 @@ mod tests {
         project.tracks[0].lfos.cutoff = Some(LfoConfig::default());
         assert_eq!(project.validate(), Err(ValidationError::Lfo(0, "cutoff")));
         project.tracks[0].lfos.cutoff = None;
-        project.tracks[3].lfos.tone = Some(LfoConfig::default());
-        assert_eq!(project.validate(), Err(ValidationError::Lfo(3, "tone")));
-        project.tracks[3].lfos.tone = None;
-        project.tracks[4].lfos.release = Some(LfoConfig::default());
+        project.tracks[SYNTH_TRACK_START].lfos.tone = Some(LfoConfig::default());
+        assert_eq!(
+            project.validate(),
+            Err(ValidationError::Lfo(SYNTH_TRACK_START, "tone"))
+        );
+        project.tracks[SYNTH_TRACK_START].lfos.tone = None;
+        project.tracks[CHORD_TRACK_INDEX].lfos.release = Some(LfoConfig::default());
         project.validate().unwrap();
         assert!(ParameterId::Pitch.supports_lfo(TrackKind::Chord));
         assert!(ParameterId::Pitch.supports_lfo(TrackKind::Lead));
         assert!(!ParameterId::Pitch.supports_lfo(TrackKind::Bass));
         assert!(!ParameterId::Pitch.is_valid_for(TrackKind::Chord));
-        assert!(!project.tracks[4].set_parameter(
+        assert!(!project.tracks[CHORD_TRACK_INDEX].set_parameter(
             ParameterId::Pitch,
             ParameterValue::Percent(Percent::new(50).unwrap())
         ));
@@ -2928,10 +3089,13 @@ mod tests {
             ParameterId::Pitch,
             ParameterValue::Percent(Percent::new(50).unwrap())
         ));
-        project.tracks[4].lfos.pitch = Some(LfoConfig::default());
+        project.tracks[CHORD_TRACK_INDEX].lfos.pitch = Some(LfoConfig::default());
         project.validate().unwrap();
-        project.tracks[3].lfos.pitch = Some(LfoConfig::default());
-        assert_eq!(project.validate(), Err(ValidationError::Lfo(3, "pitch")));
+        project.tracks[SYNTH_TRACK_START].lfos.pitch = Some(LfoConfig::default());
+        assert_eq!(
+            project.validate(),
+            Err(ValidationError::Lfo(SYNTH_TRACK_START, "pitch"))
+        );
     }
 
     #[test]

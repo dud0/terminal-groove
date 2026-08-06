@@ -6,16 +6,18 @@ Application and executable name: `terminal-groove`
 
 ## 1. Product definition
 
-`terminal-groove` is a real-time terminal groovebox with a fast keyboard workflow, predictable state transitions, and visible selection, transport, editing state, parameters, events, locks, shortcuts, dirty state, and audio errors. It has six independently looping 1–64-step tracks on a shared sixteenth-note clock; all sound is synthesized and tracks default to 16 steps.
+`terminal-groove` is a real-time terminal groovebox with a fast keyboard workflow, predictable state transitions, and visible selection, transport, editing state, parameters, events, locks, shortcuts, dirty state, and audio errors. It has eight independently looping 1–64-step tracks on a shared sixteenth-note clock; all sound is synthesized and tracks default to 16 steps.
 
 The fixed track order is:
 
 1. Kick drum
 2. Snare drum
 3. Hi-hat
-4. Bass
-5. Chord
-6. Lead
+4. Tom drum
+5. Cymbal drum
+6. Bass
+7. Chord
+8. Lead
 
 ### 1.1 MVP capabilities
 
@@ -54,7 +56,7 @@ Playback supports start, pause, resume, stop, reset, live editing, drum triggers
 
 ### 2.2 Patterns
 
-- A project contains 1 through 100 dynamic patterns, numbered from 1. Each pattern owns the six track sequences; instrument, mixer, global, and effect settings are shared. New projects contain one empty pattern.
+- A project contains 1 through 100 dynamic patterns, numbered from 1. Each pattern owns the eight track sequences; instrument, mixer, global, and effect settings are shared. New projects contain one empty pattern.
 - The MVP plays patterns directly and does not play the persisted `song` reference list. Pattern edits keep that list's one-based references valid where possible.
 - `Ctrl+P` opens a horizontally organized pattern dialog. Left/right, `Home`, and `End` move a visual cursor without changing playback. `Enter` selects the cursor pattern while stopped or queues it for the next bar while playing, then closes the dialog. `N` inserts an empty pattern after the cursor, `D` duplicates it, `C` copies it, `X` cuts it, `V` pastes the copied pattern after the cursor, and `Delete` removes it. The final pattern cannot be removed and is reset to empty.
 - The dialog marks the currently playing pattern with `▶`, the next queued pattern with `⏭`, and empty patterns with a muted style. The pattern strip scrolls horizontally when necessary.
@@ -187,7 +189,27 @@ The hi-hat remains sample-free: six band-limited square oscillators at fixed inh
 
 Defaults: tune 50%, decay 20%. Accent adds about 3 dB and a short brightness boost.
 
-### 3.6 Bass, Chord, and Lead
+### 3.6 Tom drum
+
+The Tom is a 909-style synthesized tom combining two damped triangle resonators, a short deterministic attack click, and mild nonlinear coloration.
+
+- `tune`: maps the fundamental from approximately 90–210 Hz and the upper resonator from 133–311 Hz.
+- `tone`: balances the low body, upper resonator, and attack click.
+- `decay`: maps exponentially from approximately 90–800 ms.
+
+Defaults: tune 50%, tone 50%, decay 40%. Accent adds about 3 dB and a stronger attack click.
+
+### 3.7 Cymbal
+
+The Cymbal is a 909-style metallic voice built from six fixed inharmonic square oscillators blended with deterministic noise and shaped by high-pass and band-pass filters.
+
+- `tune`: maps the metallic source base from approximately 240–720 Hz.
+- `tone`: balances the metallic oscillator bank against the filtered noise component.
+- `decay`: maps exponentially from approximately 80–1800 ms.
+
+Defaults: tune 50%, tone 55%, decay 30%. Accent adds about 3 dB and a short high-frequency emphasis.
+
+### 3.8 Bass, Chord, and Lead
 
 The Bass track is a 303-inspired engine with:
 
@@ -216,7 +238,7 @@ Chord defaults: 70% Saw mix, pulse width 50%, sub 0%, chorus I, cutoff 55%, reso
 
 All pitched tracks default to input degree 1 and octave 3. Their oscillators and filters run at 2x oversampling. Chord uses stable DCO pitch and a smoother resonance-compensated response; Lead uses stronger drive and feedback.
 
-### 3.7 Mixer and effects
+### 3.9 Mixer and effects
 
 Each track has a serial distortion-then-phaser-then-flanger chain before its fader, pan, and delay/reverb sends. Distortion drive maps exponentially from unity to approximately 31.6× pre-gain, followed by soft clipping; tone is a 700 Hz–18 kHz low-pass; and mix is dry/wet. The phaser is a four-stage stereo all-pass network with opposite-channel logarithmic modulation: rate maps exponentially from 0.05–8 Hz, depth controls a 300 Hz–8 kHz sweep, feedback is limited to 90%, and mix is dry/wet. The flanger is a stereo fractional-delay network with independent feedback lines and opposite-channel sine modulation: rate maps exponentially from 0.05–8 Hz, center delay maps linearly from 0.2–10 ms, depth maps to a 0–5 ms modulation excursion, feedback is limited to 90%, and mix is dry/wet. Distortion defaults to drive 0%, tone 50%, mix 0%; phaser defaults to rate 25%, depth 50%, feedback 20%, mix 0%; flanger defaults to rate 25%, approximately 2 ms center delay, depth 50%, feedback 20%, mix 0%. All three chains use preallocated state, are separately stateful for live playback and audition, smooth parameter changes, and clear state on Stop and project reset.
 
@@ -323,7 +345,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Track | `p` | Toggle visible `BASE`/`LOCK` scope |
 | Track | `Shift+Left` / `Shift+Right` | Move to the previous/next 16-step bank |
 | Track | `PageUp` / `PageDown` | Move to the previous/next step while editing a parameter |
-| Track | `Shift+1`–`Shift+6` | Jump to the corresponding track |
+| Track | `Shift+1`–`Shift+8` | Jump to the corresponding track |
 | Track | `l` | Edit the selected track length from 1 through 64 steps |
 | Track | `Shift+D` | Double the selected track by appending an exact copy, when its length is at most 32 |
 | Track | `Shift+Delete` | Clear all events and locks from the selected track in the active pattern |
@@ -373,7 +395,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - Pressing a parameter shortcut enters a visibly labelled value editor.
 - Pressing another valid parameter shortcut switches the editor to that parameter without leaving the current BASE/LOCK scope.
 - Left/right cycles through the selected track's visible parameter controls and wraps at either end. Shift+left/right continues to move between step banks.
-- PageUp/PageDown moves to the previous/next step of the current track, wrapping at its length, while keeping the active parameter and BASE/LOCK scope. Shift+1 through Shift+6 jumps to the corresponding track; an incompatible parameter switches to that track's first compatible parameter.
+- PageUp/PageDown moves to the previous/next step of the current track, wrapping at its length, while keeping the active parameter and BASE/LOCK scope. Shift+1 through Shift+8 jumps to the corresponding track; an incompatible parameter switches to that track's first compatible parameter.
 - A number-row percentage assignment applies immediately, keeps the parameter editor open, and ramps the affected continuous control to its new value over approximately 30 ms like a quick fader movement.
 - Up/down assignments apply immediately and keep the editor open for repeated changes. On Bass waveform, either direction switches between Saw and Square; on Chord chorus, Up/Down moves through Off, I, and II without wrapping.
 - Enter or Esc returns to navigation without reverting changes already made.
@@ -385,7 +407,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
 - `A` toggles accent immediately on a trigger or note, or toggles the selected track's persisted input accent default when the step is empty without creating an event. `Shift+G` toggles slide on a Bass note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. `Shift+Q` opens the selected-track probability editor with the same controls: Up/Down changes by 1%, Shift+Up/Down by 10%, and values clamp to 0–100%. Enter, Esc, or Shift+Q closes while retaining immediate edits. These edits are undoable and repeated arrow changes coalesce into one transaction; direct accent editing remains invalid on ties. Lowercase `p` remains the BASE/LOCK scope toggle, and `P` remains the Chord/Lead pulse-width shortcut.
 
-The pattern-idea generator opens with `g` and is session-only; its settings are never written to project JSON. Its fields, in order, are `Target`, `Track`, `Seed`, `Density`, `Low octave`, `High octave`, `Ties`, and `Accents`. Up/down moves between fields and clamps at the first or last field; Tab and BackTab move through the same eight-field order and wrap. Target and Track use left/right, the Track selector wraps through all six tracks, and Seed accepts digits with Backspace (left also removes its last digit). Percentage fields change by 5 points and clamp to 0–100%. Low octave and High octave use left/right one octave at a time: Low is clamped to 0 through High, while High is clamped to Low through 7. Enter applies the generator and Esc closes it; range edits do not alter existing events. Defaults are the deterministic seed, 48% density, O2–O6, 18% ties, and 24% accents.
+The pattern-idea generator opens with `g` and is session-only; its settings are never written to project JSON. Its fields, in order, are `Target`, `Track`, `Seed`, `Density`, `Low octave`, `High octave`, `Ties`, and `Accents`. Up/down moves between fields and clamps at the first or last field; Tab and BackTab move through the same eight-field order and wrap. Target and Track use left/right, the Track selector wraps through all eight tracks, and Seed accepts digits with Backspace (left also removes its last digit). Percentage fields change by 5 points and clamp to 0–100%. Low octave and High octave use left/right one octave at a time: Low is clamped to 0 through High, while High is clamped to Low through 7. Enter applies the generator and Esc closes it; range edits do not alter existing events. Defaults are the deterministic seed, 48% density, O2–O6, 18% ties, and 24% accents.
 
 The generator popup is a centered 58×13 rectangle at the standard terminal size and is capped to smaller terminals. The inclusive octave range controls Bass and Lead note octaves. Chord note roots are independently randomized across that same inclusive range; chord shape tones may then extend above the stored root octave according to the selected shape and inversion.
 
@@ -410,7 +432,7 @@ At `120x34` or larger, the normal screen contains:
 
 1. Header: one metadata-only line containing the application name, project filename or `Untitled`, dirty marker, audio device/status, transport state, pattern state, and tempo. If the current audio stream has had callback deadline overruns, the header also shows a text-visible warning badge with the cumulative count and maximum callback load percentage. Persistent command shortcut hints are not shown there; the `?` overlay contains the complete key map.
 2. Global row: all eight global controls and current values; their local shortcuts are shown in the detail cards.
-3. Six variable-length sequencer track blocks: track name, mute state, absolute step range, and compact fixed-width step cells. The displayed range communicates the track length.
+3. Eight variable-length sequencer track blocks: track name, mute state, absolute step range, and compact fixed-width step cells. The displayed range communicates the track length.
 4. A selected-control panel: vertical parameter faders for the selected track, or eight titled global detail cards when the global row is selected. The global cards show a tempo numeric readout, delay-division/key/scale selectors, and faders for delay feedback, reverb time, reverb tone, and reverb pre-delay. Global faders use their model ranges (`0–95%`, `0.2–10.0 s`, `0–100%`, and `0–200 ms`) and show exact values with units beside the fader; every card retains its local shortcut.
 5. Status line: current mode, last successful operation or actionable error, and active-editor guidance. While a track parameter is being edited in `LOCK` scope, the selected-control panel and status line prominently show `LOCK PARAMETER EDITING` using contrasting styling.
 
@@ -476,7 +498,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`, but the application does not silently alter a user-supplied filename.
-- Version 15 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. The required `globals.sidechain` object contains `depth`, `attack`, and `release` percentages. Version-14 files remain rejected; unsupported versions, missing versions, and unknown future versions are rejected without migration.
+- Version 16 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. The required `globals.sidechain` object contains `depth`, `attack`, and `release` percentages. Version-15 and earlier files remain rejected; unsupported versions, missing versions, and unknown future versions are rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -486,7 +508,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 15,
+  "format_version": 16,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -516,9 +538,9 @@ The top-level object is:
 
 `delay_division` accepts the stable strings `thirty_second`, `sixteenth_triplet`, `sixteenth`, `eighth_triplet`, `eighth`, `eighth_dotted`, `quarter_triplet`, `quarter`, `quarter_dotted`, `half`, and `bar`.
 
-`tracks` contains exactly six entries in the fixed instrument order. Every track stores:
+`tracks` contains exactly eight entries in the fixed instrument order. Every track stores:
 
-- `kind`: `kick`, `snare`, `hat`, `bass`, `chord`, or `lead`
+- `kind`: `kick`, `snare`, `hat`, `tom`, `cymbal`, `bass`, `chord`, or `lead`
 - `name`: the fixed display identifier
 - `level`: integer 0–100
 - `pan`: integer 0–100; omitted values load as 50
@@ -537,7 +559,7 @@ The top-level object is:
 
 Top-level tracks contain shared configuration only. Sequence data is stored under `patterns[].tracks[].steps`; each pattern track contains 1 through 64 steps, and its array length is the track length.
 
-Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. `spread` accepts `off`, `narrow`, or `wide`. Lead stores the same percentage controls except `chorus` and `spread`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
+Tom and Cymbal instruments each store `tune`, `tone`, and `decay`. Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. `spread` accepts `off`, `narrow`, or `wide`. Lead stores the same percentage controls except `chorus` and `spread`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
 
 An empty step is JSON `null`. Populated steps use tagged `trigger`, `bass_note`, `note`, or `tie` objects with a required `locks` object. `accent` is required and Boolean on triggers, `bass_note`, and `note`; `slide` is additionally required on `bass_note`; both are invalid on ties.
 
@@ -575,7 +597,7 @@ For Chord or Lead pitch:
 }
 ```
 
-The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 15.
+The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 16.
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 

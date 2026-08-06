@@ -5,8 +5,9 @@ use crate::{
     },
     engine::StepClock,
     model::{
-        ArpeggioConfig, ChordShape, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT,
-        ParameterId, Percent, Project, StepEvent, TRACK_COUNT, TrackEffects,
+        ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, Globals, Instrument,
+        LfoAssignments, MAX_STEP_COUNT, ParameterId, Percent, Project, SYNTH_TRACK_START,
+        StepEvent, TRACK_COUNT, TrackEffects,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -118,8 +119,8 @@ struct Renderer {
     playing: bool,
     sr: f32,
     status: Arc<AudioStatus>,
-    drums: [DrumVoice; 3],
-    preview_drums: [DrumVoice; 3],
+    drums: [DrumVoice; DRUM_TRACK_COUNT],
+    preview_drums: [DrumVoice; DRUM_TRACK_COUNT],
     synth: [SynthVoice; 3],
     preview: [SynthVoice; 3],
     chord: ChordVoicePool,
@@ -299,6 +300,7 @@ pub fn render_offline(project: &Project, sample_rate: u32, frames: usize) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::LEAD_TRACK_INDEX;
     #[test]
     fn drum_envelope_reaches_peak_and_silence_at_programmed_times() {
         let mut envelope = DrumEnvelope::new();
@@ -565,7 +567,7 @@ mod tests {
     #[test]
     fn rejected_pitched_note_releases_but_tie_is_not_probability_gated() {
         let mut project = Project::new();
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: false,
@@ -574,7 +576,7 @@ mod tests {
             retrigger_count: 1,
             locks: Default::default(),
         });
-        project.patterns[0].tracks[3].steps[1] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::BassNote {
             degree: 2,
             octave: 3,
             accent: false,
@@ -587,19 +589,19 @@ mod tests {
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
         renderer.boundary(0);
         assert!(renderer.synth[0].active);
-        renderer.project.tracks[3].probability = Percent::ZERO;
+        renderer.project.tracks[SYNTH_TRACK_START].probability = Percent::ZERO;
         renderer.boundary(1);
         assert!(!renderer.synth[0].active);
 
-        renderer.project.patterns[0].tracks[3].steps[1] = Some(StepEvent::Tie {
+        renderer.project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Tie {
             locks: Default::default(),
         });
-        renderer.project.tracks[3].probability = Percent::new(100).unwrap();
-        renderer.next_steps[3] = 0;
+        renderer.project.tracks[SYNTH_TRACK_START].probability = Percent::new(100).unwrap();
+        renderer.next_steps[SYNTH_TRACK_START] = 0;
         renderer.boundary(2);
         assert!(renderer.synth[0].active);
-        renderer.project.tracks[3].probability = Percent::ZERO;
-        renderer.next_steps[3] = 1;
+        renderer.project.tracks[SYNTH_TRACK_START].probability = Percent::ZERO;
+        renderer.next_steps[SYNTH_TRACK_START] = 1;
         renderer.boundary(3);
         assert!(renderer.synth[0].active);
     }
@@ -626,7 +628,7 @@ mod tests {
     #[test]
     fn scheduled_actions_freeze_while_paused() {
         let mut project = Project::new();
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: false,
@@ -635,7 +637,7 @@ mod tests {
             retrigger_count: 2,
             locks: Default::default(),
         });
-        project.tracks[3].swing = Percent::new(75).unwrap();
+        project.tracks[SYNTH_TRACK_START].swing = Percent::new(75).unwrap();
 
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
@@ -644,7 +646,7 @@ mod tests {
         let remaining_before = renderer
             .scheduled
             .iter()
-            .find(|action| matches!(action, Some(action) if action.track == 3 && !action.retrigger))
+            .find(|action| matches!(action, Some(action) if action.track == SYNTH_TRACK_START as u8 && !action.retrigger))
             .and_then(|action| action.as_ref())
             .unwrap()
             .remaining;
@@ -657,7 +659,7 @@ mod tests {
         let remaining_after = renderer
             .scheduled
             .iter()
-            .find(|action| matches!(action, Some(action) if action.track == 3 && !action.retrigger))
+            .find(|action| matches!(action, Some(action) if action.track == SYNTH_TRACK_START as u8 && !action.retrigger))
             .and_then(|action| action.as_ref())
             .unwrap()
             .remaining;
@@ -777,13 +779,41 @@ mod tests {
     }
 
     #[test]
+    fn tom_and_cymbal_render_deterministically_and_finitely() {
+        fn render_drum(track_index: usize) -> Vec<(f32, f32)> {
+            let mut project = Project::new();
+            for track in &mut project.tracks {
+                track.muted = true;
+            }
+            project.tracks[track_index].muted = false;
+            project.patterns[0].tracks[track_index].steps[0] = Some(StepEvent::Trigger {
+                accent: true,
+                condition: Default::default(),
+                retrigger_count: 1,
+                locks: Default::default(),
+            });
+            render_offline(&project, 8_000, 2_000)
+        }
+
+        let tom = render_drum(3);
+        let cymbal = render_drum(4);
+        assert_eq!(tom, render_drum(3));
+        assert_eq!(cymbal, render_drum(4));
+        assert!(tom.iter().all(|(l, r)| l.is_finite() && r.is_finite()));
+        assert!(cymbal.iter().all(|(l, r)| l.is_finite() && r.is_finite()));
+        assert!(tom.iter().any(|(l, _)| l.abs() > 0.001));
+        assert!(cymbal.iter().any(|(l, _)| l.abs() > 0.001));
+        assert_ne!(tom, cymbal);
+    }
+
+    #[test]
     fn active_chord_and_lead_render_is_finite_at_44100_hz() {
         let mut project = Project::new();
         for track in &mut project.tracks[..3] {
             track.muted = true;
         }
         for step in [0, 4, 8, 12] {
-            project.patterns[0].tracks[3].steps[step] = Some(StepEvent::BassNote {
+            project.patterns[0].tracks[SYNTH_TRACK_START].steps[step] = Some(StepEvent::BassNote {
                 degree: 1,
                 octave: 2,
                 accent: false,
@@ -792,7 +822,7 @@ mod tests {
                 retrigger_count: 1,
                 locks: Default::default(),
             });
-            project.patterns[0].tracks[4].steps[step] = Some(StepEvent::Note {
+            project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[step] = Some(StepEvent::Note {
                 degree: 1,
                 octave: 3,
                 accent: false,
@@ -802,7 +832,7 @@ mod tests {
                 retrigger_count: 1,
                 locks: Default::default(),
             });
-            project.patterns[0].tracks[5].steps[step] = Some(StepEvent::Note {
+            project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[step] = Some(StepEvent::Note {
                 degree: 5,
                 octave: 4,
                 accent: false,
@@ -841,7 +871,7 @@ mod tests {
 
         fn bass_peak(accent: bool) -> f32 {
             let mut project = Project::new();
-            project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
+            project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
                 degree: 1,
                 octave: 3,
                 accent,
@@ -872,7 +902,7 @@ mod tests {
     #[test]
     fn active_bass_keeps_latched_accent_through_ties_and_project_edits() {
         let mut project = Project::new();
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: true,
@@ -881,7 +911,7 @@ mod tests {
             retrigger_count: 1,
             locks: Default::default(),
         });
-        project.patterns[0].tracks[3].steps[1] = Some(StepEvent::Tie {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Tie {
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -893,7 +923,7 @@ mod tests {
         assert!(renderer.synth[0].accent_gain.next_value() > 1.3);
 
         renderer.boundary(0);
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: false,
@@ -912,7 +942,7 @@ mod tests {
     #[test]
     fn bass_slide_is_legato_and_reaches_pitch_in_sixty_milliseconds() {
         let mut project = Project::new();
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: false,
@@ -921,7 +951,7 @@ mod tests {
             retrigger_count: 1,
             locks: Default::default(),
         });
-        project.patterns[0].tracks[3].steps[1] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::BassNote {
             degree: 8,
             octave: 3,
             accent: false,
@@ -993,7 +1023,7 @@ mod tests {
             (12, 4),
             (14, 3),
         ] {
-            project.patterns[0].tracks[3].steps[step] = Some(StepEvent::BassNote {
+            project.patterns[0].tracks[SYNTH_TRACK_START].steps[step] = Some(StepEvent::BassNote {
                 degree,
                 octave: 2,
                 accent: step == 8,
@@ -1103,8 +1133,10 @@ mod tests {
     #[test]
     fn current_step_locks_are_latched_until_the_next_boundary() {
         let mut project = Project::new();
-        project.patterns[0].tracks[3].steps.resize(1, None);
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START]
+            .steps
+            .resize(1, None);
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: false,
@@ -1124,7 +1156,7 @@ mod tests {
 
         let mut edited = project.clone();
         let Some(StepEvent::BassNote { locks, .. }) =
-            edited.patterns[0].tracks[3].steps[0].as_mut()
+            edited.patterns[0].tracks[SYNTH_TRACK_START].steps[0].as_mut()
         else {
             panic!("expected Bass note")
         };
@@ -1139,7 +1171,7 @@ mod tests {
     #[test]
     fn bass_tie_locks_inherit_source_note_and_allow_tie_overrides() {
         let mut project = Project::new();
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: false,
@@ -1152,13 +1184,13 @@ mod tests {
                 ..Default::default()
             },
         });
-        project.patterns[0].tracks[3].steps[1] = Some(StepEvent::Tie {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Tie {
             locks: ParameterLocks {
                 resonance: Percent::new(70),
                 ..Default::default()
             },
         });
-        project.patterns[0].tracks[3].steps[2] = Some(StepEvent::Tie {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[2] = Some(StepEvent::Tie {
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -1183,11 +1215,13 @@ mod tests {
     #[test]
     fn wrapped_bass_tie_locks_inherit_from_wrapped_source_note() {
         let mut project = Project::new();
-        project.patterns[0].tracks[3].steps.resize(3, None);
-        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Tie {
+        project.patterns[0].tracks[SYNTH_TRACK_START]
+            .steps
+            .resize(3, None);
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::Tie {
             locks: Default::default(),
         });
-        project.patterns[0].tracks[3].steps[2] = Some(StepEvent::BassNote {
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[2] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
             accent: false,
@@ -1202,7 +1236,10 @@ mod tests {
         let status = Arc::new(AudioStatus::default());
         let renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
 
-        assert_eq!(renderer.locks_at(3, 0).cutoff, Percent::new(25));
+        assert_eq!(
+            renderer.locks_at(SYNTH_TRACK_START, 0).cutoff,
+            Percent::new(25)
+        );
     }
 
     #[test]
@@ -1238,7 +1275,14 @@ mod tests {
             resonance: Percent::new(0),
             ..Default::default()
         };
-        Renderer::apply_synth_params(&project, 48_000.0, 3, locks, &mut voice, 240);
+        Renderer::apply_synth_params(
+            &project,
+            48_000.0,
+            SYNTH_TRACK_START,
+            locks,
+            &mut voice,
+            240,
+        );
         for _ in 0..240 {
             voice.cutoff_percent.next_value();
             voice.resonance_percent.next_value();
@@ -1252,7 +1296,14 @@ mod tests {
         );
         locks.cutoff = Percent::new(100);
         locks.resonance = Percent::new(100);
-        Renderer::apply_synth_params(&project, 48_000.0, 3, locks, &mut voice, 240);
+        Renderer::apply_synth_params(
+            &project,
+            48_000.0,
+            SYNTH_TRACK_START,
+            locks,
+            &mut voice,
+            240,
+        );
         for _ in 0..240 {
             voice.cutoff_percent.next_value();
             voice.resonance_percent.next_value();
@@ -1270,7 +1321,7 @@ mod tests {
     #[test]
     fn chord_track_triggers_close_position_triads_and_alternates_voice_groups() {
         let mut project = Project::new();
-        project.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -1283,13 +1334,13 @@ mod tests {
                 ..Default::default()
             },
         });
-        project.patterns[0].tracks[4].steps[1] = Some(StepEvent::Tie {
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[1] = Some(StepEvent::Tie {
             locks: ParameterLocks {
                 resonance: Percent::new(70),
                 ..Default::default()
             },
         });
-        project.patterns[0].tracks[4].steps[2] = Some(StepEvent::Note {
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[2] = Some(StepEvent::Note {
             degree: 4,
             octave: 3,
             accent: true,
@@ -1347,7 +1398,7 @@ mod tests {
     #[test]
     fn chord_track_renders_four_note_shapes_with_overlap_capacity() {
         let mut project = Project::new();
-        project.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -1385,9 +1436,9 @@ mod tests {
 
         let mut dry_project = Project::new();
         for (index, track) in dry_project.tracks.iter_mut().enumerate() {
-            track.muted = index != 4;
+            track.muted = index != CHORD_TRACK_INDEX;
         }
-        dry_project.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
+        dry_project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -1398,7 +1449,7 @@ mod tests {
             locks: Default::default(),
         });
         let mut wet_project = dry_project.clone();
-        wet_project.tracks[4].reverb_send = Percent::new(100).unwrap();
+        wet_project.tracks[CHORD_TRACK_INDEX].reverb_send = Percent::new(100).unwrap();
 
         let dry = render_offline(&dry_project, 8_000, 12_000);
         let wet = render_offline(&wet_project, 8_000, 12_000);
@@ -1500,9 +1551,9 @@ mod tests {
     fn arpeggiated_chord_renders_finite_and_restarts_after_empty_step() {
         let mut project = Project::new();
         for (index, track) in project.tracks.iter_mut().enumerate() {
-            track.muted = index != 4;
+            track.muted = index != CHORD_TRACK_INDEX;
         }
-        project.patterns[0].tracks[4].steps[0] = Some(StepEvent::Note {
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
             accent: false,
@@ -1516,7 +1567,7 @@ mod tests {
             retrigger_count: 1,
             locks: Default::default(),
         });
-        project.patterns[0].tracks[4].steps[1] = None;
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[1] = None;
         let output = render_offline(&project, 8_000, 8_000);
         assert!(
             output

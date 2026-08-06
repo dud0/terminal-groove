@@ -44,7 +44,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if version != Some(15) {
+    if version != Some(16) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
@@ -214,23 +214,30 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 15);
+        assert_eq!(value["format_version"], 16);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
         assert_eq!(value["globals"]["reverb_pre_delay_ms"], 20);
-        assert_eq!(value["tracks"].as_array().unwrap().len(), 6);
+        assert_eq!(value["tracks"].as_array().unwrap().len(), 8);
         assert_eq!(value["tracks"][0]["name"], "Kick");
-        assert_eq!(value["tracks"][4]["kind"], "chord");
-        assert_eq!(value["tracks"][4]["name"], "Chord");
-        assert_eq!(value["tracks"][4]["reverb_send"], 20);
-        assert_eq!(value["tracks"][4]["instrument"]["chorus"], "i");
-        assert_eq!(value["tracks"][4]["instrument"]["sub_oscillator"], 0);
+        assert_eq!(value["tracks"][4]["kind"], "cymbal");
+        assert_eq!(value["tracks"][4]["name"], "Cymbal");
+        assert_eq!(value["tracks"][3]["kind"], "tom");
+        assert_eq!(value["tracks"][3]["instrument"]["tune"], 50);
+        assert_eq!(value["tracks"][3]["instrument"]["tone"], 50);
+        assert_eq!(value["tracks"][3]["instrument"]["decay"], 40);
+        assert_eq!(value["tracks"][4]["instrument"]["tone"], 55);
+        assert_eq!(value["tracks"][6]["kind"], "chord");
+        assert_eq!(value["tracks"][6]["name"], "Chord");
+        assert_eq!(value["tracks"][6]["reverb_send"], 20);
+        assert_eq!(value["tracks"][6]["instrument"]["chorus"], "i");
+        assert_eq!(value["tracks"][6]["instrument"]["sub_oscillator"], 0);
         assert_eq!(value["tracks"][0]["effects"]["flanger"]["rate"], 25);
         assert_eq!(value["tracks"][0]["effects"]["flanger"]["delay"], 18);
-        assert_eq!(value["tracks"][5]["kind"], "lead");
-        assert_eq!(value["tracks"][5]["name"], "Lead");
-        assert_eq!(value["tracks"][5]["reverb_send"], 20);
+        assert_eq!(value["tracks"][7]["kind"], "lead");
+        assert_eq!(value["tracks"][7]["name"], "Lead");
+        assert_eq!(value["tracks"][7]["reverb_send"], 20);
         assert_eq!(value["tracks"][0]["lfos"], serde_json::json!({}));
         assert!(value["tracks"][0].get("input_degree").is_none());
         assert_eq!(
@@ -305,7 +312,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("probability.groove.json");
         let mut project = Project::new();
-        project.tracks[3].probability = crate::model::Percent::new(37).unwrap();
+        project.tracks[crate::model::SYNTH_TRACK_START].probability =
+            crate::model::Percent::new(37).unwrap();
         save_atomic(&path, &project).unwrap();
         assert_eq!(load(&path).unwrap(), project);
 
@@ -328,16 +336,17 @@ mod tests {
     }
 
     #[test]
-    fn bundled_projects_are_valid_latest_format_files() {
+    fn bundled_legacy_projects_are_rejected_after_the_format_bump() {
         for json in [include_str!("../test1"), include_str!("../test2")] {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
-            let project = load(path.path()).unwrap();
-            assert_eq!(project.format_version, 15);
-            assert!(
-                (crate::model::MIN_PATTERN_COUNT..=crate::model::MAX_PATTERN_COUNT)
-                    .contains(&project.patterns.len())
-            );
+            assert!(matches!(
+                load(path.path()),
+                Err(ProjectIoError::Validation {
+                    source: crate::model::ValidationError::Version(15),
+                    ..
+                })
+            ));
         }
     }
 
@@ -354,12 +363,15 @@ mod tests {
             depth: crate::model::Percent::new(40).unwrap(),
             enabled: true,
         });
-        project.tracks[3].lfos.cutoff = Some(crate::model::LfoConfig::default());
-        project.tracks[4].lfos.pitch = Some(crate::model::LfoConfig {
-            depth: crate::model::Percent::new(100).unwrap(),
-            ..Default::default()
-        });
-        project.tracks[5].lfos.pitch = Some(crate::model::LfoConfig::default());
+        project.tracks[crate::model::SYNTH_TRACK_START].lfos.cutoff =
+            Some(crate::model::LfoConfig::default());
+        project.tracks[crate::model::CHORD_TRACK_INDEX].lfos.pitch =
+            Some(crate::model::LfoConfig {
+                depth: crate::model::Percent::new(100).unwrap(),
+                ..Default::default()
+            });
+        project.tracks[crate::model::LEAD_TRACK_INDEX].lfos.pitch =
+            Some(crate::model::LfoConfig::default());
         save_atomic(&path, &project).unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded, project);
@@ -408,29 +420,31 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("chords.groove.json");
         let mut project = Project::new();
-        project.tracks[4].input_chord_shape = Some(crate::model::ChordShape::SeventhRoot);
-        project.patterns[0].tracks[4].steps[0] = Some(crate::model::StepEvent::Note {
-            degree: 1,
-            octave: 3,
-            accent: false,
-            chord_shape: Some(crate::model::ChordShape::SeventhFirstInversion),
-            arpeggio: crate::model::ArpeggioConfig::default(),
-            condition: Default::default(),
-            retrigger_count: 1,
-            locks: Default::default(),
-        });
+        project.tracks[crate::model::CHORD_TRACK_INDEX].input_chord_shape =
+            Some(crate::model::ChordShape::SeventhRoot);
+        project.patterns[0].tracks[crate::model::CHORD_TRACK_INDEX].steps[0] =
+            Some(crate::model::StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                chord_shape: Some(crate::model::ChordShape::SeventhFirstInversion),
+                arpeggio: crate::model::ArpeggioConfig::default(),
+                condition: Default::default(),
+                retrigger_count: 1,
+                locks: Default::default(),
+            });
         save_atomic(&path, &project).unwrap();
         assert_eq!(load(&path).unwrap(), project);
 
         let mut value = serde_json::to_value(load(&path).unwrap()).unwrap();
-        value["patterns"][0]["tracks"][4]["steps"][0]
+        value["patterns"][0]["tracks"][crate::model::CHORD_TRACK_INDEX]["steps"][0]
             .as_object_mut()
             .unwrap()
             .remove("chord_shape");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
         assert!(matches!(
-            loaded.tracks[4].steps[0],
+            loaded.tracks[crate::model::CHORD_TRACK_INDEX].steps[0],
             Some(crate::model::StepEvent::Note {
                 chord_shape: None,
                 ..
@@ -443,20 +457,21 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("arpeggio.groove.json");
         let mut project = Project::new();
-        project.patterns[0].tracks[4].steps[0] = Some(crate::model::StepEvent::Note {
-            degree: 1,
-            octave: 3,
-            accent: false,
-            chord_shape: None,
-            arpeggio: crate::model::ArpeggioConfig {
-                enabled: false,
-                r#type: crate::model::ArpeggioType::DownUp,
-                rate: crate::model::ArpeggioRate::ThirtySecond,
-            },
-            condition: Default::default(),
-            retrigger_count: 1,
-            locks: Default::default(),
-        });
+        project.patterns[0].tracks[crate::model::CHORD_TRACK_INDEX].steps[0] =
+            Some(crate::model::StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                chord_shape: None,
+                arpeggio: crate::model::ArpeggioConfig {
+                    enabled: false,
+                    r#type: crate::model::ArpeggioType::DownUp,
+                    rate: crate::model::ArpeggioRate::ThirtySecond,
+                },
+                condition: Default::default(),
+                retrigger_count: 1,
+                locks: Default::default(),
+            });
         save_atomic(&path, &project).unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded, project);
@@ -477,7 +492,7 @@ mod tests {
             .remove("flanger");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 15);
+        assert_eq!(loaded.format_version, 16);
         assert_eq!(
             loaded.tracks[0].effects.flanger,
             crate::model::FlangerParameters::default()

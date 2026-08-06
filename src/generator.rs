@@ -90,7 +90,11 @@ pub fn generate(project: &Project, config: Config) -> Generated {
         if selected(index)
             && matches!(
                 track.kind,
-                TrackKind::Kick | TrackKind::Snare | TrackKind::Hat
+                TrackKind::Kick
+                    | TrackKind::Snare
+                    | TrackKind::Hat
+                    | TrackKind::Tom
+                    | TrackKind::Cymbal
             )
         {
             inserted += fill_track(
@@ -125,7 +129,11 @@ pub fn generate(project: &Project, config: Config) -> Generated {
         if !selected(index)
             || matches!(
                 track.kind,
-                TrackKind::Kick | TrackKind::Snare | TrackKind::Hat
+                TrackKind::Kick
+                    | TrackKind::Snare
+                    | TrackKind::Hat
+                    | TrackKind::Tom
+                    | TrackKind::Cymbal
             )
         {
             continue;
@@ -175,6 +183,8 @@ fn fill_track(
             TrackKind::Kick => i % 16 == 0 || i % 16 == 7,
             TrackKind::Snare => i % 16 == 4 || i % 16 == 12,
             TrackKind::Hat => i % 2 == 0,
+            TrackKind::Tom => i % 16 == 10 || i % 16 == 14,
+            TrackKind::Cymbal => i % 16 == 0,
             TrackKind::Bass => {
                 groove.is_some_and(|g| g.get(i).copied().unwrap_or(false)) || i % 4 == 0
             }
@@ -191,7 +201,11 @@ fn fill_track(
         }
         let accent = anchor && rng.percent(accents);
         *slot = Some(match kind {
-            TrackKind::Kick | TrackKind::Snare | TrackKind::Hat => StepEvent::Trigger {
+            TrackKind::Kick
+            | TrackKind::Snare
+            | TrackKind::Hat
+            | TrackKind::Tom
+            | TrackKind::Cymbal => StepEvent::Trigger {
                 accent,
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
@@ -256,7 +270,7 @@ fn add_ties(steps: &mut [Step], rng: &mut Rng, amount: Percent) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Project, StepEvent};
+    use crate::model::{Project, SYNTH_TRACK_START, StepEvent};
 
     #[test]
     fn same_seed_is_repeatable_and_different_seed_changes_ideas() {
@@ -302,17 +316,17 @@ mod tests {
         let result = generate(
             &p,
             Config {
-                target: Target::Track(3),
+                target: Target::Track(SYNTH_TRACK_START),
                 ..Config::default()
             },
         );
         assert!(
-            result.tracks[0..3]
+            result.tracks[..SYNTH_TRACK_START]
                 .iter()
                 .all(|s| s.iter().all(Option::is_none))
         );
         assert!(
-            result.tracks[4..]
+            result.tracks[SYNTH_TRACK_START + 1..]
                 .iter()
                 .all(|s| s.iter().all(Option::is_none))
         );
@@ -344,7 +358,11 @@ mod tests {
             },
         );
 
-        for track in [3, 4, 5] {
+        for track in [
+            crate::model::SYNTH_TRACK_START,
+            crate::model::CHORD_TRACK_INDEX,
+            crate::model::LEAD_TRACK_INDEX,
+        ] {
             let octaves = generated_octaves(&result.tracks[track]);
             assert!(!octaves.is_empty());
             assert!(octaves.iter().all(|octave| (4..=5).contains(octave)));
@@ -365,7 +383,11 @@ mod tests {
             },
         );
 
-        for track in [3, 4, 5] {
+        for track in [
+            crate::model::SYNTH_TRACK_START,
+            crate::model::CHORD_TRACK_INDEX,
+            crate::model::LEAD_TRACK_INDEX,
+        ] {
             assert!(
                 generated_octaves(&result.tracks[track])
                     .iter()
@@ -377,11 +399,13 @@ mod tests {
     #[test]
     fn chord_roots_are_randomized_within_the_configured_range() {
         let mut p = Project::new();
-        p.tracks[4].steps.resize(64, None);
+        p.tracks[crate::model::CHORD_TRACK_INDEX]
+            .steps
+            .resize(64, None);
         let result = generate(
             &p,
             Config {
-                target: Target::Track(4),
+                target: Target::Track(crate::model::CHORD_TRACK_INDEX),
                 density: Percent::new(100).unwrap(),
                 range_low: 2,
                 range_high: 6,
@@ -389,7 +413,7 @@ mod tests {
                 ..Config::default()
             },
         );
-        let octaves = generated_octaves(&result.tracks[4]);
+        let octaves = generated_octaves(&result.tracks[crate::model::CHORD_TRACK_INDEX]);
         assert!(octaves.iter().all(|octave| (2..=6).contains(octave)));
         assert!(octaves.windows(2).any(|pair| pair[0] != pair[1]));
     }

@@ -1352,6 +1352,7 @@ pub fn percentage_key(c: char) -> Option<Percent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{CHORD_TRACK_INDEX, SYNTH_TRACK_START, TRACK_COUNT};
     #[test]
     fn undo_dirty_redo() {
         let mut e = Editor::new(Project::new());
@@ -1489,14 +1490,14 @@ mod tests {
     #[test]
     fn tie_cleanup_is_atomic() {
         let mut e = Editor::new(Project::new());
-        e.set_note(3, 0, 1).unwrap();
-        e.toggle_tie(3, 1).unwrap();
-        e.toggle_tie(3, 2).unwrap();
-        e.clear(3, 0).unwrap();
-        assert!(e.project.tracks[3].steps[1].is_none());
+        e.set_note(SYNTH_TRACK_START, 0, 1).unwrap();
+        e.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
+        e.toggle_tie(SYNTH_TRACK_START, 2).unwrap();
+        e.clear(SYNTH_TRACK_START, 0).unwrap();
+        assert!(e.project.tracks[SYNTH_TRACK_START].steps[1].is_none());
         e.undo();
         assert!(matches!(
-            e.project.tracks[3].steps[2],
+            e.project.tracks[SYNTH_TRACK_START].steps[2],
             Some(StepEvent::Tie { .. })
         ));
     }
@@ -1504,10 +1505,10 @@ mod tests {
     #[test]
     fn clear_track_removes_events_and_locks_as_one_undoable_edit() {
         let mut editor = Editor::new(Project::new());
-        editor.set_note(3, 0, 1).unwrap();
+        editor.set_note(SYNTH_TRACK_START, 0, 1).unwrap();
         editor
             .set_parameter(
-                3,
+                SYNTH_TRACK_START,
                 0,
                 Scope::Lock,
                 ParameterId::Cutoff,
@@ -1515,27 +1516,37 @@ mod tests {
                 None,
             )
             .unwrap();
-        editor.toggle_tie(3, 1).unwrap();
+        editor.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
         editor.toggle_event(0, 0).unwrap();
         let before = editor.project.clone();
-        let length = editor.project.tracks[3].steps.len();
+        let length = editor.project.tracks[SYNTH_TRACK_START].steps.len();
 
-        assert_eq!(editor.clear_track(3).unwrap(), 2);
-        assert!(editor.project.tracks[3].steps.iter().all(Option::is_none));
-        assert_eq!(editor.project.tracks[3].steps.len(), length);
+        assert_eq!(editor.clear_track(SYNTH_TRACK_START).unwrap(), 2);
+        assert!(
+            editor.project.tracks[SYNTH_TRACK_START]
+                .steps
+                .iter()
+                .all(Option::is_none)
+        );
+        assert_eq!(editor.project.tracks[SYNTH_TRACK_START].steps.len(), length);
         assert!(editor.project.tracks[0].steps[0].is_some());
 
         assert!(editor.undo());
         assert_eq!(editor.project, before);
         assert!(editor.redo());
-        assert!(editor.project.tracks[3].steps.iter().all(Option::is_none));
+        assert!(
+            editor.project.tracks[SYNTH_TRACK_START]
+                .steps
+                .iter()
+                .all(Option::is_none)
+        );
     }
 
     #[test]
     fn clearing_an_empty_track_is_a_no_op() {
         let mut editor = Editor::new(Project::new());
 
-        assert_eq!(editor.clear_track(3).unwrap(), 0);
+        assert_eq!(editor.clear_track(SYNTH_TRACK_START).unwrap(), 0);
         assert!(!editor.undo());
     }
 
@@ -1556,23 +1567,23 @@ mod tests {
         assert_eq!(editor.accent_value(0, 0), Ok(false));
         editor.clear(0, 0).unwrap();
 
-        editor.toggle_accent(3, 0).unwrap();
-        editor.toggle_event(3, 0).unwrap();
+        editor.toggle_accent(SYNTH_TRACK_START, 0).unwrap();
+        editor.toggle_event(SYNTH_TRACK_START, 0).unwrap();
         assert!(matches!(
-            editor.project.tracks[3].steps[0],
+            editor.project.tracks[SYNTH_TRACK_START].steps[0],
             Some(StepEvent::BassNote {
                 accent: true,
                 slide: false,
                 ..
             })
         ));
-        editor.toggle_accent(3, 0).unwrap();
-        assert!(editor.project.tracks[3].input_accent);
-        editor.clear(3, 0).unwrap();
-        assert_eq!(editor.accent_value(3, 0), Ok(true));
-        editor.set_note(3, 1, 2).unwrap();
+        editor.toggle_accent(SYNTH_TRACK_START, 0).unwrap();
+        assert!(editor.project.tracks[SYNTH_TRACK_START].input_accent);
+        editor.clear(SYNTH_TRACK_START, 0).unwrap();
+        assert_eq!(editor.accent_value(SYNTH_TRACK_START, 0), Ok(true));
+        editor.set_note(SYNTH_TRACK_START, 1, 2).unwrap();
         assert!(matches!(
-            editor.project.tracks[3].steps[1],
+            editor.project.tracks[SYNTH_TRACK_START].steps[1],
             Some(StepEvent::BassNote { accent: true, .. })
         ));
     }
@@ -1580,45 +1591,51 @@ mod tests {
     #[test]
     fn empty_accent_defaults_are_undoable_and_ties_reject_direct_editing() {
         let mut editor = Editor::new(Project::new());
-        assert_eq!(editor.accent_value(3, 0), Ok(false));
-        editor.toggle_accent(3, 0).unwrap();
-        assert_eq!(editor.accent_value(3, 0), Ok(true));
+        assert_eq!(editor.accent_value(SYNTH_TRACK_START, 0), Ok(false));
+        editor.toggle_accent(SYNTH_TRACK_START, 0).unwrap();
+        assert_eq!(editor.accent_value(SYNTH_TRACK_START, 0), Ok(true));
         assert!(editor.undo());
-        assert_eq!(editor.accent_value(3, 0), Ok(false));
+        assert_eq!(editor.accent_value(SYNTH_TRACK_START, 0), Ok(false));
         assert!(editor.redo());
-        assert_eq!(editor.accent_value(3, 0), Ok(true));
+        assert_eq!(editor.accent_value(SYNTH_TRACK_START, 0), Ok(true));
 
-        editor.set_note(3, 0, 1).unwrap();
-        editor.toggle_slide(3, 0).unwrap();
-        editor.set_note(3, 0, 5).unwrap();
-        assert_eq!(editor.accent_value(3, 0), Ok(true));
+        editor.set_note(SYNTH_TRACK_START, 0, 1).unwrap();
+        editor.toggle_slide(SYNTH_TRACK_START, 0).unwrap();
+        editor.set_note(SYNTH_TRACK_START, 0, 5).unwrap();
+        assert_eq!(editor.accent_value(SYNTH_TRACK_START, 0), Ok(true));
         assert!(matches!(
-            editor.project.tracks[3].steps[0],
+            editor.project.tracks[SYNTH_TRACK_START].steps[0],
             Some(StepEvent::BassNote { slide: true, .. })
         ));
-        editor.toggle_tie(3, 1).unwrap();
-        assert_eq!(editor.toggle_accent(3, 1), Err(EditError::NoAccent));
-        assert_eq!(editor.toggle_slide(4, 0), Err(EditError::NoSlide));
+        editor.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
+        assert_eq!(
+            editor.toggle_accent(SYNTH_TRACK_START, 1),
+            Err(EditError::NoAccent)
+        );
+        assert_eq!(
+            editor.toggle_slide(CHORD_TRACK_INDEX, 0),
+            Err(EditError::NoSlide)
+        );
         assert!(editor.undo());
     }
 
     #[test]
     fn replacing_ties_uses_the_current_input_accent_but_existing_notes_keep_theirs() {
         let mut editor = Editor::new(Project::new());
-        editor.set_note(3, 0, 1).unwrap();
-        editor.toggle_accent(3, 0).unwrap();
-        editor.toggle_tie(3, 1).unwrap();
+        editor.set_note(SYNTH_TRACK_START, 0, 1).unwrap();
+        editor.toggle_accent(SYNTH_TRACK_START, 0).unwrap();
+        editor.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
 
-        editor.toggle_accent(3, 1).unwrap_err();
-        editor.set_note(3, 1, 2).unwrap();
+        editor.toggle_accent(SYNTH_TRACK_START, 1).unwrap_err();
+        editor.set_note(SYNTH_TRACK_START, 1, 2).unwrap();
         assert!(matches!(
-            editor.project.tracks[3].steps[1],
+            editor.project.tracks[SYNTH_TRACK_START].steps[1],
             Some(StepEvent::BassNote { accent: false, .. })
         ));
 
-        editor.set_note(3, 0, 5).unwrap();
+        editor.set_note(SYNTH_TRACK_START, 0, 5).unwrap();
         assert!(matches!(
-            editor.project.tracks[3].steps[0],
+            editor.project.tracks[SYNTH_TRACK_START].steps[0],
             Some(StepEvent::BassNote { accent: true, .. })
         ));
     }
@@ -1650,12 +1667,21 @@ mod tests {
             (ParameterId::Sustain, 74),
             (ParameterId::Release, 18),
         ] {
-            e.set_parameter(4, 0, Scope::Base, parameter, p(value), None)
+            e.set_parameter(CHORD_TRACK_INDEX, 0, Scope::Base, parameter, p(value), None)
                 .unwrap();
         }
-        e.set_parameter(4, 0, Scope::Base, ParameterId::OscillatorMix, p(82), None)
-            .unwrap();
-        let crate::model::Instrument::Chord(synth) = &e.project.tracks[4].instrument else {
+        e.set_parameter(
+            CHORD_TRACK_INDEX,
+            0,
+            Scope::Base,
+            ParameterId::OscillatorMix,
+            p(82),
+            None,
+        )
+        .unwrap();
+        let crate::model::Instrument::Chord(synth) =
+            &e.project.tracks[CHORD_TRACK_INDEX].instrument
+        else {
             panic!("expected synth")
         };
         assert_eq!(synth.oscillator_mix.get(), 82);
@@ -1787,9 +1813,16 @@ mod tests {
             e.set_parameter(0, 0, Scope::Lock, ParameterId::Level, value, None),
             Err(EditError::EmptyLock)
         );
-        e.toggle_event(3, 0).unwrap();
+        e.toggle_event(SYNTH_TRACK_START, 0).unwrap();
         assert_eq!(
-            e.set_parameter(3, 0, Scope::Lock, ParameterId::Tone, value, None),
+            e.set_parameter(
+                SYNTH_TRACK_START,
+                0,
+                Scope::Lock,
+                ParameterId::Tone,
+                value,
+                None
+            ),
             Err(EditError::InvalidParameter)
         );
     }
@@ -1797,20 +1830,20 @@ mod tests {
     #[test]
     fn resize_cleans_wrapped_ties_and_undo_restores_them() {
         let mut e = Editor::new(Project::new());
-        e.set_track_length(3, 4, None).unwrap();
-        e.set_note(3, 3, 1).unwrap();
-        e.toggle_tie(3, 0).unwrap();
-        e.set_track_length(3, 3, None).unwrap();
-        assert_eq!(e.project.tracks[3].steps.len(), 3);
-        assert!(e.project.tracks[3].steps[0].is_none());
+        e.set_track_length(SYNTH_TRACK_START, 4, None).unwrap();
+        e.set_note(SYNTH_TRACK_START, 3, 1).unwrap();
+        e.toggle_tie(SYNTH_TRACK_START, 0).unwrap();
+        e.set_track_length(SYNTH_TRACK_START, 3, None).unwrap();
+        assert_eq!(e.project.tracks[SYNTH_TRACK_START].steps.len(), 3);
+        assert!(e.project.tracks[SYNTH_TRACK_START].steps[0].is_none());
         assert!(e.undo());
-        assert_eq!(e.project.tracks[3].steps.len(), 4);
+        assert_eq!(e.project.tracks[SYNTH_TRACK_START].steps.len(), 4);
         assert!(matches!(
-            e.project.tracks[3].steps[0],
+            e.project.tracks[SYNTH_TRACK_START].steps[0],
             Some(StepEvent::Tie { .. })
         ));
         assert!(matches!(
-            e.project.tracks[3].steps[3],
+            e.project.tracks[SYNTH_TRACK_START].steps[3],
             Some(StepEvent::BassNote { .. })
         ));
     }
@@ -1818,10 +1851,10 @@ mod tests {
     #[test]
     fn duplicate_track_copies_events_locks_and_is_one_undo_step() {
         let mut e = Editor::new(Project::new());
-        e.set_track_length(3, 4, None).unwrap();
-        e.set_note(3, 3, 2).unwrap();
+        e.set_track_length(SYNTH_TRACK_START, 4, None).unwrap();
+        e.set_note(SYNTH_TRACK_START, 3, 2).unwrap();
         e.set_parameter(
-            3,
+            SYNTH_TRACK_START,
             3,
             Scope::Lock,
             ParameterId::Cutoff,
@@ -1829,14 +1862,20 @@ mod tests {
             None,
         )
         .unwrap();
-        e.toggle_tie(3, 0).unwrap();
-        let original = e.project.tracks[3].steps.clone();
-        e.duplicate_track(3).unwrap();
-        assert_eq!(e.project.tracks[3].steps.len(), 8);
-        assert_eq!(&e.project.tracks[3].steps[..4], original.as_slice());
-        assert_eq!(&e.project.tracks[3].steps[4..], original.as_slice());
+        e.toggle_tie(SYNTH_TRACK_START, 0).unwrap();
+        let original = e.project.tracks[SYNTH_TRACK_START].steps.clone();
+        e.duplicate_track(SYNTH_TRACK_START).unwrap();
+        assert_eq!(e.project.tracks[SYNTH_TRACK_START].steps.len(), 8);
+        assert_eq!(
+            &e.project.tracks[SYNTH_TRACK_START].steps[..4],
+            original.as_slice()
+        );
+        assert_eq!(
+            &e.project.tracks[SYNTH_TRACK_START].steps[4..],
+            original.as_slice()
+        );
         assert!(e.undo());
-        assert_eq!(e.project.tracks[3].steps, original);
+        assert_eq!(e.project.tracks[SYNTH_TRACK_START].steps, original);
     }
 
     #[test]
@@ -1854,14 +1893,17 @@ mod tests {
         let mut editor = Editor::new(Project::new());
         let config = LfoConfig::default();
         editor
-            .set_lfo(3, ParameterId::Cutoff, Some(config), None)
+            .set_lfo(SYNTH_TRACK_START, ParameterId::Cutoff, Some(config), None)
             .unwrap();
-        assert_eq!(editor.lfo(3, ParameterId::Cutoff), Ok(Some(config)));
+        assert_eq!(
+            editor.lfo(SYNTH_TRACK_START, ParameterId::Cutoff),
+            Ok(Some(config))
+        );
         assert!(editor.is_dirty());
         assert!(editor.undo());
-        assert_eq!(editor.lfo(3, ParameterId::Cutoff), Ok(None));
+        assert_eq!(editor.lfo(SYNTH_TRACK_START, ParameterId::Cutoff), Ok(None));
         assert_eq!(
-            editor.set_lfo(3, ParameterId::Waveform, Some(config), None),
+            editor.set_lfo(SYNTH_TRACK_START, ParameterId::Waveform, Some(config), None),
             Err(EditError::InvalidParameter)
         );
         assert_eq!(
@@ -1869,20 +1911,26 @@ mod tests {
             Err(EditError::InvalidParameter)
         );
         editor
-            .set_lfo(4, ParameterId::Pitch, Some(config), None)
+            .set_lfo(CHORD_TRACK_INDEX, ParameterId::Pitch, Some(config), None)
             .unwrap();
-        assert_eq!(editor.lfo(4, ParameterId::Pitch), Ok(Some(config)));
-        assert!(editor.undo());
-        assert_eq!(editor.lfo(4, ParameterId::Pitch), Ok(None));
-        assert!(editor.redo());
-        assert_eq!(editor.lfo(4, ParameterId::Pitch), Ok(Some(config)));
         assert_eq!(
-            editor.set_lfo(3, ParameterId::Pitch, Some(config), None),
+            editor.lfo(CHORD_TRACK_INDEX, ParameterId::Pitch),
+            Ok(Some(config))
+        );
+        assert!(editor.undo());
+        assert_eq!(editor.lfo(CHORD_TRACK_INDEX, ParameterId::Pitch), Ok(None));
+        assert!(editor.redo());
+        assert_eq!(
+            editor.lfo(CHORD_TRACK_INDEX, ParameterId::Pitch),
+            Ok(Some(config))
+        );
+        assert_eq!(
+            editor.set_lfo(SYNTH_TRACK_START, ParameterId::Pitch, Some(config), None),
             Err(EditError::InvalidParameter)
         );
         assert_eq!(
             editor.set_parameter(
-                4,
+                CHORD_TRACK_INDEX,
                 0,
                 Scope::Base,
                 ParameterId::Pitch,
@@ -1893,7 +1941,7 @@ mod tests {
         );
         assert_eq!(
             editor.set_parameter(
-                4,
+                CHORD_TRACK_INDEX,
                 0,
                 Scope::Lock,
                 ParameterId::Pitch,
@@ -1908,25 +1956,25 @@ mod tests {
     fn chord_shape_edits_selected_notes_and_empty_step_defaults() {
         let mut editor = Editor::new(Project::new());
         editor
-            .set_chord_shape(4, 0, ChordShape::SeventhRoot)
+            .set_chord_shape(CHORD_TRACK_INDEX, 0, ChordShape::SeventhRoot)
             .unwrap();
         assert_eq!(
-            editor.project.tracks[4].input_chord_shape,
+            editor.project.tracks[CHORD_TRACK_INDEX].input_chord_shape,
             Some(ChordShape::SeventhRoot)
         );
-        editor.set_note(4, 0, 1).unwrap();
+        editor.set_note(CHORD_TRACK_INDEX, 0, 1).unwrap();
         assert!(matches!(
-            editor.project.tracks[4].steps[0],
+            editor.project.tracks[CHORD_TRACK_INDEX].steps[0],
             Some(StepEvent::Note {
                 chord_shape: Some(ChordShape::SeventhRoot),
                 ..
             })
         ));
         editor
-            .set_chord_shape(4, 0, ChordShape::Sus4FirstInversion)
+            .set_chord_shape(CHORD_TRACK_INDEX, 0, ChordShape::Sus4FirstInversion)
             .unwrap();
         assert!(matches!(
-            editor.project.tracks[4].steps[0],
+            editor.project.tracks[CHORD_TRACK_INDEX].steps[0],
             Some(StepEvent::Note {
                 chord_shape: Some(ChordShape::Sus4FirstInversion),
                 ..
@@ -1934,7 +1982,7 @@ mod tests {
         ));
         assert!(editor.undo());
         assert!(matches!(
-            editor.project.tracks[4].steps[0],
+            editor.project.tracks[CHORD_TRACK_INDEX].steps[0],
             Some(StepEvent::Note {
                 chord_shape: Some(ChordShape::SeventhRoot),
                 ..
@@ -1946,35 +1994,50 @@ mod tests {
     fn chord_trigger_articulation_and_tie_inheritance_are_undoable() {
         let mut editor = Editor::new(Project::new());
         editor
-            .set_arpeggio_type(4, 0, crate::model::ArpeggioType::Down)
+            .set_arpeggio_type(CHORD_TRACK_INDEX, 0, crate::model::ArpeggioType::Down)
             .unwrap();
         editor
-            .set_arpeggio_rate(4, 0, crate::model::ArpeggioRate::EighthTriplet)
+            .set_arpeggio_rate(
+                CHORD_TRACK_INDEX,
+                0,
+                crate::model::ArpeggioRate::EighthTriplet,
+            )
             .unwrap();
-        editor.set_arpeggio_enabled(4, 0, true).unwrap();
+        editor
+            .set_arpeggio_enabled(CHORD_TRACK_INDEX, 0, true)
+            .unwrap();
         assert_eq!(
-            editor.arpeggio_config_value(4, 0).unwrap(),
+            editor.arpeggio_config_value(CHORD_TRACK_INDEX, 0).unwrap(),
             crate::model::ArpeggioConfig {
                 enabled: true,
                 r#type: crate::model::ArpeggioType::Down,
                 rate: crate::model::ArpeggioRate::EighthTriplet,
             }
         );
-        editor.set_note(4, 0, 1).unwrap();
+        editor.set_note(CHORD_TRACK_INDEX, 0, 1).unwrap();
         editor
-            .set_chord_shape(4, 0, ChordShape::SeventhRoot)
+            .set_chord_shape(CHORD_TRACK_INDEX, 0, ChordShape::SeventhRoot)
             .unwrap();
         editor
-            .set_arpeggio_rate(4, 0, crate::model::ArpeggioRate::ThirtySecond)
+            .set_arpeggio_rate(
+                CHORD_TRACK_INDEX,
+                0,
+                crate::model::ArpeggioRate::ThirtySecond,
+            )
             .unwrap();
-        editor.toggle_tie(4, 1).unwrap();
-        assert_eq!(editor.chord_shape_value(4, 1), Ok(ChordShape::SeventhRoot));
+        editor.toggle_tie(CHORD_TRACK_INDEX, 1).unwrap();
         assert_eq!(
-            editor.arpeggio_config_value(4, 1).map(|c| c.rate),
+            editor.chord_shape_value(CHORD_TRACK_INDEX, 1),
+            Ok(ChordShape::SeventhRoot)
+        );
+        assert_eq!(
+            editor
+                .arpeggio_config_value(CHORD_TRACK_INDEX, 1)
+                .map(|c| c.rate),
             Ok(crate::model::ArpeggioRate::ThirtySecond)
         );
         assert_eq!(
-            editor.set_arpeggio_rate(4, 1, crate::model::ArpeggioRate::Quarter),
+            editor.set_arpeggio_rate(CHORD_TRACK_INDEX, 1, crate::model::ArpeggioRate::Quarter,),
             Err(EditError::NoChordShape)
         );
         assert!(editor.undo());
@@ -1999,10 +2062,10 @@ mod tests {
         assert_eq!(editor.project.tracks[0].swing, Percent::new(42).unwrap());
         assert!(editor.undo());
         assert_eq!(editor.project.tracks[0].swing, Percent::ZERO);
-        editor.set_note(3, 0, 1).unwrap();
-        editor.toggle_tie(3, 1).unwrap();
+        editor.set_note(SYNTH_TRACK_START, 0, 1).unwrap();
+        editor.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
         assert_eq!(
-            editor.set_retrigger_count(3, 1, 2),
+            editor.set_retrigger_count(SYNTH_TRACK_START, 1, 2),
             Err(EditError::NoTriggerSettings)
         );
     }
@@ -2024,7 +2087,7 @@ mod tests {
         assert!(editor.redo());
         assert_eq!(editor.project.tracks[0].probability.get(), 80);
         assert_eq!(
-            editor.set_track_probability(6, Percent::new(50).unwrap(), None),
+            editor.set_track_probability(TRACK_COUNT, Percent::new(50).unwrap(), None),
             Err(EditError::InvalidTrack)
         );
     }
@@ -2032,18 +2095,18 @@ mod tests {
     #[test]
     fn generator_fills_only_empty_steps_and_is_one_undoable_edit() {
         let mut editor = Editor::new(Project::new());
-        editor.set_note(3, 0, 8).unwrap();
-        let original = editor.project.tracks[3].steps[0];
+        editor.set_note(SYNTH_TRACK_START, 0, 8).unwrap();
+        let original = editor.project.tracks[SYNTH_TRACK_START].steps[0];
         let config = crate::generator::Config {
             density: Percent::new(100).unwrap(),
             ..Default::default()
         };
         let inserted = editor.generate_pattern(config).unwrap();
         assert!(inserted > 0);
-        assert_eq!(editor.project.tracks[3].steps[0], original);
+        assert_eq!(editor.project.tracks[SYNTH_TRACK_START].steps[0], original);
         assert!(editor.undo());
-        assert_eq!(editor.project.tracks[3].steps[0], original);
+        assert_eq!(editor.project.tracks[SYNTH_TRACK_START].steps[0], original);
         assert!(editor.redo());
-        assert_eq!(editor.project.tracks[3].steps[0], original);
+        assert_eq!(editor.project.tracks[SYNTH_TRACK_START].steps[0], original);
     }
 }

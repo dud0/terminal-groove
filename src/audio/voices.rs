@@ -281,6 +281,18 @@ impl KickPitchEnvelope {
             .max(self.rise_samples as f32 + 1.0) as u32;
         self.elapsed = 0;
     }
+    pub(super) fn trigger_tom(&mut self, tune: f32, tone: f32, decay: f32, sr: f32) {
+        self.start = self.value.max(30.0);
+        self.peak = 180.0 + tune * 240.0;
+        self.settled = 80.0 + tune * 140.0;
+        self.rise_samples = (0.001 * sr).round().max(1.0) as u32;
+        self.fall_samples = (0.025 + tone * 0.085)
+            .min(decay * 0.8)
+            .mul_add(sr, 0.0)
+            .round()
+            .max(self.rise_samples as f32 + 1.0) as u32;
+        self.elapsed = 0;
+    }
     pub(super) fn next_value(&mut self) -> f32 {
         if self.elapsed < self.rise_samples {
             let t = self.elapsed as f32 / self.rise_samples as f32;
@@ -300,6 +312,7 @@ impl KickPitchEnvelope {
 pub(super) struct DrumVoice {
     pub(super) envelope: DrumEnvelope,
     pub(super) kick_pitch: KickPitchEnvelope,
+    pub(super) tom_pitch: KickPitchEnvelope,
     pub(super) phase: f32,
     pub(super) phase2: f32,
     pub(super) metallic: [PolyBlepOsc; 6],
@@ -332,6 +345,7 @@ impl DrumVoice {
         Self {
             envelope: DrumEnvelope::new(),
             kick_pitch: KickPitchEnvelope::new(),
+            tom_pitch: KickPitchEnvelope::new(),
             phase: 0.0,
             phase2: 0.0,
             metallic: std::array::from_fn(|_| PolyBlepOsc::default()),

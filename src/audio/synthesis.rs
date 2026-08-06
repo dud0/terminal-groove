@@ -7,8 +7,8 @@ use super::{
 use crate::dsp::{EnvelopeProfile, StereoChorus};
 use crate::engine::{GateAction, synth_action};
 use crate::model::{
-    ArpeggioConfig, ChordShape, ChorusMode, Instrument, ParameterId, ParameterLocks, Percent,
-    StepEvent,
+    ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT, Instrument,
+    LEAD_TRACK_INDEX, ParameterId, ParameterLocks, Percent, SYNTH_TRACK_START, StepEvent,
 };
 use std::sync::atomic::Ordering;
 
@@ -39,6 +39,20 @@ impl Renderer {
             Instrument::Hat(p) => Some(DrumControls {
                 tune: value(p.tune, locks.tune, ParameterId::Tune),
                 tone: 0.5,
+                snappy: 0.0,
+                decay: value(p.decay, locks.decay, ParameterId::Decay),
+                attack: 0.0,
+            }),
+            Instrument::Tom(p) => Some(DrumControls {
+                tune: value(p.tune, locks.tune, ParameterId::Tune),
+                tone: value(p.tone, locks.tone, ParameterId::Tone),
+                snappy: 0.0,
+                decay: value(p.decay, locks.decay, ParameterId::Decay),
+                attack: 0.0,
+            }),
+            Instrument::Cymbal(p) => Some(DrumControls {
+                tune: value(p.tune, locks.tune, ParameterId::Tune),
+                tone: value(p.tone, locks.tone, ParameterId::Tone),
                 snappy: 0.0,
                 decay: value(p.decay, locks.decay, ParameterId::Decay),
                 attack: 0.0,
@@ -101,7 +115,9 @@ impl Renderer {
         let decay = match track {
             0 => 0.08 * (15.0_f32).powf(decay_control),
             1 => 0.08 + snappy * 0.34,
-            _ => 0.025 * (32.0_f32).powf(decay_control),
+            2 => 0.025 * (32.0_f32).powf(decay_control),
+            3 => 0.09 * (8.888_889_f32).powf(decay_control),
+            _ => 0.08 * (22.5_f32).powf(decay_control),
         };
         let (attack, peak) = match track {
             0 => (
@@ -109,7 +125,9 @@ impl Renderer {
                 if accent { 1.22 } else { 0.78 },
             ),
             1 => (0.001, if accent { 1.08 } else { 0.68 }),
-            _ => (0.0007, if accent { 0.9 } else { 0.64 }),
+            2 => (0.0007, if accent { 0.9 } else { 0.64 }),
+            3 => (0.0007, if accent { 1.05 } else { 0.72 }),
+            _ => (0.0007, if accent { 0.86 } else { 0.60 }),
         };
         voice.tune = tune;
         voice.tone = tone;
@@ -127,11 +145,24 @@ impl Renderer {
                     .set_bandpass(900.0 + tone * 4_500.0, 0.8 + tone * 2.5, sr);
                 voice.filter2.set_highpass(450.0 + tone * 900.0, 0.8, sr);
             }
-            _ => {
+            2 => {
                 voice.filter.set_highpass(4_000.0 + tune * 5_500.0, 0.9, sr);
                 voice
                     .filter2
                     .set_bandpass(6_000.0 + tune * 5_000.0, 1.2, sr);
+            }
+            3 => {
+                voice.tom_pitch.trigger_tom(tune, tone, decay, sr);
+                voice
+                    .filter
+                    .set_bandpass(350.0 + tone * 1_900.0, 0.7 + tone * 1.4, sr);
+                voice.filter2.set_highpass(90.0 + tone * 260.0, 0.8, sr);
+            }
+            _ => {
+                voice.filter.set_highpass(3_200.0 + tone * 4_800.0, 0.8, sr);
+                voice
+                    .filter2
+                    .set_bandpass(5_000.0 + tune * 5_500.0, 1.0 + tone * 1.2, sr);
             }
         }
     }
@@ -384,7 +415,7 @@ impl Renderer {
         locks: ParameterLocks,
         pool: &mut ChordVoicePool,
     ) {
-        let Instrument::Chord(_) = project.tracks[4].instrument else {
+        let Instrument::Chord(_) = project.tracks[CHORD_TRACK_INDEX].instrument else {
             return;
         };
         let shape = trigger.chord_shape.unwrap_or_default();
@@ -412,7 +443,7 @@ impl Renderer {
             );
             pool.voice_count = 1;
             Self::trigger_arpeggio_tone(project, sr, pool);
-            Self::configure_chorus(&mut pool.chorus, project.tracks[4], locks);
+            Self::configure_chorus(&mut pool.chorus, project.tracks[CHORD_TRACK_INDEX], locks);
             pool.active = true;
             return;
         }
@@ -441,28 +472,40 @@ impl Renderer {
             .zip(midis.into_iter().take(voice_count))
         {
             let frequency = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
-            Self::configure_synth_voice_frequency(project, sr, 4, frequency, trigger, locks, voice);
+            Self::configure_synth_voice_frequency(
+                project,
+                sr,
+                CHORD_TRACK_INDEX,
+                frequency,
+                trigger,
+                locks,
+                voice,
+            );
         }
         pool.voice_count = voice_count;
-        let spread = locks
-            .spread
-            .unwrap_or_else(|| match project.tracks[4].instrument {
-                Instrument::Chord(p) => p.spread,
-                _ => crate::model::ChordSpread::Off,
-            });
+        let spread =
+            locks
+                .spread
+                .unwrap_or_else(|| match project.tracks[CHORD_TRACK_INDEX].instrument {
+                    Instrument::Chord(p) => p.spread,
+                    _ => crate::model::ChordSpread::Off,
+                });
         let offsets = match voice_count {
             3 => [-50.0, 0.0, 50.0, 0.0],
             4 => [-50.0, -16.6667, 16.6667, 50.0],
             _ => [0.0; 4],
         };
         for (index, offset) in offsets.into_iter().take(voice_count).enumerate() {
-            let target = locks.pan.unwrap_or(project.tracks[4].pan).get() as f32
+            let target = locks
+                .pan
+                .unwrap_or(project.tracks[CHORD_TRACK_INDEX].pan)
+                .get() as f32
                 + offset * spread.percent().normalized();
             pool.voices[pool.group * CHORD_GROUP_SIZE + index]
                 .pan
                 .set(target.clamp(0.0, 100.0), 0);
         }
-        Self::configure_chorus(&mut pool.chorus, project.tracks[4], locks);
+        Self::configure_chorus(&mut pool.chorus, project.tracks[CHORD_TRACK_INDEX], locks);
         pool.active = true;
     }
 
@@ -484,19 +527,18 @@ impl Renderer {
         Self::configure_synth_voice_frequency(
             project,
             sr,
-            4,
+            CHORD_TRACK_INDEX,
             frequency,
             pool.arpeggio_trigger,
             pool.arpeggio_locks,
             voice,
         );
-        let spread =
-            pool.arpeggio_locks
-                .spread
-                .unwrap_or_else(|| match project.tracks[4].instrument {
-                    Instrument::Chord(p) => p.spread,
-                    _ => crate::model::ChordSpread::Off,
-                });
+        let spread = pool.arpeggio_locks.spread.unwrap_or_else(|| {
+            match project.tracks[CHORD_TRACK_INDEX].instrument {
+                Instrument::Chord(p) => p.spread,
+                _ => crate::model::ChordSpread::Off,
+            }
+        });
         let offsets = match count {
             3 => [-50.0, 0.0, 50.0, 0.0],
             4 => [-50.0, -16.6667, 16.6667, 50.0],
@@ -506,7 +548,7 @@ impl Renderer {
             (pool
                 .arpeggio_locks
                 .pan
-                .unwrap_or(project.tracks[4].pan)
+                .unwrap_or(project.tracks[CHORD_TRACK_INDEX].pan)
                 .get() as f32
                 + offsets[index.min(3)] * spread.percent().normalized())
             .clamp(0.0, 100.0),
@@ -532,9 +574,9 @@ impl Renderer {
     pub(super) fn refresh_active_parameters(&mut self, smoothing: u32) {
         for track in 0..TRACK_COUNT {
             let live_locks = match track {
-                0..=2 => self.drums[track].locks,
-                3 | 5 => self.synth[track - 3].locks,
-                4 => self
+                0..DRUM_TRACK_COUNT => self.drums[track].locks,
+                SYNTH_TRACK_START | LEAD_TRACK_INDEX => self.synth[track - SYNTH_TRACK_START].locks,
+                CHORD_TRACK_INDEX => self
                     .chord
                     .voices
                     .get(self.chord.group * CHORD_GROUP_SIZE)
@@ -542,9 +584,11 @@ impl Renderer {
                 _ => ParameterLocks::default(),
             };
             let preview_locks = match track {
-                0..=2 => self.preview_drums[track].locks,
-                3 | 5 => self.preview[track - 3].locks,
-                4 => self
+                0..DRUM_TRACK_COUNT => self.preview_drums[track].locks,
+                SYNTH_TRACK_START | LEAD_TRACK_INDEX => {
+                    self.preview[track - SYNTH_TRACK_START].locks
+                }
+                CHORD_TRACK_INDEX => self
                     .preview_chord
                     .voices
                     .get(self.preview_chord.group * CHORD_GROUP_SIZE)
@@ -554,7 +598,7 @@ impl Renderer {
             self.configure_track_effects(track, live_locks, smoothing, false);
             self.configure_track_effects(track, preview_locks, smoothing, true);
         }
-        for track in 0..3 {
+        for track in 0..DRUM_TRACK_COUNT {
             let params = self.project.tracks[track];
             // Locks are captured at the step boundary. A live project snapshot may
             // change the current step, but that edit must not affect its active hit.
@@ -563,8 +607,8 @@ impl Renderer {
             let locks = self.preview_drums[track].locks;
             Self::apply_drum_mix(&mut self.preview_drums[track], params, locks, smoothing);
         }
-        for track in [3, 5] {
-            let index = track - 3;
+        for track in [SYNTH_TRACK_START, LEAD_TRACK_INDEX] {
+            let index = track - SYNTH_TRACK_START;
             if self.synth[index].active {
                 // Keep the effective lock chain latched until the next boundary.
                 let locks = self.synth[index].locks;
@@ -593,9 +637,19 @@ impl Renderer {
                 ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
             {
                 let locks = voice.locks;
-                Self::apply_synth_params_core(&self.project, 4, locks, voice, smoothing);
+                Self::apply_synth_params_core(
+                    &self.project,
+                    CHORD_TRACK_INDEX,
+                    locks,
+                    voice,
+                    smoothing,
+                );
             }
-            Self::configure_chorus(&mut self.chord.chorus, self.project.tracks[4], chorus_locks);
+            Self::configure_chorus(
+                &mut self.chord.chorus,
+                self.project.tracks[CHORD_TRACK_INDEX],
+                chorus_locks,
+            );
         }
         if self.preview_chord.active {
             let chorus_locks =
@@ -604,11 +658,17 @@ impl Renderer {
                 ..self.preview_chord.group * CHORD_GROUP_SIZE + self.preview_chord.voice_count]
             {
                 let locks = voice.locks;
-                Self::apply_synth_params_core(&self.project, 4, locks, voice, smoothing);
+                Self::apply_synth_params_core(
+                    &self.project,
+                    CHORD_TRACK_INDEX,
+                    locks,
+                    voice,
+                    smoothing,
+                );
             }
             Self::configure_chorus(
                 &mut self.preview_chord.chorus,
-                self.project.tracks[4],
+                self.project.tracks[CHORD_TRACK_INDEX],
                 chorus_locks,
             );
         }
@@ -652,7 +712,7 @@ impl Renderer {
             ParameterSmoothing::Default.samples(self.sr),
             true,
         );
-        if track < 3 {
+        if track < DRUM_TRACK_COUNT {
             let accent = match self.project.patterns[self.active_pattern].tracks[track].steps[step]
             {
                 Some(StepEvent::Trigger { accent, .. }) => accent,
@@ -741,8 +801,9 @@ impl Renderer {
                 self.project.tracks[track].input_octave,
                 self.project.tracks[track].input_accent,
                 false,
-                (track == 4).then_some(self.project.tracks[track].input_chord_shape),
-                if track == 4 {
+                (track == CHORD_TRACK_INDEX)
+                    .then_some(self.project.tracks[track].input_chord_shape),
+                if track == CHORD_TRACK_INDEX {
                     self.project.tracks[track].input_chord_arpeggio
                 } else {
                     ArpeggioConfig::default()
@@ -758,7 +819,7 @@ impl Renderer {
             chord_shape,
             arpeggio,
         };
-        if track == 4 {
+        if track == CHORD_TRACK_INDEX {
             Self::trigger_chord(
                 &self.project,
                 self.sr,
@@ -780,7 +841,7 @@ impl Renderer {
             }
             return;
         }
-        let v = &mut self.preview[track - 3];
+        let v = &mut self.preview[track - SYNTH_TRACK_START];
         Self::configure_synth_voice(&self.project, self.sr, track, trigger, locks, v);
         v.remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
     }
@@ -866,7 +927,7 @@ impl Renderer {
                 false,
             );
         }
-        if track < 3 {
+        if track < DRUM_TRACK_COUNT {
             if !retrigger {
                 self.update_drum_mix(track, step, ParameterSmoothing::Default.samples(self.sr));
             }
@@ -877,8 +938,8 @@ impl Renderer {
             }
             return;
         }
-        let vi = track - 3;
-        let active = if track == 4 {
+        let vi = track - SYNTH_TRACK_START;
+        let active = if track == CHORD_TRACK_INDEX {
             self.chord.active
         } else {
             self.synth[vi].active
@@ -914,7 +975,7 @@ impl Renderer {
                     chord_shape,
                     arpeggio,
                 };
-                if track == 4 {
+                if track == CHORD_TRACK_INDEX {
                     Self::trigger_chord(&self.project, self.sr, trigger, locks, &mut self.chord);
                 } else {
                     Self::configure_synth_voice(
@@ -930,7 +991,7 @@ impl Renderer {
             GateAction::Hold if !retrigger => {
                 if matches!(sequence.steps[step], Some(StepEvent::Tie { .. })) {
                     let locks = self.locks_at(track, step);
-                    if track == 4 {
+                    if track == CHORD_TRACK_INDEX {
                         for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
                             ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
                         {
@@ -961,7 +1022,7 @@ impl Renderer {
                     ParameterSmoothing::Default.samples(self.sr),
                     false,
                 );
-                if track == 4 {
+                if track == CHORD_TRACK_INDEX {
                     for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
                         ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
                     {
