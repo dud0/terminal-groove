@@ -291,6 +291,9 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             a.status = format!("Editing {} length", a.editor.project.tracks[a.row - 1].name);
         }
         KeyCode::Char('D') if a.row > 0 => duplicate_selected_track(a, audio),
+        KeyCode::Delete if is_clear_track_shortcut(&a.mode, a.row, k) => {
+            clear_selected_track(a, audio)
+        }
         KeyCode::Char('A') if a.row > 0 => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.toggle_accent(track, step)) {
@@ -812,6 +815,31 @@ pub(super) fn duplicate_selected_track(a: &mut App, audio: &mut Audio) {
         Ok(true) => {}
         Ok(false) => a.status = "No change".into(),
         Err(e) => a.status = e.to_string(),
+    }
+}
+
+pub(super) fn is_clear_track_shortcut(mode: &Mode, row: usize, k: KeyEvent) -> bool {
+    *mode == Mode::Navigation
+        && row > 0
+        && k.code == KeyCode::Delete
+        && k.modifiers.contains(KeyModifiers::SHIFT)
+}
+
+pub(super) fn clear_selected_track(a: &mut App, audio: &mut Audio) {
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; track clear rejected".into();
+        return;
+    }
+    let track = a.row - 1;
+    let track_name = a.editor.project.tracks[track].name.clone();
+    a.editor.end_coalescing();
+    match a.editor.clear_track(track) {
+        Ok(0) => a.status = format!("{track_name}: no events to clear"),
+        Ok(count) if sync_project(a, audio) => {
+            a.status = format!("{track_name}: cleared {count} event(s)");
+        }
+        Ok(_) => {}
+        Err(error) => a.status = error.to_string(),
     }
 }
 

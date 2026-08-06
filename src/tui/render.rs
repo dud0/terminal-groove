@@ -79,6 +79,7 @@ PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/que
 NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
            ~ select global row · Shift+1..6 select track · Enter toggle/insert · Backspace/Delete clear
            g pattern generator · o audition selected step
+           Shift+Delete clear selected track
 EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
                  A accent/default · Shift+G Bass slide · Shift+T condition/retrigger · Shift+S swing
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
@@ -1674,8 +1675,13 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         (false, true) => "  ↓ more tracks",
         (false, false) => "",
     };
+    let clear_track_hint = if a.row > 0 && scroll_hint.is_empty() {
+        "  [Shift+Delete] clear"
+    } else {
+        ""
+    };
     let pattern_help = format!(
-        "[↑↓] vertical  [←→] step  [Shift+←→] bank  [Shift+1..6] track  [l] length  [Shift+D] double{scroll_hint}"
+        "[↑↓] rows  [←→] step  [Shift+←→] bank  [Shift+1..6] track  [l] len  [Shift+D] dbl{clear_track_hint}{scroll_hint}"
     );
     let trigger_summary = if a.row > 0 {
         let track = a.row - 1;

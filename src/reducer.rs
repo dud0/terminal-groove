@@ -979,6 +979,21 @@ impl Editor {
         })
     }
 
+    /// Clear every event and lock from one track in the active pattern.
+    ///
+    /// The returned count is the number of populated steps removed. The
+    /// whole operation is recorded as one undoable edit.
+    pub fn clear_track(&mut self, track: usize) -> Result<usize, EditError> {
+        let mut cleared = 0;
+        self.edit(None, |p| {
+            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
+            cleared = t.steps.iter().filter(|step| step.is_some()).count();
+            t.steps.fill(None);
+            Ok(())
+        })?;
+        Ok(cleared)
+    }
+
     pub fn set_track_length(
         &mut self,
         track: usize,
@@ -1469,6 +1484,45 @@ mod tests {
             Some(StepEvent::Tie { .. })
         ));
     }
+
+    #[test]
+    fn clear_track_removes_events_and_locks_as_one_undoable_edit() {
+        let mut editor = Editor::new(Project::new());
+        editor.set_note(3, 0, 1).unwrap();
+        editor
+            .set_parameter(
+                3,
+                0,
+                Scope::Lock,
+                ParameterId::Cutoff,
+                ParameterValue::Percent(Percent::new(25).unwrap()),
+                None,
+            )
+            .unwrap();
+        editor.toggle_tie(3, 1).unwrap();
+        editor.toggle_event(0, 0).unwrap();
+        let before = editor.project.clone();
+        let length = editor.project.tracks[3].steps.len();
+
+        assert_eq!(editor.clear_track(3).unwrap(), 2);
+        assert!(editor.project.tracks[3].steps.iter().all(Option::is_none));
+        assert_eq!(editor.project.tracks[3].steps.len(), length);
+        assert!(editor.project.tracks[0].steps[0].is_some());
+
+        assert!(editor.undo());
+        assert_eq!(editor.project, before);
+        assert!(editor.redo());
+        assert!(editor.project.tracks[3].steps.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn clearing_an_empty_track_is_a_no_op() {
+        let mut editor = Editor::new(Project::new());
+
+        assert_eq!(editor.clear_track(3).unwrap(), 0);
+        assert!(!editor.undo());
+    }
+
     #[test]
     fn direct_percent() {
         assert_eq!(percentage_key('`').unwrap().get(), 0);

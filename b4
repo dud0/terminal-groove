@@ -1,0 +1,2206 @@
+{
+  "format_version": 13,
+  "globals": {
+    "tempo_bpm": 120,
+    "delay_division": "eighth",
+    "delay_feedback": 30,
+    "reverb_time_seconds": 2.5,
+    "reverb_tone": 40,
+    "reverb_pre_delay_ms": 20,
+    "key": "C",
+    "scale": "major"
+  },
+  "tracks": [
+    {
+      "kind": "kick",
+      "name": "Kick",
+      "level": 80,
+      "pan": 50,
+      "muted": false,
+      "delay_send": 0,
+      "reverb_send": 0,
+      "swing": 0,
+      "instrument": {
+        "tune": 50,
+        "decay": 35,
+        "attack": 35
+      },
+      "effects": {
+        "distortion": {
+          "drive": 0,
+          "tone": 50,
+          "mix": 0
+        },
+        "phaser": {
+          "rate": 25,
+          "depth": 50,
+          "feedback": 20,
+          "mix": 0
+        },
+        "flanger": {
+          "rate": 25,
+          "delay": 18,
+          "depth": 50,
+          "feedback": 49,
+          "mix": 0
+        }
+      },
+      "lfos": {
+        "tune": {
+          "enabled": true,
+          "waveform": "sine",
+          "rate": {
+            "mode": "synced",
+            "division": "quarter"
+          },
+          "depth": 10
+        }
+      }
+    },
+    {
+      "kind": "snare",
+      "name": "Snare",
+      "level": 80,
+      "pan": 50,
+      "muted": false,
+      "delay_send": 0,
+      "reverb_send": 0,
+      "swing": 0,
+      "instrument": {
+        "tune": 50,
+        "tone": 50,
+        "snappy": 55
+      },
+      "effects": {
+        "distortion": {
+          "drive": 0,
+          "tone": 50,
+          "mix": 0
+        },
+        "phaser": {
+          "rate": 25,
+          "depth": 50,
+          "feedback": 20,
+          "mix": 50
+        },
+        "flanger": {
+          "rate": 25,
+          "delay": 18,
+          "depth": 50,
+          "feedback": 20,
+          "mix": 0
+        }
+      },
+      "lfos": {}
+    },
+    {
+      "kind": "hat",
+      "name": "Hi-hat",
+      "level": 80,
+      "pan": 50,
+      "muted": false,
+      "delay_send": 0,
+      "reverb_send": 0,
+      "swing": 0,
+      "instrument": {
+        "tune": 50,
+        "decay": 37
+      },
+      "effects": {
+        "distortion": {
+          "drive": 0,
+          "tone": 50,
+          "mix": 0
+        },
+        "phaser": {
+          "rate": 25,
+          "depth": 50,
+          "feedback": 20,
+          "mix": 50
+        },
+        "flanger": {
+          "rate": 25,
+          "delay": 18,
+          "depth": 50,
+          "feedback": 20,
+          "mix": 0
+        }
+      },
+      "lfos": {
+        "decay": {
+          "enabled": true,
+          "waveform": "sample_and_hold",
+          "rate": {
+            "mode": "synced",
+            "division": "sixteenth"
+          },
+          "depth": 15
+        }
+      }
+    },
+    {
+      "kind": "bass",
+      "name": "Bass",
+      "level": 80,
+      "pan": 50,
+      "muted": false,
+      "delay_send": 50,
+      "reverb_send": 10,
+      "swing": 0,
+      "instrument": {
+        "waveform": "saw",
+        "cutoff": 45,
+        "resonance": 55,
+        "filter_envelope": 65,
+        "decay": 40
+      },
+      "effects": {
+        "distortion": {
+          "drive": 0,
+          "tone": 50,
+          "mix": 0
+        },
+        "phaser": {
+          "rate": 25,
+          "depth": 50,
+          "feedback": 20,
+          "mix": 0
+        },
+        "flanger": {
+          "rate": 25,
+          "delay": 18,
+          "depth": 50,
+          "feedback": 40,
+          "mix": 50
+        }
+      },
+      "lfos": {},
+      "input_degree": 1,
+      "input_octave": 3
+    },
+    {
+      "kind": "chord",
+      "name": "Chord",
+      "level": 80,
+      "pan": 50,
+      "muted": false,
+      "delay_send": 0,
+      "reverb_send": 20,
+      "swing": 0,
+      "instrument": {
+        "oscillator_mix": 70,
+        "pulse_width": 50,
+        "sub_oscillator": 0,
+        "chorus": "i",
+        "spread": "off",
+        "cutoff": 55,
+        "resonance": 15,
+        "filter_envelope": 25,
+        "attack": 55,
+        "decay": 45,
+        "sustain": 75,
+        "release": 65
+      },
+      "effects": {
+        "distortion": {
+          "drive": 0,
+          "tone": 50,
+          "mix": 0
+        },
+        "phaser": {
+          "rate": 25,
+          "depth": 50,
+          "feedback": 20,
+          "mix": 0
+        },
+        "flanger": {
+          "rate": 25,
+          "delay": 18,
+          "depth": 50,
+          "feedback": 20,
+          "mix": 0
+        }
+      },
+      "lfos": {},
+      "input_degree": 2,
+      "input_octave": 3
+    },
+    {
+      "kind": "lead",
+      "name": "Lead",
+      "level": 80,
+      "pan": 50,
+      "muted": false,
+      "delay_send": 0,
+      "reverb_send": 20,
+      "swing": 0,
+      "instrument": {
+        "oscillator_mix": 75,
+        "pulse_width": 50,
+        "sub_oscillator": 25,
+        "cutoff": 50,
+        "resonance": 35,
+        "filter_envelope": 55,
+        "attack": 0,
+        "decay": 35,
+        "sustain": 55,
+        "release": 20
+      },
+      "effects": {
+        "distortion": {
+          "drive": 0,
+          "tone": 50,
+          "mix": 0
+        },
+        "phaser": {
+          "rate": 25,
+          "depth": 50,
+          "feedback": 20,
+          "mix": 50
+        },
+        "flanger": {
+          "rate": 25,
+          "delay": 18,
+          "depth": 50,
+          "feedback": 20,
+          "mix": 0
+        }
+      },
+      "lfos": {},
+      "input_degree": 1,
+      "input_octave": 3
+    }
+  ],
+  "patterns": [
+    {
+      "tracks": [
+        {
+          "steps": [
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            }
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            }
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 6,
+              "accent": true,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 3,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 3,
+              "accent": true,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 3,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 3,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            }
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 2,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 8,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 8,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 2,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 5,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 2,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 2,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 2,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 5,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 5,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 8,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 5,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 2,
+              "octave": 2,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 7,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null
+          ]
+        }
+      ]
+    },
+    {
+      "tracks": [
+        {
+          "steps": [
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            }
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            }
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "trigger",
+              "accent": true,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "trigger",
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 6,
+              "accent": true,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 3,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 3,
+              "accent": true,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 3,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 3,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 4,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 5,
+              "octave": 5,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 2,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            },
+            {
+              "type": "bass_note",
+              "degree": 2,
+              "octave": 3,
+              "accent": false,
+              "slide": false,
+              "locks": {}
+            }
+          ]
+        },
+        {
+          "steps": [
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 2,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "steps": [
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 8,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 8,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 2,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 5,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 2,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 2,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "accent": true,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 2,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 5,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 3,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 5,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 8,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 4,
+              "octave": 4,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 1,
+              "octave": 5,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null,
+            {
+              "type": "note",
+              "degree": 6,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "tie",
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 2,
+              "octave": 2,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            {
+              "type": "note",
+              "degree": 7,
+              "octave": 6,
+              "accent": false,
+              "locks": {}
+            },
+            {
+              "type": "note",
+              "degree": 5,
+              "octave": 3,
+              "accent": false,
+              "locks": {}
+            },
+            null,
+            null
+          ]
+        }
+      ]
+    }
+  ],
+  "song": [
+    {
+      "pattern": 1,
+      "bars": 1
+    }
+  ]
+}
