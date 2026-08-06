@@ -729,6 +729,68 @@ mod tests {
     }
 
     #[test]
+    fn automatic_audition_is_allowed_when_stopped_or_paused() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+
+        let status = Arc::new(AudioStatus::default());
+        let mut stopped = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        stopped.command(AudioCommand::AutoAudition { track: 0, step: 0 });
+        assert!(!stopped.preview_drums[0].envelope.is_idle());
+
+        let status = Arc::new(AudioStatus::default());
+        let mut paused = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        paused.command(AudioCommand::PlayPause);
+        paused.command(AudioCommand::PlayPause);
+        paused.command(AudioCommand::AutoAudition { track: 0, step: 0 });
+        assert!(!paused.preview_drums[0].envelope.is_idle());
+    }
+
+    #[test]
+    fn queued_automatic_audition_is_ignored_after_playback_starts() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer =
+            Renderer::new(AudioProject::from_project(&Project::new()), 8_000, status);
+
+        renderer.command(AudioCommand::PlayPause);
+        renderer.command(Audio::snapshot(&project));
+        renderer.command(AudioCommand::AutoAudition { track: 0, step: 0 });
+
+        assert!(renderer.playing);
+        assert!(renderer.preview_drums[0].envelope.is_idle());
+    }
+
+    #[test]
+    fn explicit_audition_remains_available_while_playing() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+
+        renderer.command(AudioCommand::PlayPause);
+        renderer.command(AudioCommand::Audition { track: 0, step: 0 });
+
+        assert!(!renderer.preview_drums[0].envelope.is_idle());
+    }
+
+    #[test]
     fn empty_step_audition_uses_the_track_input_accent_default() {
         let mut project = Project::new();
         project.tracks[0].input_accent = true;

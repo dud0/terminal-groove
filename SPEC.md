@@ -415,7 +415,7 @@ The generator popup is a centered 58×13 rectangle at the standard terminal size
 
 ### 5.4 Audition behavior
 
-Adding or replacing a trigger or note automatically auditions it while transport is stopped or paused. Clearing an event never auditions.
+Adding or replacing a trigger or note automatically auditions it while transport is stopped or paused. The automatic audition is checked when its audio command is consumed, so it is discarded if playback has started in the meantime. Clearing an event never auditions.
 
 `o` explicitly auditions at any transport state without changing transport or pattern data:
 

@@ -18,6 +18,10 @@ pub enum AudioCommand {
         track: u8,
         step: u8,
     },
+    AutoAudition {
+        track: u8,
+        step: u8,
+    },
 }
 
 pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
@@ -119,6 +123,10 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
             renderer.replace_project(project, smoothing, pattern_map);
         }
         AudioCommand::Audition { track, step } => renderer.audition(track as usize, step as usize),
+        AudioCommand::AutoAudition { track, step } if !renderer.playing => {
+            renderer.audition(track as usize, step as usize)
+        }
+        AudioCommand::AutoAudition { .. } => {}
     }
 }
 

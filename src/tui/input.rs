@@ -263,7 +263,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 && !a.playing
                 && a.editor.project.tracks[track].steps[step].is_some()
             {
-                let _ = audio.send(AudioCommand::Audition {
+                let _ = audio.send(AudioCommand::AutoAudition {
                     track: track as u8,
                     step: step as u8,
                 });
@@ -363,7 +363,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             }) && sync_project(a, audio)
                 && !a.playing
             {
-                let _ = audio.send(AudioCommand::Audition {
+                let _ = audio.send(AudioCommand::AutoAudition {
                     track: track as u8,
                     step: step as u8,
                 });
