@@ -1,6 +1,6 @@
 use super::{
     render::GLOBAL_IDS,
-    state::{App, FileAction, Mode, ParameterBank},
+    state::{App, FileAction, Mode, ParameterBank, SidechainField},
 };
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
@@ -278,6 +278,7 @@ pub(super) fn global_id(index: usize) -> GlobalParameterId {
         GlobalParameterId::ReverbTime,
         GlobalParameterId::ReverbTone,
         GlobalParameterId::ReverbPreDelay,
+        GlobalParameterId::Ducking,
         GlobalParameterId::Key,
         GlobalParameterId::Scale,
     ][index % GLOBAL_IDS.len()]
@@ -290,6 +291,7 @@ pub(super) fn global_shortcut(c: char) -> Option<GlobalParameterId> {
         'r' => Some(GlobalParameterId::ReverbTime),
         'b' => Some(GlobalParameterId::ReverbTone),
         'p' => Some(GlobalParameterId::ReverbPreDelay),
+        'd' => Some(GlobalParameterId::Ducking),
         'k' => Some(GlobalParameterId::Key),
         's' => Some(GlobalParameterId::Scale),
         _ => None,
@@ -298,6 +300,10 @@ pub(super) fn global_shortcut(c: char) -> Option<GlobalParameterId> {
 pub(super) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
     a.mode = if id == GlobalParameterId::Tempo {
         Mode::TempoInput(String::new())
+    } else if id == GlobalParameterId::Ducking {
+        Mode::SidechainEdit {
+            field: SidechainField::Depth,
+        }
     } else {
         Mode::GlobalEdit(id)
     };
@@ -323,6 +329,7 @@ pub(super) fn global_name(id: GlobalParameterId) -> &'static str {
         GlobalParameterId::ReverbTime => "reverb time",
         GlobalParameterId::ReverbTone => "reverb tone",
         GlobalParameterId::ReverbPreDelay => "reverb pre-delay",
+        GlobalParameterId::Ducking => "ducking",
         GlobalParameterId::Key => "key",
         GlobalParameterId::Scale => "scale",
     }
@@ -461,7 +468,53 @@ pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
                     }
                 }),
                 GlobalParameterId::Tempo => {}
+                GlobalParameterId::Ducking => {}
             }
+        }
+        _ => {}
+    }
+    Ok(true)
+}
+
+pub(super) fn handle_sidechain_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+    let Mode::SidechainEdit { field } = a.mode else {
+        return Ok(false);
+    };
+    match k.code {
+        KeyCode::Esc | KeyCode::Enter => {
+            a.editor.end_coalescing();
+            a.mode = Mode::Navigation;
+        }
+        KeyCode::Left | KeyCode::Right => {
+            let direction = if k.code == KeyCode::Right { 1 } else { -1 };
+            let index = (field as i16 + direction).clamp(0, 2) as usize;
+            a.editor.end_coalescing();
+            a.mode = Mode::SidechainEdit {
+                field: SidechainField::ALL[index],
+            };
+        }
+        KeyCode::Char(c) if field == SidechainField::Depth => {
+            if let Some(value) = crate::reducer::percentage_key(c) {
+                edit_global(a, audio, GlobalParameterId::Ducking, move |g| {
+                    g.sidechain.depth = value;
+                });
+            }
+        }
+        KeyCode::Up | KeyCode::Down => {
+            let direction = if k.code == KeyCode::Up { 1 } else { -1 };
+            let amount = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                10
+            } else {
+                1
+            };
+            edit_global(a, audio, GlobalParameterId::Ducking, move |g| {
+                let value = match field {
+                    SidechainField::Depth => &mut g.sidechain.depth,
+                    SidechainField::Attack => &mut g.sidechain.attack,
+                    SidechainField::Release => &mut g.sidechain.release,
+                };
+                *value = value.saturating_add(direction * amount);
+            });
         }
         _ => {}
     }

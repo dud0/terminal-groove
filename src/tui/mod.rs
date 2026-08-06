@@ -66,7 +66,8 @@ pub use state::App;
 use state::FaderAnimation;
 #[allow(unused_imports)]
 pub(crate) use state::{
-    ChordField, FileAction, GeneratorDialog, LfoField, Mode, ParameterBank, TriggerField,
+    ChordField, FileAction, GeneratorDialog, LfoField, Mode, ParameterBank, SidechainField,
+    TriggerField,
 };
 
 #[cfg(test)]
@@ -74,9 +75,9 @@ pub(crate) use state::{
 use controller::{
     adjusted_octave, change_octave, edit_global, enter_error, enter_global_edit, global_id,
     global_name, global_shortcut, handle_file_input, handle_global_key, handle_new_confirm,
-    handle_open_confirm, handle_tempo_input, move_global_editor, new_project, open_project,
-    refresh_audio_status, request_new_project, reset_project_ui, resolved_path, save, sync_project,
-    sync_project_with_smoothing,
+    handle_open_confirm, handle_sidechain_key, handle_tempo_input, move_global_editor, new_project,
+    open_project, refresh_audio_status, request_new_project, reset_project_ui, resolved_path, save,
+    sync_project, sync_project_with_smoothing,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -1388,10 +1389,14 @@ mod tests {
         let mut app = App::new(Project::new(), None);
         app.mode = Mode::GlobalEdit(GlobalParameterId::Tempo);
         let screen = rendered(&app, 120, 34);
-        for key in ["[t]", "[y]", "[f]", "[r]", "[b]", "[p]", "[k]", "[s]"] {
+        for key in [
+            "[t]", "[y]", "[f]", "[r]", "[b]", "[p]", "[d]", "[k]", "[s]",
+        ] {
             assert!(screen.contains(key), "missing {key}");
         }
-        for value in ["Tempo", "1/8", "30%", "2.5 s", "40%", "20 ms", "C", "Major"] {
+        for value in [
+            "Tempo", "1/8", "30%", "2.5 s", "40%", "20 ms", "Off", "C", "Major",
+        ] {
             assert!(screen.contains(value), "missing {value}");
         }
         assert!(screen.contains("███"));
@@ -1425,12 +1430,32 @@ mod tests {
     }
 
     #[test]
+    fn sidechain_editor_renders_off_state_and_physical_readouts() {
+        let mut app = App::new(Project::new(), None);
+        app.mode = Mode::SidechainEdit {
+            field: SidechainField::Depth,
+        };
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("Ducking"));
+        assert!(screen.contains("Off"));
+        assert!(screen.contains("1.13 ms"));
+        assert!(screen.contains("Kick"));
+        assert!(screen.contains("Enter/Esc"));
+    }
+
+    #[test]
     fn global_shortcuts_enter_editing_for_every_control() {
         let mut app = App::new(Project::new(), None);
         for id in GLOBAL_IDS {
             enter_global_edit(&mut app, id);
             match id {
                 GlobalParameterId::Tempo => assert_eq!(app.mode, Mode::TempoInput(String::new())),
+                GlobalParameterId::Ducking => assert_eq!(
+                    app.mode,
+                    Mode::SidechainEdit {
+                        field: SidechainField::Depth
+                    }
+                ),
                 _ => assert_eq!(app.mode, Mode::GlobalEdit(id)),
             }
         }
@@ -1568,7 +1593,7 @@ mod tests {
     }
 
     #[test]
-    fn global_shortcuts_select_all_eight_controls() {
+    fn global_shortcuts_select_all_controls() {
         assert_eq!(global_shortcut('t'), Some(GlobalParameterId::Tempo));
         assert_eq!(global_shortcut('y'), Some(GlobalParameterId::DelayDivision));
         assert_eq!(global_shortcut('f'), Some(GlobalParameterId::DelayFeedback));
@@ -1578,6 +1603,7 @@ mod tests {
             global_shortcut('p'),
             Some(GlobalParameterId::ReverbPreDelay)
         );
+        assert_eq!(global_shortcut('d'), Some(GlobalParameterId::Ducking));
         assert_eq!(global_shortcut('k'), Some(GlobalParameterId::Key));
         assert_eq!(global_shortcut('s'), Some(GlobalParameterId::Scale));
         assert_eq!(global_shortcut('v'), None);

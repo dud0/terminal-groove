@@ -5,7 +5,8 @@ use super::{
     SynthVoice, TRACK_COUNT, TrackEffectChain,
 };
 use crate::dsp::{
-    Delay, EnvStage, Lfo, MasterLimiter, Reverb, Smoother, equal_power_pan, exp_map_f32,
+    Delay, EnvStage, Lfo, MasterLimiter, Reverb, SidechainCompressor, Smoother, equal_power_pan,
+    exp_map_f32,
 };
 use crate::model::{MAX_STEP_COUNT, Waveform};
 use rtrb::{Producer, RingBuffer};
@@ -48,6 +49,7 @@ impl Renderer {
             preview_chord: ChordVoicePool::new(sr),
             effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
             preview_effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
+            sidechain: SidechainCompressor::new(sr),
             delay: Delay::new(sr),
             reverb: Reverb::new(sr),
             dc: Default::default(),
@@ -308,6 +310,10 @@ impl Renderer {
                 self.lfo_offsets[i][ParameterId::Level as usize],
             ) / 100.0;
             let gain = self.mute[i].next_value() * level.powi(2);
+            if i == 0 {
+                self.sidechain
+                    .process_stereo(effect_l * pl * gain, effect_r * pr * gain);
+            }
             dry_l += effect_l * pl * gain;
             dry_r += effect_r * pr * gain;
             delay_l += effect_l * pl * delay_send * gain;
@@ -342,6 +348,7 @@ impl Renderer {
             let (x, ds, rs) =
                 Self::render_synth(&mut self.synth[i], self.sr, &self.lfo_offsets[i + 3]);
             let (effect_l, effect_r) = self.effects[i + 3].process(x);
+            let duck_gain = self.sidechain.current_gain();
             let (pl, pr) = equal_power_pan(modulated_percent(
                 self.synth[i].pan.next_value(),
                 self.lfo_offsets[i + 3][ParameterId::Pan as usize],
@@ -351,12 +358,12 @@ impl Renderer {
                 self.lfo_offsets[i + 3][ParameterId::Level as usize],
             ) / 100.0;
             let gain = self.mute[i + 3].next_value() * level.powi(2);
-            dry_l += effect_l * pl * gain;
-            dry_r += effect_r * pr * gain;
-            delay_l += effect_l * pl * ds * gain;
-            delay_r += effect_r * pr * ds * gain;
-            reverb_l += effect_l * pl * rs * gain;
-            reverb_r += effect_r * pr * rs * gain;
+            dry_l += effect_l * duck_gain * pl * gain;
+            dry_r += effect_r * duck_gain * pr * gain;
+            delay_l += effect_l * duck_gain * pl * ds * gain;
+            delay_r += effect_r * duck_gain * pr * ds * gain;
+            reverb_l += effect_l * duck_gain * pl * rs * gain;
+            reverb_r += effect_r * duck_gain * pr * rs * gain;
             let (x, ds, rs) = Self::render_synth(
                 &mut self.preview[i],
                 self.sr,
@@ -418,14 +425,15 @@ impl Renderer {
         }
         let (chord_l, chord_r) = self.chord.chorus.process_stereo(chord_left, chord_right);
         let (chord_effect_l, chord_effect_r) = self.effects[4].process_stereo(chord_l, chord_r);
+        let chord_duck_gain = self.sidechain.current_gain();
         let chord_gain =
             self.mute[4].next_value() * selected_chord_level(chord_active_level, chord_tail_level);
-        dry_l += chord_effect_l * chord_gain;
-        dry_r += chord_effect_r * chord_gain;
-        delay_l += chord_effect_l * chord_ds * chord_gain;
-        delay_r += chord_effect_r * chord_ds * chord_gain;
-        reverb_l += chord_effect_l * chord_rs * chord_gain;
-        reverb_r += chord_effect_r * chord_rs * chord_gain;
+        dry_l += chord_effect_l * chord_duck_gain * chord_gain;
+        dry_r += chord_effect_r * chord_duck_gain * chord_gain;
+        delay_l += chord_effect_l * chord_duck_gain * chord_ds * chord_gain;
+        delay_r += chord_effect_r * chord_duck_gain * chord_ds * chord_gain;
+        reverb_l += chord_effect_l * chord_duck_gain * chord_rs * chord_gain;
+        reverb_r += chord_effect_r * chord_duck_gain * chord_rs * chord_gain;
 
         let mut preview_left = 0.0;
         let mut preview_right = 0.0;

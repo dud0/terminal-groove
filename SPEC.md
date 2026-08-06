@@ -235,6 +235,12 @@ Swing delays only global offbeat sixteenths (clock steps 2, 4, …) by its perce
 
 Sends are post-fader and post-mute. Muting ramps the dry track and new send input to silence, but already-generated global effect tails continue. A muted synth voice continues its internal state, so unmuting may reveal a still-active voice.
 
+#### Kick sidechain ducking
+
+The global Ducking control is a fixed Kick → Bass/Chord/Lead sidechain compressor. It is off by default. Depth is 0–100% and maps to 0–18 dB maximum attenuation; attack maps exponentially from 0.5–30 ms and release maps exponentially from 40–1000 ms. The detector follows the kick after its track effect chain and mute/fader, using a stereo peak envelope with attack/release smoothing. The resulting gain is `10^(-(depth_db × envelope)/20)`.
+
+The shared gain is applied to Bass, Chord, and Lead after their track effects and before their faders, pans, and delay/reverb sends. The kick, drums, preview audition audio, and already-generated delay/reverb returns are not ducked. Detector state continues through live edits and pause and is cleared by Stop and project reset. The `Ducking` card uses shortcut `d`; Enter opens Depth, Attack, and Release fields, Left/Right selects a field, Up/Down changes 1%, Shift changes 10%, and number-row percentage entry edits Depth. Enter/Esc closes the editor and arrow edits remain applied on Esc. Ducking is global-only and cannot be locked, LFO-modulated, or overridden per pattern.
+
 The internal engine renders stereo. A mono output device receives the arithmetic average after master limiting. On devices with more than two channels, channels 1 and 2 receive left and right and additional channels receive silence.
 
 #### Delay
@@ -358,6 +364,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Global | `p` | Edit reverb pre-delay |
 | Global | `k` | Edit musical key |
 | Global | `s` | Toggle/edit scale |
+| Global | `d` | Edit kick sidechain ducking |
 
 Shortcuts are resolved by selected section, so repeated letters do not conflict.
 
@@ -469,7 +476,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`, but the application does not silently alter a user-supplied filename.
-- Version 14 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. Unsupported versions, missing versions, and unknown future versions are rejected without migration.
+- Version 15 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. The required `globals.sidechain` object contains `depth`, `attack`, and `release` percentages. Version-14 files remain rejected; unsupported versions, missing versions, and unknown future versions are rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -479,7 +486,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 14,
+  "format_version": 15,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -497,6 +504,11 @@ The top-level object is:
   "reverb_time_seconds": 2.5,
   "reverb_tone": 40,
   "reverb_pre_delay_ms": 20,
+  "sidechain": {
+    "depth": 0,
+    "attack": 20,
+    "release": 35
+  },
   "key": "C",
   "scale": "major"
 }
@@ -563,7 +575,7 @@ For Chord or Lead pitch:
 }
 ```
 
-The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 14.
+The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 15.
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 
@@ -653,7 +665,7 @@ Cover musical degree/frequency mapping, input limits, tie creation/resolution/cl
 
 ### 12.2 Persistence tests
 
-Round-trip default and populated version-14 projects, including track probability, every event, lock, LFO, effect, flanger setting, and articulation variant. Missing `tracks[].probability` loads as 100%; new saves always include it. Reject unsupported versions, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, and history reset on load.
+Round-trip default and populated version-15 projects, including sidechain, track probability, every event, lock, LFO, effect, flanger setting, and articulation variant. The sidechain object and all three fields are required; missing or invalid values are rejected. Missing `tracks[].probability` loads as 100%; new saves always include it. Reject version 14 and other unsupported versions, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, and history reset on load.
 
 ### 12.3 TUI tests
 
@@ -670,7 +682,7 @@ Cover bounded oscillator pitch, ADSR timing, filter stability, finite drum outpu
 3. Enter Bass, Chord, and Lead notes with octave changes, shapes, inversions, arpeggiation, accents, slide, ordinary and wrapped ties; verify gates, releases, inherited articulation, and the fixed-time Bass glide.
 4. Edit base values, locks, synced/free LFOs, and all track effects including flanger center delay/depth; verify faders, readouts, badges, modulation centers, smoothing, and next-pass live updates.
 5. Audition empty and occupied steps with `o` while stopped and playing, including Chord shapes; change key and scale and verify existing degrees are reinterpreted on future triggers.
-6. Exercise undo/redo, tie cleanup, coalesced parameter edits, dirty restoration, and version-14 save/load with all event, lock, LFO, effect, mixer, articulation, and input settings; verify rejection of other versions.
+6. Exercise undo/redo, tie cleanup, coalesced parameter edits, dirty restoration, sidechain editing and version-15 save/load with all event, lock, LFO, effect, mixer, articulation, and input settings; verify version-14 rejection.
 7. List devices, use the default output, select a unique explicit device, and play for at least ten minutes at a supported low-latency configuration without stream errors, non-finite output, timing drift, or audible edit clicks.
 8. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored and project editing remains safe where supported.
 

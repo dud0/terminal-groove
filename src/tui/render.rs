@@ -1,7 +1,7 @@
 use super::overlays::{
     popup, popup_at, probability_popup_rect, quit_popup_rect, render_chord_popup,
     render_generator_popup, render_lfo_popup, render_lfo_selector, render_pattern_popup,
-    render_trigger_popup, swing_popup_rect, tempo_popup_rect,
+    render_sidechain_popup, render_trigger_popup, swing_popup_rect, tempo_popup_rect,
 };
 use super::{
     controller::{global_name, resolved_path},
@@ -48,6 +48,7 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::SwingEdit => "Track swing edit".into(),
         Mode::TrackProbabilityEdit => "Track probability edit".into(),
         Mode::GlobalEdit(id) => format!("Global edit ({})", global_name(*id)),
+        Mode::SidechainEdit { .. } => "Ducking editor".into(),
         Mode::TempoInput(_) => "Tempo numeric input".into(),
         Mode::TrackLengthInput(_) => "Track length input".into(),
         Mode::FileInput(_, _) => "File-path input".into(),
@@ -831,18 +832,20 @@ pub(super) fn global_shortcut_text(id: GlobalParameterId) -> &'static str {
         GlobalParameterId::ReverbTime => "r",
         GlobalParameterId::ReverbTone => "b",
         GlobalParameterId::ReverbPreDelay => "p",
+        GlobalParameterId::Ducking => "d",
         GlobalParameterId::Key => "k",
         GlobalParameterId::Scale => "s",
     }
 }
 
-pub(super) const GLOBAL_IDS: [GlobalParameterId; 8] = [
+pub(super) const GLOBAL_IDS: [GlobalParameterId; 9] = [
     GlobalParameterId::Tempo,
     GlobalParameterId::DelayDivision,
     GlobalParameterId::DelayFeedback,
     GlobalParameterId::ReverbTime,
     GlobalParameterId::ReverbTone,
     GlobalParameterId::ReverbPreDelay,
+    GlobalParameterId::Ducking,
     GlobalParameterId::Key,
     GlobalParameterId::Scale,
 ];
@@ -855,6 +858,7 @@ pub(super) fn global_display_name(id: GlobalParameterId) -> &'static str {
         GlobalParameterId::ReverbTime => "Reverb time",
         GlobalParameterId::ReverbTone => "Tone",
         GlobalParameterId::ReverbPreDelay => "Pre-delay",
+        GlobalParameterId::Ducking => "Ducking",
         GlobalParameterId::Key => "Key",
         GlobalParameterId::Scale => "Scale",
     }
@@ -868,6 +872,13 @@ pub(super) fn global_value_text(g: &crate::model::Globals, id: GlobalParameterId
         GlobalParameterId::ReverbTime => format!("{:.1} s", g.reverb_time_seconds),
         GlobalParameterId::ReverbTone => format!("{}%", g.reverb_tone.get()),
         GlobalParameterId::ReverbPreDelay => format!("{} ms", g.reverb_pre_delay_ms),
+        GlobalParameterId::Ducking => {
+            if g.sidechain.depth == crate::model::Percent::ZERO {
+                "Off".into()
+            } else {
+                format!("{}%", g.sidechain.depth.get())
+            }
+        }
         GlobalParameterId::Key => g.key.to_string(),
         GlobalParameterId::Scale => g.scale.to_string(),
     }
@@ -882,7 +893,8 @@ fn global_fader_value(g: &crate::model::Globals, id: GlobalParameterId) -> Optio
         GlobalParameterId::Tempo
         | GlobalParameterId::DelayDivision
         | GlobalParameterId::Key
-        | GlobalParameterId::Scale => None,
+        | GlobalParameterId::Scale
+        | GlobalParameterId::Ducking => None,
     }
 }
 
@@ -895,7 +907,8 @@ fn global_fader_bounds(id: GlobalParameterId) -> Option<(f32, f32)> {
         GlobalParameterId::Tempo
         | GlobalParameterId::DelayDivision
         | GlobalParameterId::Key
-        | GlobalParameterId::Scale => None,
+        | GlobalParameterId::Scale
+        | GlobalParameterId::Ducking => None,
     }
 }
 
@@ -943,7 +956,8 @@ fn global_selector_data(
         | GlobalParameterId::DelayFeedback
         | GlobalParameterId::ReverbTime
         | GlobalParameterId::ReverbTone
-        | GlobalParameterId::ReverbPreDelay => None,
+        | GlobalParameterId::ReverbPreDelay
+        | GlobalParameterId::Ducking => None,
     }
 }
 
@@ -972,7 +986,8 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
             height: inner.height,
         };
         let active = matches!(&a.mode, Mode::GlobalEdit(active_id) if *active_id == *id)
-            || matches!(&a.mode, Mode::TempoInput(_) if *id == GlobalParameterId::Tempo);
+            || matches!(&a.mode, Mode::TempoInput(_) if *id == GlobalParameterId::Tempo)
+            || matches!(&a.mode, Mode::SidechainEdit { .. } if *id == GlobalParameterId::Ducking);
         let block = if active {
             Block::bordered()
                 .border_type(BorderType::Double)
@@ -1785,6 +1800,10 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         status_lines.push(Line::from(
             "[↑/↓] adjust  [←/→] select another control  [Enter/Esc] finish",
         ));
+    } else if matches!(a.mode, Mode::SidechainEdit { .. }) {
+        status_lines.push(Line::from(
+            "Ducking · [←/→] field  [↑/↓] ±1%  [Shift+↑/↓] ±10%  [`/1–9/0] depth  [Enter/Esc] close",
+        ));
     } else if matches!(a.mode, Mode::TrackLengthInput(_)) {
         status_lines.push(Line::from(
             "Type 1–64 and press Enter; [↑/↓] ±1  [Shift+↑/↓] ±16  [Esc] finish",
@@ -1847,6 +1866,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         }
         Mode::ChordEdit { shape } => render_chord_popup(f, chunks[3], *shape, a),
         Mode::TriggerEdit { field } => render_trigger_popup(f, area, a, *field),
+        Mode::SidechainEdit { field } => render_sidechain_popup(f, area, a, *field),
         Mode::SwingEdit => popup_at(
             f,
             swing_popup_rect(area),

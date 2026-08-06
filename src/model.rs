@@ -445,8 +445,41 @@ pub struct Globals {
     pub reverb_tone: Percent,
     #[serde(default = "default_reverb_pre_delay_ms")]
     pub reverb_pre_delay_ms: u16,
+    pub sidechain: SidechainParameters,
     pub key: PitchClass,
     pub scale: Scale,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidechainParameters {
+    pub depth: Percent,
+    pub attack: Percent,
+    pub release: Percent,
+}
+
+impl SidechainParameters {
+    pub const fn depth_db(self) -> f32 {
+        self.depth.get() as f32 * 18.0 / 100.0
+    }
+
+    pub fn attack_ms(self) -> f32 {
+        0.5 * 60.0_f32.powf(self.attack.get() as f32 / 100.0)
+    }
+
+    pub fn release_ms(self) -> f32 {
+        40.0 * 25.0_f32.powf(self.release.get() as f32 / 100.0)
+    }
+}
+
+impl Default for SidechainParameters {
+    fn default() -> Self {
+        Self {
+            depth: Percent::ZERO,
+            attack: Percent(20),
+            release: Percent(35),
+        }
+    }
 }
 
 fn default_reverb_tone() -> Percent {
@@ -466,6 +499,7 @@ pub enum GlobalParameterId {
     ReverbTime,
     ReverbTone,
     ReverbPreDelay,
+    Ducking,
     Key,
     Scale,
 }
@@ -478,6 +512,7 @@ impl Default for Globals {
             reverb_time_seconds: 2.5,
             reverb_tone: default_reverb_tone(),
             reverb_pre_delay_ms: default_reverb_pre_delay_ms(),
+            sidechain: SidechainParameters::default(),
             key: PitchClass::C,
             scale: Scale::Major,
         }
@@ -1553,7 +1588,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 14,
+            format_version: 15,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1678,7 +1713,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 14 {
+        if self.format_version != 15 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -2620,7 +2655,10 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 14);
+        assert_eq!(project.format_version, 15);
+        assert_eq!(project.globals.sidechain, SidechainParameters::default());
+        assert_eq!(project.globals.sidechain.depth_db(), 0.0);
+        assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
         assert_eq!(project.tracks[0].effects.distortion.drive, Percent::ZERO);
         assert_eq!(project.tracks[0].effects.distortion.tone, p(50));
         assert_eq!(project.tracks[0].effects.phaser.rate, p(25));

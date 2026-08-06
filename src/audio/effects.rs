@@ -9,6 +9,7 @@ use std::{
 impl Renderer {
     pub(super) fn configure_effects(&mut self, smoothing_samples: u32) {
         self.clock.set_bpm(self.project.globals.tempo_bpm);
+        self.sidechain.configure(self.project.globals.sidechain);
         self.delay.configure(
             self.project
                 .globals

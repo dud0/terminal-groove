@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use crate::model::{LfoConfig, LfoWaveform, ParameterLocks, TrackEffects};
+use crate::model::{LfoConfig, LfoWaveform, ParameterLocks, SidechainParameters, TrackEffects};
 
 pub fn exp_map(percent: u8, min: f32, max: f32) -> f32 {
     if percent == 0 {
@@ -17,6 +17,65 @@ pub fn exp_map_f32(percent: f32, min: f32, max: f32) -> f32 {
 pub fn equal_power_pan(pan: f32) -> (f32, f32) {
     let angle = pan.clamp(0.0, 100.0) * std::f32::consts::FRAC_PI_2 / 100.0;
     (angle.cos(), angle.sin())
+}
+
+/// A preallocated kick-keyed envelope follower used to generate a shared ducking gain.
+#[derive(Clone, Copy, Debug)]
+pub struct SidechainCompressor {
+    sample_rate: f32,
+    depth_db: f32,
+    attack_seconds: f32,
+    release_seconds: f32,
+    envelope: f32,
+}
+
+impl SidechainCompressor {
+    pub fn new(sample_rate: u32) -> Self {
+        let mut compressor = Self {
+            sample_rate: sample_rate as f32,
+            depth_db: 0.0,
+            attack_seconds: 0.001,
+            release_seconds: 0.1,
+            envelope: 0.0,
+        };
+        compressor.configure(SidechainParameters::default());
+        compressor
+    }
+
+    pub fn configure(&mut self, parameters: SidechainParameters) {
+        self.depth_db = parameters.depth_db().clamp(0.0, 18.0);
+        self.attack_seconds = (parameters.attack_ms() * 0.001).clamp(0.0005, 0.030);
+        self.release_seconds = (parameters.release_ms() * 0.001).clamp(0.040, 1.0);
+    }
+
+    pub fn reset(&mut self) {
+        self.envelope = 0.0;
+    }
+
+    pub fn envelope(&self) -> f32 {
+        self.envelope
+    }
+
+    pub fn current_gain(&self) -> f32 {
+        let gain = 10.0_f32.powf(-(self.depth_db * self.envelope) / 20.0);
+        if gain.is_finite() {
+            gain.clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
+    pub fn process_stereo(&mut self, input_l: f32, input_r: f32) -> f32 {
+        let peak = input_l.abs().max(input_r.abs()).clamp(0.0, 1.0);
+        let time = if peak > self.envelope {
+            self.attack_seconds
+        } else {
+            self.release_seconds
+        };
+        let coefficient = 1.0 - (-1.0 / (self.sample_rate.max(1.0) * time)).exp();
+        self.envelope = (self.envelope + (peak - self.envelope) * coefficient).clamp(0.0, 1.0);
+        self.current_gain()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1808,5 +1867,64 @@ mod tests {
             let input = ((sample as f32) * 0.017).sin() * 0.4;
             assert_eq!(first.process(input), second.process(input));
         }
+    }
+
+    #[test]
+    fn sidechain_zero_depth_is_unity() {
+        let mut compressor = SidechainCompressor::new(48_000);
+        let parameters = SidechainParameters {
+            depth: crate::model::Percent::ZERO,
+            ..SidechainParameters::default()
+        };
+        compressor.configure(parameters);
+        for _ in 0..100 {
+            assert_eq!(compressor.process_stereo(1.0, 0.5), 1.0);
+        }
+    }
+
+    #[test]
+    fn sidechain_attack_and_release_follow_peak_envelope() {
+        let mut compressor = SidechainCompressor::new(1_000);
+        compressor.configure(SidechainParameters {
+            depth: crate::model::Percent::new(100).unwrap(),
+            attack: crate::model::Percent::new(0).unwrap(),
+            release: crate::model::Percent::new(0).unwrap(),
+        });
+        let first = compressor.process_stereo(1.0, -0.5);
+        assert!(compressor.envelope() > 0.0);
+        assert!(first < 1.0);
+        let ducked = (0..100)
+            .map(|_| compressor.process_stereo(1.0, 1.0))
+            .last()
+            .unwrap();
+        assert!(ducked < 0.2);
+        let before_release = compressor.envelope();
+        for _ in 0..100 {
+            compressor.process_stereo(0.0, 0.0);
+        }
+        assert!(compressor.envelope() < before_release);
+        assert!(compressor.current_gain() > ducked);
+    }
+
+    #[test]
+    fn sidechain_maximum_attenuation_reset_and_finite_output() {
+        let mut compressor = SidechainCompressor::new(48_000);
+        compressor.configure(SidechainParameters {
+            depth: crate::model::Percent::new(100).unwrap(),
+            attack: crate::model::Percent::new(100).unwrap(),
+            release: crate::model::Percent::new(100).unwrap(),
+        });
+        for _ in 0..100_000 {
+            compressor.process_stereo(2.0, -2.0);
+        }
+        assert!((compressor.current_gain() - 10.0_f32.powf(-18.0 / 20.0)).abs() < 0.0001);
+        assert!(
+            compressor
+                .process_stereo(f32::NAN, f32::INFINITY)
+                .is_finite()
+        );
+        compressor.reset();
+        assert_eq!(compressor.envelope(), 0.0);
+        assert_eq!(compressor.current_gain(), 10.0_f32.powf(-0.0));
     }
 }

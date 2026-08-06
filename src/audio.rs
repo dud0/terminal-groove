@@ -1,6 +1,8 @@
 pub use crate::model::PatternIndexMap;
 use crate::{
-    dsp::{DcBlock, Delay, Lfo, MasterLimiter, Reverb, Smoother, TrackEffectChain},
+    dsp::{
+        DcBlock, Delay, Lfo, MasterLimiter, Reverb, SidechainCompressor, Smoother, TrackEffectChain,
+    },
     engine::StepClock,
     model::{
         ArpeggioConfig, ChordShape, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT,
@@ -124,6 +126,7 @@ struct Renderer {
     preview_chord: ChordVoicePool,
     effects: [TrackEffectChain; TRACK_COUNT],
     preview_effects: [TrackEffectChain; TRACK_COUNT],
+    sidechain: SidechainCompressor,
     delay: Delay,
     reverb: Reverb,
     dc: DcBlock,

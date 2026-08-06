@@ -1,6 +1,6 @@
 use super::{
     render::{fader_segments, render_centered},
-    state::{App, ChordField, GeneratorDialog, LfoField, TriggerField},
+    state::{App, ChordField, GeneratorDialog, LfoField, SidechainField, TriggerField},
 };
 use crate::{
     generator::Target as GeneratorTarget,
@@ -109,6 +109,77 @@ pub(super) fn render_trigger_popup(
         Paragraph::new(vec![
             Line::from("[←/→] select   [↑/↓] adjust   [`/1–9/0] chance"),
             Line::from("[Enter/Esc] close"),
+        ])
+        .alignment(Alignment::Center),
+        Rect {
+            x: inner.x,
+            y: inner.y + inner.height.saturating_sub(2),
+            width: inner.width,
+            height: 2.min(inner.height),
+        },
+    );
+}
+
+pub(super) fn render_sidechain_popup(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    a: &App,
+    selected: SidechainField,
+) {
+    let popup_area = sidechain_popup_rect(area);
+    f.render_widget(Clear, popup_area);
+    let panel = Block::bordered().title("Ducking · Kick → Bass / Chord / Lead");
+    let inner = panel.inner(popup_area);
+    f.render_widget(panel, popup_area);
+    let controls_area = Rect {
+        height: inner.height.saturating_sub(3),
+        ..inner
+    };
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1, 3); 3])
+        .split(controls_area);
+    let sidechain = a.editor.project.globals.sidechain;
+    for (index, field) in SidechainField::ALL.iter().enumerate() {
+        let (label, value) = match field {
+            SidechainField::Depth => {
+                let value = if sidechain.depth == crate::model::Percent::ZERO {
+                    "Off".to_string()
+                } else {
+                    format!("{}%\n{:.1} dB", sidechain.depth.get(), sidechain.depth_db())
+                };
+                ("Depth", value)
+            }
+            SidechainField::Attack => (
+                "Attack",
+                format!(
+                    "{}%\n{:.2} ms",
+                    sidechain.attack.get(),
+                    sidechain.attack_ms()
+                ),
+            ),
+            SidechainField::Release => (
+                "Release",
+                format!(
+                    "{}%\n{:.0} ms",
+                    sidechain.release.get(),
+                    sidechain.release_ms()
+                ),
+            ),
+        };
+        let (content, style) =
+            render_trigger_card(f, columns[index], label, selected == *field, false);
+        f.render_widget(
+            Paragraph::new(value)
+                .alignment(Alignment::Center)
+                .style(style),
+            content,
+        );
+    }
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from("[←/→] select   [↑/↓] adjust   [Shift+↑/↓] ±10%   [`/1–9/0] depth"),
+            Line::from("[Enter/Esc] close · edits are immediate"),
         ])
         .alignment(Alignment::Center),
         Rect {
@@ -910,6 +981,10 @@ pub(super) fn swing_popup_rect(area: Rect) -> Rect {
 
 pub(super) fn probability_popup_rect(area: Rect) -> Rect {
     compact_popup_rect(area, 48, 6)
+}
+
+pub(super) fn sidechain_popup_rect(area: Rect) -> Rect {
+    compact_popup_rect(area, 72, 10)
 }
 
 pub(super) fn popup_rect(area: Rect) -> Rect {

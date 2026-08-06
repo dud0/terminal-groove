@@ -44,7 +44,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if version != Some(14) {
+    if version != Some(15) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
@@ -200,13 +200,13 @@ mod tests {
         let f = d.path().join("x");
         fs::write(
             &f,
-            r#"{"format_version":15,"globals":{},"tracks":[],"wat":1}"#,
+            r#"{"format_version":14,"globals":{},"tracks":[],"wat":1}"#,
         )
         .unwrap();
         assert!(matches!(
             load(&f),
             Err(ProjectIoError::Validation {
-                source: crate::model::ValidationError::Version(15),
+                source: crate::model::ValidationError::Version(14),
                 ..
             })
         ));
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 14);
+        assert_eq!(value["format_version"], 15);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -257,6 +257,29 @@ mod tests {
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.globals.reverb_tone.get(), 40);
         assert_eq!(loaded.globals.reverb_pre_delay_ms, 20);
+    }
+
+    #[test]
+    fn sidechain_is_required_and_uses_bounded_percentages() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sidechain.groove.json");
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["globals"]
+            .as_object_mut()
+            .unwrap()
+            .remove("sidechain");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["globals"]["sidechain"]["release"] = 101.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+
+        let mut project = Project::new();
+        project.globals.sidechain.depth = crate::model::Percent::new(80).unwrap();
+        save_atomic(&path, &project).unwrap();
+        assert_eq!(load(&path).unwrap(), project);
     }
 
     #[test]
@@ -310,7 +333,7 @@ mod tests {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
             let project = load(path.path()).unwrap();
-            assert_eq!(project.format_version, 14);
+            assert_eq!(project.format_version, 15);
             assert!(
                 (crate::model::MIN_PATTERN_COUNT..=crate::model::MAX_PATTERN_COUNT)
                     .contains(&project.patterns.len())
@@ -454,7 +477,7 @@ mod tests {
             .remove("flanger");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 14);
+        assert_eq!(loaded.format_version, 15);
         assert_eq!(
             loaded.tracks[0].effects.flanger,
             crate::model::FlangerParameters::default()

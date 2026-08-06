@@ -26,6 +26,9 @@ pub(crate) enum Mode {
     SwingEdit,
     TrackProbabilityEdit,
     GlobalEdit(GlobalParameterId),
+    SidechainEdit {
+        field: SidechainField,
+    },
     TempoInput(String),
     TrackLengthInput(String),
     FileInput(FileAction, String),
@@ -40,6 +43,18 @@ pub(crate) enum Mode {
 pub(crate) enum ParameterBank {
     Params,
     Effects,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SidechainField {
+    Depth,
+    Attack,
+    Release,
+}
+
+impl SidechainField {
+    pub(super) const ALL: [Self; 3] = [Self::Depth, Self::Attack, Self::Release];
 }
 
 #[repr(u8)]

@@ -79,6 +79,7 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
             renderer.preview_chord.chorus.clear();
             renderer.delay.clear();
             renderer.reverb.clear();
+            renderer.sidechain.reset();
             renderer.clear_track_effects();
             renderer.limiter.clear();
             renderer.reset_lfos();
