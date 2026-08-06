@@ -913,6 +913,7 @@ mod tests {
         assert!(screen.contains("EVENTS & TRACKS  p BASE/LOCK"));
         assert!(screen.contains("PARAMETERS  v level"));
         assert!(screen.contains("GLOBAL  t tempo"));
+        assert!(screen.contains("m reverb return"));
         assert!(screen.contains("Ctrl+Shift+S save as"));
         assert!(screen.contains("o audition selected step"));
         assert!(screen.contains("[`/1–9/0] percent"));

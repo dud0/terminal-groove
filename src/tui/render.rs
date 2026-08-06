@@ -100,7 +100,7 @@ PARAMETERS  v level · n pan · y delay send · b reverb send
            Parameter edit: PageUp/Down step · Shift+L LFO · [`/1–9/0] percent
            ↑/↓ adjust · ←/→ switch parameter · Enter/Esc finish · Backspace/Delete remove lock/LFO
 GLOBAL  t tempo · y delay division · f feedback · r reverb time
-        b reverb tone · p pre-delay · k key · s scale · ←/→ select · ↑/↓ adjust
+        b reverb tone · p pre-delay · m reverb return · k key · s scale · ←/→ select · ↑/↓ adjust
 Help is available from navigation and track editors with ?; Esc in navigation resets scope to BASE.";
 
 pub(super) fn track_label(t: &crate::model::Track) -> String {
