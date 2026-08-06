@@ -260,6 +260,9 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 });
             }
         }
+        KeyCode::Delete if is_clear_track_shortcut(&a.mode, a.row, k) => {
+            clear_selected_track(a, audio)
+        }
         KeyCode::Backspace | KeyCode::Delete if a.row > 0 => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.clear(track, step)) {
@@ -291,9 +294,6 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             a.status = format!("Editing {} length", a.editor.project.tracks[a.row - 1].name);
         }
         KeyCode::Char('D') if a.row > 0 => duplicate_selected_track(a, audio),
-        KeyCode::Delete if is_clear_track_shortcut(&a.mode, a.row, k) => {
-            clear_selected_track(a, audio)
-        }
         KeyCode::Char('A') if a.row > 0 => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.toggle_accent(track, step)) {
