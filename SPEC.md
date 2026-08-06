@@ -478,6 +478,7 @@ The current mode is always named on screen. Modes are:
 - Help
 
 File prompts accept literal absolute paths or paths relative to the directory from which the process was launched. The MVP does not expand `~`, environment variables, or globs. The resolved path is shown before confirmation.
+Save As prompts default to `.projects/project.groove.json`; the `.projects/` directory is created lazily on save and is ignored by Git. Users may edit the suggested path, and explicit CLI project paths remain unchanged.
 
 Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice. Save failure leaves the current project dirty, shows an error, and clears any pending open/new/quit continuation so a later unrelated Save As cannot trigger it. Opening a project stops and resets playback, clears effects, loads the new engine state, resets undo/redo history, selects the global row, and marks the project clean.
 

@@ -12,6 +12,16 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{path::PathBuf, sync::atomic::Ordering};
 
+pub(super) const DEFAULT_PROJECT_PATH: &str = ".projects/project.groove.json";
+
+pub(super) fn default_save_path() -> &'static str {
+    DEFAULT_PROJECT_PATH
+}
+
+pub(super) fn save_as_mode() -> Mode {
+    Mode::FileInput(FileAction::SaveAs, default_save_path().into())
+}
+
 pub(super) fn sync_project(a: &mut App, audio: &mut Audio) -> bool {
     sync_project_with_smoothing(a, audio, false)
 }
@@ -169,7 +179,7 @@ pub(super) fn handle_open_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -
         KeyCode::Char('s' | 'S') => {
             if a.path.is_none() {
                 a.pending_open = Some(path);
-                a.mode = Mode::FileInput(FileAction::SaveAs, String::new())
+                a.mode = save_as_mode()
             } else {
                 save(a)?;
                 if !a.editor.is_dirty() {
@@ -189,7 +199,7 @@ pub(super) fn handle_new_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
         KeyCode::Char('s' | 'S') => {
             if a.path.is_none() {
                 a.pending_new = true;
-                a.mode = Mode::FileInput(FileAction::SaveAs, String::new())
+                a.mode = save_as_mode()
             } else {
                 save(a)?;
                 if !a.editor.is_dirty() {

@@ -2,7 +2,7 @@ use super::{
     controller::{
         change_octave, enter_global_edit, global_id, global_shortcut, handle_file_input,
         handle_global_key, handle_new_confirm, handle_open_confirm, handle_sidechain_key,
-        handle_tempo_input, new_project, request_new_project, save, sync_project,
+        handle_tempo_input, new_project, request_new_project, save, save_as_mode, sync_project,
         sync_project_with_smoothing,
     },
     render::{
@@ -70,7 +70,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 if a.path.is_none() {
                     a.pending_quit = true;
-                    a.mode = Mode::FileInput(FileAction::SaveAs, String::new())
+                    a.mode = save_as_mode()
                 } else {
                     save(a)?;
                     if !a.editor.is_dirty() {
@@ -103,13 +103,13 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 }
             }
             KeyCode::Char('s' | 'S') if k.modifiers.contains(KeyModifiers::SHIFT) => {
-                a.mode = Mode::FileInput(FileAction::SaveAs, String::new())
+                a.mode = save_as_mode()
             }
             KeyCode::Char('s' | 'S') => {
                 if a.path.is_some() {
                     save(a)?
                 } else {
-                    a.mode = Mode::FileInput(FileAction::SaveAs, String::new())
+                    a.mode = save_as_mode()
                 }
             }
             KeyCode::Char('o' | 'O') => a.mode = Mode::FileInput(FileAction::Open, String::new()),

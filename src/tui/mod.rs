@@ -73,11 +73,11 @@ pub(crate) use state::{
 #[cfg(test)]
 #[allow(unused_imports)]
 use controller::{
-    adjusted_octave, change_octave, edit_global, enter_error, enter_global_edit, global_id,
-    global_name, global_shortcut, handle_file_input, handle_global_key, handle_new_confirm,
-    handle_open_confirm, handle_sidechain_key, handle_tempo_input, move_global_editor, new_project,
-    open_project, refresh_audio_status, request_new_project, reset_project_ui, resolved_path, save,
-    sync_project, sync_project_with_smoothing,
+    adjusted_octave, change_octave, default_save_path, edit_global, enter_error, enter_global_edit,
+    global_id, global_name, global_shortcut, handle_file_input, handle_global_key,
+    handle_new_confirm, handle_open_confirm, handle_sidechain_key, handle_tempo_input,
+    move_global_editor, new_project, open_project, refresh_audio_status, request_new_project,
+    reset_project_ui, resolved_path, save, save_as_mode, sync_project, sync_project_with_smoothing,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -1596,6 +1596,15 @@ mod tests {
         assert_eq!(
             mode_name(&Mode::TrackLengthInput(String::new())),
             "Track length input"
+        );
+    }
+
+    #[test]
+    fn save_as_uses_the_gitignored_default_project_path() {
+        assert_eq!(default_save_path(), ".projects/project.groove.json");
+        assert_eq!(
+            save_as_mode(),
+            Mode::FileInput(FileAction::SaveAs, ".projects/project.groove.json".into())
         );
     }
 

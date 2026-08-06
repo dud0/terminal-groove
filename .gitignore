@@ -1,5 +1,6 @@
 /target/
 *.groove.json.tmp
+.projects/
 .antigravitycli/
 .gemini/
 notes.md

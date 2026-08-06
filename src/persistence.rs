@@ -85,6 +85,7 @@ pub fn save_atomic(path: &Path, project: &Project) -> Result<(), ProjectIoError>
         .unwrap_or("project");
     let tmp = parent.join(format!(".{name}.{}.tmp", std::process::id()));
     let result = (|| -> io::Result<()> {
+        fs::create_dir_all(parent)?;
         let file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         let mut out = BufWriter::new(file);
         serde_json::to_writer_pretty(&mut out, project).map_err(io::Error::other)?;
@@ -117,6 +118,17 @@ mod tests {
         save_atomic(&f, &p).unwrap();
         assert_eq!(load(&f).unwrap(), p);
         assert!(fs::read(&f).unwrap().ends_with(b"\n"));
+    }
+
+    #[test]
+    fn save_creates_missing_parent_directory() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join(".projects").join("project.groove.json");
+
+        save_atomic(&f, &Project::new()).unwrap();
+
+        assert!(f.is_file());
+        assert_eq!(load(&f).unwrap(), Project::new());
     }
 
     #[test]
