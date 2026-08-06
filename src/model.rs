@@ -1064,6 +1064,9 @@ impl ParameterLocks {
             (ParameterId::PhaserRate, ParameterValue::Percent(v)) => self.phaser_rate = Some(v),
             (ParameterId::PhaserDepth, ParameterValue::Percent(v)) => self.phaser_depth = Some(v),
             (ParameterId::PhaserFeedback, ParameterValue::Percent(v)) => {
+                if v.get() > 90 {
+                    return false;
+                }
                 self.phaser_feedback = Some(v)
             }
             (ParameterId::PhaserMix, ParameterValue::Percent(v)) => self.phaser_mix = Some(v),
@@ -2193,6 +2196,9 @@ impl Track {
             (ParameterId::PhaserRate, ParameterValue::Percent(v)) => self.effects.phaser.rate = v,
             (ParameterId::PhaserDepth, ParameterValue::Percent(v)) => self.effects.phaser.depth = v,
             (ParameterId::PhaserFeedback, ParameterValue::Percent(v)) => {
+                if v.get() > 90 {
+                    return false;
+                }
                 self.effects.phaser.feedback = v
             }
             (ParameterId::PhaserMix, ParameterValue::Percent(v)) => self.effects.phaser.mix = v,
@@ -2484,6 +2490,13 @@ mod tests {
         );
         assert!(locks.set(ParameterId::PhaserFeedback, ParameterValue::Percent(p(90))));
         assert_eq!(locks.phaser_feedback, Some(p(90)));
+        assert!(!locks.set(ParameterId::PhaserFeedback, ParameterValue::Percent(p(91))));
+        assert_eq!(locks.phaser_feedback, Some(p(90)));
+
+        let mut track = project.tracks[0].clone();
+        assert!(track.set_parameter(ParameterId::PhaserFeedback, ParameterValue::Percent(p(90))));
+        assert!(!track.set_parameter(ParameterId::PhaserFeedback, ParameterValue::Percent(p(91))));
+        assert_eq!(track.effects.phaser.feedback, p(90));
 
         let mut invalid = project;
         invalid.tracks[0].effects.phaser.feedback = p(91);

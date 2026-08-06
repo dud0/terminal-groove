@@ -176,7 +176,8 @@ pub struct TrackEffectChain {
     distortion_drive: Smoother,
     distortion_tone: Smoother,
     distortion_mix: Smoother,
-    distortion_state: f32,
+    distortion_state_l: f32,
+    distortion_state_r: f32,
     phaser_rate: Smoother,
     phaser_depth: Smoother,
     phaser_feedback: Smoother,
@@ -195,7 +196,8 @@ impl TrackEffectChain {
             distortion_drive: Smoother::new(0.0),
             distortion_tone: Smoother::new(50.0),
             distortion_mix: Smoother::new(0.0),
-            distortion_state: 0.0,
+            distortion_state_l: 0.0,
+            distortion_state_r: 0.0,
             phaser_rate: Smoother::new(25.0),
             phaser_depth: Smoother::new(50.0),
             phaser_feedback: Smoother::new(20.0),
@@ -250,6 +252,10 @@ impl TrackEffectChain {
     }
 
     pub fn process(&mut self, input: f32) -> (f32, f32) {
+        self.process_stereo(input, input)
+    }
+
+    pub fn process_stereo(&mut self, input_l: f32, input_r: f32) -> (f32, f32) {
         let drive = self.distortion_drive.next_value();
         let tone = self.distortion_tone.next_value();
         let distortion_mix = self.distortion_mix.next_value() / 100.0;
@@ -258,24 +264,35 @@ impl TrackEffectChain {
         let phaser_feedback = (self.phaser_feedback.next_value() / 100.0).clamp(0.0, 0.9);
         let phaser_mix = self.phaser_mix.next_value() / 100.0;
         if distortion_mix <= 0.0 && phaser_mix <= 0.0 {
-            return (input, input);
+            return (input_l, input_r);
         }
 
         let gain = exp_map_f32(drive, 1.0, 31.622_776);
-        let clipped = (input * gain).tanh();
         let cutoff = exp_map_f32(tone, 700.0, (18_000.0_f32).min(self.sample_rate * 0.45));
         let coefficient = 1.0 - (-std::f32::consts::TAU * cutoff / self.sample_rate).exp();
-        self.distortion_state += (clipped - self.distortion_state) * coefficient;
-        let distorted = input * (1.0 - distortion_mix) + self.distortion_state * distortion_mix;
+        let distorted_l = Self::distort_sample(
+            input_l,
+            gain,
+            coefficient,
+            distortion_mix,
+            &mut self.distortion_state_l,
+        );
+        let distorted_r = Self::distort_sample(
+            input_r,
+            gain,
+            coefficient,
+            distortion_mix,
+            &mut self.distortion_state_r,
+        );
 
         if phaser_mix <= 0.0 {
-            return (distorted, distorted);
+            return (distorted_l, distorted_r);
         }
         let sweep = (8_000.0_f32 / 300.0).ln() * phaser_depth / 100.0;
         let rate = exp_map_f32(phaser_rate, 0.05, 8.0);
         let feedback = (self.phaser_feedback_l + self.phaser_feedback_r) * 0.5 * phaser_feedback;
-        let left_input = distorted + feedback;
-        let right_input = distorted - feedback;
+        let left_input = distorted_l + feedback;
+        let right_input = distorted_r - feedback;
         let left = Self::phaser_sample(
             &mut self.phaser_l,
             left_input,
@@ -294,9 +311,15 @@ impl TrackEffectChain {
         self.phaser_feedback_r = right;
         self.phaser_phase = (self.phaser_phase + rate / self.sample_rate).fract();
         (
-            distorted * (1.0 - phaser_mix) + left * phaser_mix,
-            distorted * (1.0 - phaser_mix) + right * phaser_mix,
+            distorted_l * (1.0 - phaser_mix) + left * phaser_mix,
+            distorted_r * (1.0 - phaser_mix) + right * phaser_mix,
         )
+    }
+
+    fn distort_sample(input: f32, gain: f32, coefficient: f32, mix: f32, state: &mut f32) -> f32 {
+        let clipped = (input * gain).tanh();
+        *state += (clipped - *state) * coefficient;
+        input * (1.0 - mix) + *state * mix
     }
 
     fn phaser_sample(
@@ -318,7 +341,8 @@ impl TrackEffectChain {
     }
 
     pub fn clear(&mut self) {
-        self.distortion_state = 0.0;
+        self.distortion_state_l = 0.0;
+        self.distortion_state_r = 0.0;
         self.phaser_phase = 0.0;
         self.phaser_feedback_l = 0.0;
         self.phaser_feedback_r = 0.0;
@@ -1446,6 +1470,7 @@ mod tests {
         for sample in [0.0, 0.1, -0.7, 1.0] {
             assert_eq!(chain.process(sample), (sample, sample));
         }
+        assert_eq!(chain.process_stereo(0.25, -0.75), (0.25, -0.75));
 
         let effects = TrackEffects {
             distortion: crate::model::DistortionParameters {

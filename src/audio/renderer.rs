@@ -362,7 +362,8 @@ impl Renderer {
         let chord_end = chord_start + self.chord.voice_count;
         let mut chord_has_active_send = false;
         let mut chord_tail_send = None;
-        let mut chord_level = None;
+        let mut chord_active_level = None;
+        let mut chord_tail_level = None;
         for (index, voice) in self.chord.voices.iter_mut().enumerate() {
             let (x, ds, rs) = Self::render_synth(voice, self.sr, &self.lfo_offsets[4]);
             let (pl, pr) = equal_power_pan(modulated_percent(
@@ -376,12 +377,13 @@ impl Renderer {
                     voice.level.next_value(),
                     self.lfo_offsets[4][ParameterId::Level as usize],
                 ) / 100.0;
-                chord_level.get_or_insert(level.powi(2));
                 if self.chord.active && (chord_start..chord_end).contains(&index) {
+                    chord_active_level.get_or_insert(level.powi(2));
                     chord_ds = ds;
                     chord_rs = rs;
                     chord_has_active_send = true;
                 } else if chord_tail_send.is_none() {
+                    chord_tail_level = Some(level.powi(2));
                     chord_tail_send = Some((ds, rs));
                 }
             }
@@ -390,8 +392,9 @@ impl Renderer {
             (chord_ds, chord_rs) = chord_tail_send.unwrap_or((0.0, 0.0));
         }
         let (chord_l, chord_r) = self.chord.chorus.process_stereo(chord_left, chord_right);
-        let (chord_effect_l, chord_effect_r) = self.effects[4].process((chord_l + chord_r) * 0.5);
-        let chord_gain = self.mute[4].next_value() * chord_level.unwrap_or(0.0);
+        let (chord_effect_l, chord_effect_r) = self.effects[4].process_stereo(chord_l, chord_r);
+        let chord_gain =
+            self.mute[4].next_value() * selected_chord_level(chord_active_level, chord_tail_level);
         dry_l += chord_effect_l * chord_gain;
         dry_r += chord_effect_r * chord_gain;
         delay_l += chord_effect_l * chord_ds * chord_gain;
@@ -407,7 +410,8 @@ impl Renderer {
         let preview_end = preview_start + self.preview_chord.voice_count;
         let mut preview_has_active_send = false;
         let mut preview_tail_send = None;
-        let mut preview_level = None;
+        let mut preview_active_level = None;
+        let mut preview_tail_level = None;
         for (index, voice) in self.preview_chord.voices.iter_mut().enumerate() {
             let (x, ds, rs) = Self::render_synth(voice, self.sr, &self.preview_lfo_offsets[4]);
             let (pl, pr) = equal_power_pan(modulated_percent(
@@ -421,12 +425,13 @@ impl Renderer {
                     voice.level.next_value(),
                     self.preview_lfo_offsets[4][ParameterId::Level as usize],
                 ) / 100.0;
-                preview_level.get_or_insert(level.powi(2));
                 if self.preview_chord.active && (preview_start..preview_end).contains(&index) {
+                    preview_active_level.get_or_insert(level.powi(2));
                     preview_ds = ds;
                     preview_rs = rs;
                     preview_has_active_send = true;
                 } else if preview_tail_send.is_none() {
+                    preview_tail_level = Some(level.powi(2));
                     preview_tail_send = Some((ds, rs));
                 }
             }
@@ -439,8 +444,8 @@ impl Renderer {
             .chorus
             .process_stereo(preview_left, preview_right);
         let (preview_effect_l, preview_effect_r) =
-            self.preview_effects[4].process((preview_l + preview_r) * 0.5);
-        let preview_gain = preview_level.unwrap_or(0.0);
+            self.preview_effects[4].process_stereo(preview_l, preview_r);
+        let preview_gain = selected_chord_level(preview_active_level, preview_tail_level);
         dry_l += preview_effect_l * preview_gain;
         dry_r += preview_effect_r * preview_gain;
         delay_l += preview_effect_l * preview_ds * preview_gain;
@@ -478,5 +483,21 @@ impl Renderer {
                 Self::trigger_arpeggio_tone(&self.project, self.sr, &mut self.preview_chord);
             }
         }
+    }
+}
+
+fn selected_chord_level(active_level: Option<f32>, tail_level: Option<f32>) -> f32 {
+    active_level.or(tail_level).unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::selected_chord_level;
+
+    #[test]
+    fn active_chord_level_takes_precedence_over_releasing_tail() {
+        assert_eq!(selected_chord_level(Some(0.25), Some(0.01)), 0.25);
+        assert_eq!(selected_chord_level(None, Some(0.01)), 0.01);
+        assert_eq!(selected_chord_level(None, None), 0.0);
     }
 }

@@ -325,12 +325,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         }
         KeyCode::Char('[') if a.row > 3 => change_octave(a, audio, -1),
         KeyCode::Char(']') if a.row > 3 => change_octave(a, audio, 1),
-        KeyCode::Char(c)
-            if a.row > 0
-                && !(a.parameter_bank == ParameterBank::Params
-                    && a.row > 3
-                    && (c == 't' || ('1'..='8').contains(&c))) =>
-        {
+        KeyCode::Char(c) if a.row > 0 && active_parameter_shortcut(a, c).is_some() => {
             if let Some(parameter) = active_parameter_shortcut(a, c) {
                 enter_parameter_edit(a, parameter);
             }
@@ -1571,7 +1566,7 @@ pub(super) fn parameter_shortcut(kind: TrackKind, c: char) -> Option<ParameterId
         .map(|descriptor| descriptor.id)
 }
 
-fn active_parameter_shortcut(a: &App, c: char) -> Option<ParameterId> {
+pub(super) fn active_parameter_shortcut(a: &App, c: char) -> Option<ParameterId> {
     if a.parameter_bank == ParameterBank::Params {
         return parameter_shortcut(a.editor.project.tracks[a.row - 1].kind, c);
     }

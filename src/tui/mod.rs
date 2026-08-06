@@ -81,16 +81,16 @@ use controller::{
 #[cfg(test)]
 #[allow(unused_imports)]
 use input::{
-    adjacent_pattern_in_count, apply, change_generator_value, coalesce_key, commit_pattern,
-    duplicate_selected_track, enter_parameter_edit, flipped_waveform, global_jump,
-    handle_chord_key, handle_generator_dialog, handle_key, handle_lfo_key, handle_parameter_key,
-    handle_pattern_dialog, handle_swing_key, handle_track_length_input, handle_trigger_key,
-    lfo_choice_index, move_chord_editor_step, move_generator_field, move_parameter_editor,
-    move_step, move_step_bank, move_step_page, move_step_vertical, normalize_cursor,
-    open_chord_editor, open_lfo_editor, parameter_edit_passthrough, parameter_shortcut,
-    parameter_supports_direct_percentage, pattern_edit_at, select_global, select_track,
-    set_lfo_config, set_parameter, set_selected_track_length, switch_parameter_editor,
-    toggle_parameter_bank, track_jump_index,
+    active_parameter_shortcut, adjacent_pattern_in_count, apply, change_generator_value,
+    coalesce_key, commit_pattern, duplicate_selected_track, enter_parameter_edit, flipped_waveform,
+    global_jump, handle_chord_key, handle_generator_dialog, handle_key, handle_lfo_key,
+    handle_parameter_key, handle_pattern_dialog, handle_swing_key, handle_track_length_input,
+    handle_trigger_key, lfo_choice_index, move_chord_editor_step, move_generator_field,
+    move_parameter_editor, move_step, move_step_bank, move_step_page, move_step_vertical,
+    normalize_cursor, open_chord_editor, open_lfo_editor, parameter_edit_passthrough,
+    parameter_shortcut, parameter_supports_direct_percentage, pattern_edit_at, select_global,
+    select_track, set_lfo_config, set_parameter, set_selected_track_length,
+    switch_parameter_editor, toggle_parameter_bank, track_jump_index,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -263,6 +263,21 @@ mod tests {
         toggle_parameter_bank(&mut app);
         assert_eq!(app.parameter_bank, ParameterBank::Params);
         assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Level));
+    }
+
+    #[test]
+    fn effects_bank_does_not_claim_pitched_note_keys() {
+        let mut app = App::new(Project::new(), None);
+        app.row = 4;
+        app.parameter_bank = ParameterBank::Effects;
+
+        for key in '1'..='8' {
+            assert_eq!(active_parameter_shortcut(&app, key), None);
+        }
+        assert_eq!(
+            active_parameter_shortcut(&app, 'd'),
+            Some(ParameterId::DistortionDrive)
+        );
     }
 
     #[test]
