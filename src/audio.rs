@@ -13,7 +13,7 @@ use cpal::{Device, SampleFormat, StreamConfig};
 use rtrb::{Producer, RingBuffer};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 #[derive(Clone, Copy, Debug)]
 struct AudioTrack {
@@ -182,6 +182,9 @@ pub struct AudioStatus {
     pub non_finite: AtomicBool,
     pub active_pattern: AtomicU8,
     pub queued_pattern: AtomicU8,
+    pub callback_overruns: AtomicU64,
+    pub max_callback_duration_ns: AtomicU64,
+    pub max_callback_load_per_mille: AtomicU64,
 }
 impl Default for AudioStatus {
     fn default() -> Self {
@@ -193,6 +196,9 @@ impl Default for AudioStatus {
             non_finite: AtomicBool::new(false),
             active_pattern: AtomicU8::new(0),
             queued_pattern: AtomicU8::new(u8::MAX),
+            callback_overruns: AtomicU64::new(0),
+            max_callback_duration_ns: AtomicU64::new(0),
+            max_callback_load_per_mille: AtomicU64::new(0),
         }
     }
 }
@@ -256,9 +262,9 @@ pub fn open(requested: Option<&str>, project: &Project) -> Result<Audio> {
     let (retire_producer, retired) = RingBuffer::new(32);
     let initial = AudioProject::from_project(project);
     let stream = match format {
-        SampleFormat::F32 => { let s=status.clone(); let rs=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[f32],_|render(out,channels,&mut r,&mut c,|x|x),move |_|mark_failed(&s),None) }
-        SampleFormat::I16 => { let s=status.clone(); let rs=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[i16],_|render(out,channels,&mut r,&mut c,|x|(x.clamp(-1.,1.)*32767.) as i16),move |_|mark_failed(&s),None) }
-        SampleFormat::U16 => { let s=status.clone(); let rs=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[u16],_|render(out,channels,&mut r,&mut c,|x|((x.clamp(-1.,1.)*0.5+0.5)*65535.) as u16),move |_|mark_failed(&s),None) }
+        SampleFormat::F32 => { let s=status.clone(); let rs=status.clone(); let ts=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[f32],_|render(out,channels,sr,&ts,&mut r,&mut c,|x|x),move |_|mark_failed(&s),None) }
+        SampleFormat::I16 => { let s=status.clone(); let rs=status.clone(); let ts=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[i16],_|render(out,channels,sr,&ts,&mut r,&mut c,|x|(x.clamp(-1.,1.)*32767.) as i16),move |_|mark_failed(&s),None) }
+        SampleFormat::U16 => { let s=status.clone(); let rs=status.clone(); let ts=status.clone(); let mut r=Renderer::new_with_retirement(Box::new(initial),sr,rs,retire_producer); let mut c=consumer; device.build_output_stream(&config,move|out:&mut[u16],_|render(out,channels,sr,&ts,&mut r,&mut c,|x|((x.clamp(-1.,1.)*0.5+0.5)*65535.) as u16),move |_|mark_failed(&s),None) }
         other => bail!("audio output `{name}` uses unsupported sample format {other:?}; supported: f32, i16, u16"),
     }.with_context(|| format!("could not build stream for audio output `{name}`"))?;
     stream

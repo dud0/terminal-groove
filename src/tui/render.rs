@@ -1466,7 +1466,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         a.editor.pattern() + 1,
         a.editor.project.patterns.len()
     );
-    let header = Line::from(vec![
+    let mut header_spans = vec![
         Span::styled(
             " terminal-groove ",
             Style::default()
@@ -1478,7 +1478,21 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
             device_name, a.editor.project.globals.tempo_bpm
         )),
-    ]);
+    ];
+    if a.callback_overruns > 0 {
+        header_spans.push(Span::styled(
+            format!(
+                " | ⚠ audio overload: {}, max {}%",
+                a.callback_overruns,
+                a.max_callback_load_per_mille.div_ceil(10)
+            ),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightYellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    let header = Line::from(header_spans);
     f.render_widget(Paragraph::new(header), chunks[0]);
     let g = &a.editor.project.globals;
     let globals = global_control_text(g);

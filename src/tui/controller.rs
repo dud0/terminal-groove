@@ -522,6 +522,15 @@ pub(super) fn refresh_audio_status(a: &mut App, audio: &Audio) {
         a.playheads[track] =
             (step < a.editor.project.tracks[track].steps.len() as u8).then_some(step as usize);
     }
+    a.callback_overruns = audio.status.callback_overruns.load(Ordering::Relaxed);
+    a.max_callback_duration_ns = audio
+        .status
+        .max_callback_duration_ns
+        .load(Ordering::Relaxed);
+    a.max_callback_load_per_mille = audio
+        .status
+        .max_callback_load_per_mille
+        .load(Ordering::Relaxed);
     if audio.status.failed.load(Ordering::Acquire) {
         a.status = "Audio stream failed; editing and saving remain available".into()
     } else if audio.status.non_finite.swap(false, Ordering::AcqRel) {

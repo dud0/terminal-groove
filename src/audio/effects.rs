@@ -1,6 +1,10 @@
-use super::{AudioCommand, Renderer};
+use super::{AudioCommand, AudioStatus, Renderer};
 use crate::model::ParameterLocks;
 use rtrb::Consumer;
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 impl Renderer {
     pub(super) fn configure_effects(&mut self, smoothing_samples: u32) {
@@ -73,10 +77,13 @@ impl Renderer {
 pub(super) fn render<T: Copy, F: Fn(f32) -> T>(
     out: &mut [T],
     channels: usize,
+    sample_rate: u32,
+    status: &AudioStatus,
     renderer: &mut Renderer,
     commands: &mut Consumer<AudioCommand>,
     convert: F,
 ) {
+    let started = Instant::now();
     if renderer.apply_pending() {
         while let Ok(c) = commands.pop() {
             let is_replace = matches!(c, AudioCommand::ReplaceProject { .. });
@@ -98,6 +105,33 @@ pub(super) fn render<T: Copy, F: Fn(f32) -> T>(
             *sample = convert(0.0)
         }
     }
+    if !out.is_empty() && channels > 0 && sample_rate > 0 {
+        let output_frames = out.len().div_ceil(channels);
+        let budget = Duration::from_secs_f64(output_frames as f64 / sample_rate as f64);
+        record_callback_timing(status, started.elapsed(), budget);
+    }
+}
+
+fn record_callback_timing(status: &AudioStatus, elapsed: Duration, budget: Duration) {
+    if budget.is_zero() {
+        return;
+    }
+    let elapsed_ns = elapsed.as_nanos().min(u64::MAX as u128) as u64;
+    let budget_ns = budget.as_nanos().min(u64::MAX as u128) as u64;
+    if budget_ns == 0 {
+        return;
+    }
+    status
+        .max_callback_duration_ns
+        .fetch_max(elapsed_ns, Ordering::Relaxed);
+    let load_per_mille =
+        ((elapsed_ns as u128 * 1_000) / budget_ns as u128).min(u64::MAX as u128) as u64;
+    status
+        .max_callback_load_per_mille
+        .fetch_max(load_per_mille, Ordering::Relaxed);
+    if elapsed > budget {
+        status.callback_overruns.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 pub(super) fn modulated_percent(center: f32, offset: f32) -> f32 {
@@ -106,4 +140,67 @@ pub(super) fn modulated_percent(center: f32, offset: f32) -> f32 {
 
 pub(super) fn pitch_modulated_frequency(base_frequency: f32, offset_percent: f32) -> f32 {
     base_frequency * 2.0_f32.powf((offset_percent / 100.0 * 2.0) / 12.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::record_callback_timing;
+    use crate::audio::AudioStatus;
+    use std::{sync::atomic::Ordering, time::Duration};
+
+    #[test]
+    fn callback_telemetry_defaults_to_zero() {
+        let status = AudioStatus::default();
+        assert_eq!(status.callback_overruns.load(Ordering::Relaxed), 0);
+        assert_eq!(status.max_callback_duration_ns.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            status.max_callback_load_per_mille.load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn callback_telemetry_tracks_overruns_and_monotonic_maxima() {
+        let status = AudioStatus::default();
+        record_callback_timing(&status, Duration::from_millis(5), Duration::from_millis(10));
+        assert_eq!(status.callback_overruns.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            status.max_callback_duration_ns.load(Ordering::Relaxed),
+            5_000_000
+        );
+        assert_eq!(
+            status.max_callback_load_per_mille.load(Ordering::Relaxed),
+            500
+        );
+
+        record_callback_timing(
+            &status,
+            Duration::from_millis(127),
+            Duration::from_millis(100),
+        );
+        assert_eq!(status.callback_overruns.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            status.max_callback_duration_ns.load(Ordering::Relaxed),
+            127_000_000
+        );
+        assert_eq!(
+            status.max_callback_load_per_mille.load(Ordering::Relaxed),
+            1_270
+        );
+
+        record_callback_timing(
+            &status,
+            Duration::from_millis(20),
+            Duration::from_millis(100),
+        );
+        assert_eq!(status.callback_overruns.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            status.max_callback_duration_ns.load(Ordering::Relaxed),
+            127_000_000
+        );
+        assert_eq!(
+            status.max_callback_load_per_mille.load(Ordering::Relaxed),
+            1_270
+        );
+    }
 }

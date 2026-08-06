@@ -1124,10 +1124,21 @@ pub fn safety(x: f32) -> f32 {
 pub struct MasterLimiter {
     left: Vec<f32>,
     right: Vec<f32>,
+    peaks: Vec<PeakEntry>,
+    peak_head: usize,
+    peak_tail: usize,
+    peak_len: usize,
+    sample_position: u64,
     pos: usize,
     gain: f32,
     attack_coefficient: f32,
     release_coefficient: f32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct PeakEntry {
+    value: f32,
+    position: u64,
 }
 
 impl MasterLimiter {
@@ -1136,6 +1147,11 @@ impl MasterLimiter {
         Self {
             left: vec![0.0; lookahead],
             right: vec![0.0; lookahead],
+            peaks: vec![PeakEntry::default(); lookahead],
+            peak_head: 0,
+            peak_tail: 0,
+            peak_len: 0,
+            sample_position: 0,
             pos: 0,
             gain: 1.0,
             attack_coefficient: (-1.0 / (sample_rate as f32 * 0.001)).exp(),
@@ -1151,11 +1167,12 @@ impl MasterLimiter {
         self.left[self.pos] = safety(l);
         self.right[self.pos] = safety(r);
         self.pos = (self.pos + 1) % self.left.len();
-        let peak = self
-            .left
-            .iter()
-            .chain(&self.right)
-            .fold(0.0_f32, |peak, sample| peak.max((sample * MAKEUP).abs()));
+        let frame_peak = self.left[(self.pos + self.left.len() - 1) % self.left.len()] * MAKEUP;
+        let frame_peak = frame_peak
+            .abs()
+            .max((self.right[(self.pos + self.right.len() - 1) % self.right.len()] * MAKEUP).abs());
+        self.push_peak(frame_peak);
+        let peak = self.peaks[self.peak_head].value;
         let target = if peak > CEILING { CEILING / peak } else { 1.0 };
         let coefficient = if target < self.gain {
             self.attack_coefficient
@@ -1171,8 +1188,42 @@ impl MasterLimiter {
     pub fn clear(&mut self) {
         self.left.fill(0.0);
         self.right.fill(0.0);
+        self.peaks.fill(PeakEntry::default());
+        self.peak_head = 0;
+        self.peak_tail = 0;
+        self.peak_len = 0;
+        self.sample_position = 0;
         self.pos = 0;
         self.gain = 1.0;
+    }
+
+    fn push_peak(&mut self, value: f32) {
+        let capacity = self.peaks.len();
+        let position = self.sample_position;
+        self.sample_position = self.sample_position.wrapping_add(1);
+
+        while self.peak_len > 0 {
+            let oldest = self.peaks[self.peak_head].position;
+            let expired = position.wrapping_sub(oldest) >= capacity as u64;
+            if !expired {
+                break;
+            }
+            self.peak_head = (self.peak_head + 1) % capacity;
+            self.peak_len -= 1;
+        }
+
+        while self.peak_len > 0 {
+            let back = (self.peak_tail + capacity - 1) % capacity;
+            if self.peaks[back].value > value {
+                break;
+            }
+            self.peak_tail = back;
+            self.peak_len -= 1;
+        }
+
+        self.peaks[self.peak_tail] = PeakEntry { value, position };
+        self.peak_tail = (self.peak_tail + 1) % capacity;
+        self.peak_len += 1;
     }
 }
 
@@ -1240,6 +1291,89 @@ mod tests {
         assert!(peak <= 0.891_251);
         assert!(linked);
     }
+    struct NaiveLimiter {
+        left: Vec<f32>,
+        right: Vec<f32>,
+        pos: usize,
+        gain: f32,
+        attack_coefficient: f32,
+        release_coefficient: f32,
+    }
+
+    impl NaiveLimiter {
+        fn new(sample_rate: u32) -> Self {
+            let lookahead = ((sample_rate as f32 * 0.005).round() as usize).max(1);
+            Self {
+                left: vec![0.0; lookahead],
+                right: vec![0.0; lookahead],
+                pos: 0,
+                gain: 1.0,
+                attack_coefficient: (-1.0 / (sample_rate as f32 * 0.001)).exp(),
+                release_coefficient: (-1.0 / (sample_rate as f32 * 0.080)).exp(),
+            }
+        }
+
+        fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+            const MAKEUP: f32 = 1.995_262_3;
+            const CEILING: f32 = 0.891_250_9;
+            let delayed_l = self.left[self.pos];
+            let delayed_r = self.right[self.pos];
+            self.left[self.pos] = safety(l);
+            self.right[self.pos] = safety(r);
+            self.pos = (self.pos + 1) % self.left.len();
+            let peak = self
+                .left
+                .iter()
+                .chain(&self.right)
+                .fold(0.0_f32, |peak, sample| peak.max((sample * MAKEUP).abs()));
+            let target = if peak > CEILING { CEILING / peak } else { 1.0 };
+            let coefficient = if target < self.gain {
+                self.attack_coefficient
+            } else {
+                self.release_coefficient
+            };
+            self.gain = target + coefficient * (self.gain - target);
+            let l = (delayed_l * MAKEUP * self.gain).clamp(-CEILING, CEILING);
+            let r = (delayed_r * MAKEUP * self.gain).clamp(-CEILING, CEILING);
+            (safety(l), safety(r))
+        }
+
+        fn clear(&mut self) {
+            self.left.fill(0.0);
+            self.right.fill(0.0);
+            self.pos = 0;
+            self.gain = 1.0;
+        }
+    }
+
+    #[test]
+    fn master_limiter_matches_naive_sliding_window() {
+        for sample_rate in [8_000, 44_100, 48_000] {
+            let mut optimized = MasterLimiter::new(sample_rate);
+            let mut reference = NaiveLimiter::new(sample_rate);
+            let window = ((sample_rate as f32 * 0.005).round() as usize).max(1);
+            for i in 0..(window * 4 + 19) {
+                let input = match i {
+                    0..=2 => (0.0, 0.0),
+                    3 => (8.0, 0.25),
+                    4 => (0.1, 0.9),
+                    i if (5..=window + 2).contains(&i) => (0.35, 0.35),
+                    _ if i % 11 == 0 => (-0.7, 0.2),
+                    _ => (0.0, 0.0),
+                };
+                let actual = optimized.process(input.0, input.1);
+                let expected = reference.process(input.0, input.1);
+                assert!((actual.0 - expected.0).abs() < 0.000001, "left at {i}");
+                assert!((actual.1 - expected.1).abs() < 0.000001, "right at {i}");
+
+                if i == window + 7 {
+                    optimized.clear();
+                    reference.clear();
+                }
+            }
+        }
+    }
+
     #[test]
     fn smoother_reaches_target_without_jump() {
         let mut s = Smoother::new(0.0);

@@ -797,6 +797,20 @@ mod tests {
     }
 
     #[test]
+    fn persistent_audio_overload_badge_preserves_transient_status() {
+        let clean = App::new(Project::new(), None);
+        assert!(!rendered(&clean, 120, 34).contains("audio overload"));
+
+        let mut overloaded = App::new(Project::new(), None);
+        overloaded.callback_overruns = 3;
+        overloaded.max_callback_load_per_mille = 1_270;
+        overloaded.status = "Edit feedback remains visible".into();
+        let screen = rendered(&overloaded, 120, 34);
+        assert!(screen.contains("⚠ audio overload: 3, max 127%"));
+        assert!(screen.contains("Edit feedback remains visible"));
+    }
+
+    #[test]
     fn parameter_editor_hints_match_scope_and_parameter_capabilities() {
         let mut app = App::new(Project::new(), None);
         app.row = 1;

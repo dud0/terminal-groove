@@ -252,7 +252,7 @@ Reverb time ranges from 0.2 through 10.0 seconds and defaults to 2.5 seconds. Re
 
 #### Master safety
 
-The final output stage applies DC blocking, fixed +6 dB makeup gain, and a stereo-linked limiter with 5 ms lookahead, 1 ms attack, 80 ms release, and a -1 dBFS ceiling. Ordinary samples are not passed through an always-on waveshaper. Non-finite values are replaced with silence and final conversion clamps to the device format. The limiter is not exposed as a user parameter.
+The final output stage applies DC blocking, fixed +6 dB makeup gain, and a stereo-linked limiter with 5 ms lookahead, 1 ms attack, 80 ms release, and a -1 dBFS ceiling. The limiter stores one stereo-linked peak per input frame in a fixed-capacity, preallocated monotonic deque and updates the sliding maximum in amortized O(1); processing and clearing it must not allocate. Ordinary samples are not passed through an always-on waveshaper. Non-finite values are replaced with silence and final conversion clamps to the device format. The limiter is not exposed as a user parameter.
 
 ## 4. Global musical parameters
 
@@ -387,7 +387,7 @@ Adding or replacing a trigger or note automatically auditions it while transport
 
 At `120x34` or larger, the normal screen contains:
 
-1. Header: one metadata-only line containing the application name, project filename or `Untitled`, dirty marker, audio device/status, transport state, pattern state, and tempo. Persistent command shortcut hints are not shown there; the `?` overlay contains the complete key map.
+1. Header: one metadata-only line containing the application name, project filename or `Untitled`, dirty marker, audio device/status, transport state, pattern state, and tempo. If the current audio stream has had callback deadline overruns, the header also shows a text-visible warning badge with the cumulative count and maximum callback load percentage. Persistent command shortcut hints are not shown there; the `?` overlay contains the complete key map.
 2. Global row: all eight global controls and current values; their local shortcuts are shown in the detail cards.
 3. Six variable-length sequencer track blocks: track name, mute state, absolute step range, and compact fixed-width step cells. The displayed range communicates the track length.
 4. A selected-control panel: vertical parameter faders for the selected track, or eight titled global detail cards when the global row is selected. The global cards show a tempo numeric readout, delay-division/key/scale selectors, and faders for delay feedback, reverb time, reverb tone, and reverb pre-delay. Global faders use their model ranges (`0–95%`, `0.2–10.0 s`, `0–100%`, and `0–200 ms`) and show exact values with units beside the fader; every card retains its local shortcut.
@@ -603,6 +603,7 @@ Use one binary package with testable modules for model/validation, reducer and h
 - CPAL's audio callback owns transport timing, a mirrored engine project, voices, filters, effects, and sample conversion.
 - UI-to-audio communication uses a preallocated bounded SPSC queue of typed commands. Transport, pattern selection, and audition commands are small; project edits are converted on the main thread into immutable boxed project snapshots before being queued.
 - Independent per-track playheads and transport telemetry return through atomics or a second bounded channel where intermediate redundant playhead updates may be dropped.
+- Each non-empty CPAL callback measures elapsed monotonic time from before command draining/rendering through completion. Its deadline is the current output frame count divided by the selected sample rate, not a hard-coded buffer size. The callback records maximum duration in nanoseconds and maximum elapsed/deadline load in per-mille relaxed atomics, and increments a relaxed cumulative overrun counter only when elapsed time is strictly greater than that deadline. These diagnostics are allocation-free, lock-free, non-blocking, and free of callback formatting or logging; all three counters reset when a new stream is opened.
 - Project files are parsed and validated on the main thread. Opening or creating a project queues a stop followed by its immutable snapshot; the callback applies the snapshot at a command boundary and reuses its preallocated audio state.
 - The callback must not allocate or free heap-backed project snapshots, lock a mutex, block, access the filesystem, format text, or log. Replaced snapshots are returned through a bounded retirement queue and reclaimed on the main thread.
 - Noise generators use preallocated deterministic PRNG state local to each voice.
