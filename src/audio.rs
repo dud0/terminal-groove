@@ -540,6 +540,66 @@ mod tests {
     }
 
     #[test]
+    fn idle_drums_stop_advancing_while_paused() {
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer =
+            Renderer::new(AudioProject::from_project(&Project::new()), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.command(AudioCommand::PlayPause);
+
+        let live_before = (
+            renderer.drums[0].phase,
+            renderer.drums[0].phase2,
+            renderer.drums[0].noise,
+        );
+        let preview_before = (
+            renderer.preview_drums[0].phase,
+            renderer.preview_drums[0].phase2,
+            renderer.preview_drums[0].noise,
+        );
+
+        for _ in 0..128 {
+            renderer.next();
+        }
+
+        assert_eq!(
+            (
+                renderer.drums[0].phase,
+                renderer.drums[0].phase2,
+                renderer.drums[0].noise,
+            ),
+            live_before
+        );
+        assert_eq!(
+            (
+                renderer.preview_drums[0].phase,
+                renderer.preview_drums[0].phase2,
+                renderer.preview_drums[0].noise,
+            ),
+            preview_before
+        );
+    }
+
+    #[test]
+    fn active_drum_tail_still_advances_while_paused() {
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer =
+            Renderer::new(AudioProject::from_project(&Project::new()), 8_000, status);
+        renderer.trigger_drum(0, false, ParameterLocks::default());
+        renderer.command(AudioCommand::PlayPause);
+        renderer.command(AudioCommand::PlayPause);
+        let elapsed_before = renderer.drums[0].envelope.elapsed;
+
+        renderer.next();
+
+        assert_eq!(renderer.drums[0].envelope.elapsed, elapsed_before + 1);
+        for _ in 1..renderer.drums[0].envelope.decay_samples {
+            renderer.next();
+        }
+        assert!(renderer.drums[0].envelope.is_idle());
+    }
+
+    #[test]
     fn empty_step_audition_uses_the_track_input_accent_default() {
         let mut project = Project::new();
         project.tracks[0].input_accent = true;

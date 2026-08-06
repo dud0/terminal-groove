@@ -235,6 +235,25 @@ impl Renderer {
         )
     }
 
+    fn render_drum_input(
+        voice: &mut DrumVoice,
+        track: usize,
+        sr: f32,
+        level_offset: f32,
+        pan_offset: f32,
+        paused: bool,
+    ) -> (f32, f32, f32, f32) {
+        if paused && voice.envelope.is_idle() {
+            return (
+                0.0,
+                voice.delay_send.next_value(),
+                voice.reverb_send.next_value(),
+                modulated_percent(voice.pan.next_value(), pan_offset),
+            );
+        }
+        Self::render_drum_raw(voice, track, sr, level_offset, pan_offset)
+    }
+
     #[cfg(test)]
     pub(super) fn render_drum(
         voice: &mut DrumVoice,
@@ -269,13 +288,15 @@ impl Renderer {
         let mut delay_r = 0.0;
         let mut reverb_l = 0.0;
         let mut reverb_r = 0.0;
+        let paused = !self.playing;
         for i in 0..3 {
-            let (x, delay_send, reverb_send, pan) = Self::render_drum_raw(
+            let (x, delay_send, reverb_send, pan) = Self::render_drum_input(
                 &mut self.drums[i],
                 i,
                 self.sr,
                 self.lfo_offsets[i][ParameterId::Level as usize],
                 self.lfo_offsets[i][ParameterId::Pan as usize],
+                paused,
             );
             let (effect_l, effect_r) = self.effects[i].process(x);
             let (pl, pr) = equal_power_pan(pan);
@@ -292,12 +313,13 @@ impl Renderer {
             reverb_r += effect_r * pr * reverb_send * gain;
         }
         for i in 0..3 {
-            let (x, delay_send, reverb_send, pan) = Self::render_drum_raw(
+            let (x, delay_send, reverb_send, pan) = Self::render_drum_input(
                 &mut self.preview_drums[i],
                 i,
                 self.sr,
                 self.preview_lfo_offsets[i][ParameterId::Level as usize],
                 self.preview_lfo_offsets[i][ParameterId::Pan as usize],
+                paused,
             );
             let (effect_l, effect_r) = self.preview_effects[i].process(x);
             let (pl, pr) = equal_power_pan(pan);
