@@ -337,7 +337,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Track | `o` | Audition selected track/step without editing |
 | Anywhere | `Ctrl+S` | Save, prompting if no current path exists |
 | Anywhere | `Ctrl+Shift+S` | Save as |
-| Anywhere | `Ctrl+O` | Open project |
+| Anywhere | `Ctrl+O` | Open project browser |
 | Anywhere | `Ctrl+Q` | Quit, with dirty confirmation |
 | Anywhere | `Ctrl+Z` | Undo |
 | Anywhere | `Ctrl+Y` | Redo |
@@ -472,13 +472,14 @@ The current mode is always named on screen. Modes are:
 - Parameter, global, LFO, Chord, trigger, and swing editors
 - Tempo numeric input
 - Track-length input
-- File-path input
+- Project browser
+- Project-name input
 - Open, new-project, and quit confirmations
 - Error dialog
 - Help
 
-File prompts accept literal absolute paths or paths relative to the directory from which the process was launched. The MVP does not expand `~`, environment variables, or globs. The resolved path is shown before confirmation.
-Save As prompts default to `.projects/project.groove.json`; the `.projects/` directory is created lazily on save and is ignored by Git. Users may edit the suggested path, and explicit CLI project paths remain unchanged.
+The project browser opened by `Ctrl+O` lists all regular, non-temporary files in `.projects/`, sorted by filename. Up/Down selects an entry, Home/End jump to the first/last entry, Enter opens it, and Esc closes the browser. A missing or empty `.projects/` directory is shown as empty. Explicit CLI project paths remain unchanged.
+Save As accepts a non-empty single filename component, writes it under `.projects/`, and appends `.groove.json` once if needed. Names containing `/` or `\\`, or equal to `.` or `..`, are rejected. The destination is shown before confirmation; the directory is created lazily on save.
 
 Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice. Save failure leaves the current project dirty, shows an error, and clears any pending open/new/quit continuation so a later unrelated Save As cannot trigger it. Opening a project stops and resets playback, clears effects, loads the new engine state, resets undo/redo history, selects the global row, and marks the project clean.
 
@@ -500,7 +501,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 ### 8.1 General rules
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
-- The conventional extension is `.groove.json`, but the application does not silently alter a user-supplied filename.
+- The conventional extension is `.groove.json`. TUI Save As appends this extension to bare names and does not duplicate it when already present; explicit CLI project paths are used literally.
 - Version 16 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. The required `globals.sidechain` object contains `depth`, `attack`, and `release` percentages. Version-15 and earlier files remain rejected; unsupported versions, missing versions, and unknown future versions are rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.

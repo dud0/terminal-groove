@@ -15,6 +15,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
+use std::path::PathBuf;
 
 pub(super) fn render_trigger_popup(
     f: &mut ratatui::Frame,
@@ -917,6 +918,56 @@ pub(super) fn popup_at(f: &mut ratatui::Frame, r: Rect, title: &str, text: &str)
             .block(Block::default().borders(Borders::ALL).title(title)),
         r,
     )
+}
+
+pub(super) fn render_project_browser(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    entries: &[PathBuf],
+    selected: usize,
+) {
+    let popup_area = project_browser_popup_rect(area, entries.len());
+    f.render_widget(Clear, popup_area);
+    let block = Block::bordered()
+        .title("Open project")
+        .title_bottom("[↑/↓] select  [Home/End] jump  [Enter] open  [Esc] cancel");
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    if entries.is_empty() {
+        f.render_widget(Paragraph::new("No projects in .projects"), inner);
+        return;
+    }
+
+    let visible = usize::from(inner.height);
+    let start = selected
+        .saturating_sub(visible.saturating_sub(1))
+        .min(entries.len().saturating_sub(visible));
+    let lines = entries
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(index, path)| {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "<unnamed>".into());
+            let marker = if index == selected { "▶ " } else { "  " };
+            let style = if index == selected {
+                Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            Line::from(vec![Span::styled(marker, style), Span::styled(name, style)])
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+pub(super) fn project_browser_popup_rect(area: Rect, entry_count: usize) -> Rect {
+    let list_height = entry_count.min(14) as u16;
+    compact_popup_rect(area, 76, list_height.saturating_add(4).max(6))
 }
 
 pub(super) fn quit_popup_rect(area: Rect) -> Rect {

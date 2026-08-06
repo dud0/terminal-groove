@@ -1,17 +1,16 @@
 use super::{
     controller::{
-        change_octave, enter_global_edit, global_id, global_shortcut, handle_file_input,
-        handle_global_key, handle_new_confirm, handle_open_confirm, handle_sidechain_key,
-        handle_tempo_input, new_project, request_new_project, save, save_as_mode, sync_project,
+        change_octave, enter_error, enter_global_edit, global_id, global_shortcut,
+        handle_file_input, handle_global_key, handle_new_confirm, handle_open_confirm,
+        handle_project_browser, handle_sidechain_key, handle_tempo_input, new_project,
+        project_browser_mode, request_new_project, save, save_as_mode, sync_project,
         sync_project_with_smoothing,
     },
     render::{
         GLOBAL_IDS, parameter_descriptors, scope_name, selected_chord_shape,
         visible_parameter_descriptors,
     },
-    state::{
-        App, ChordField, FileAction, GeneratorDialog, LfoField, Mode, ParameterBank, TriggerField,
-    },
+    state::{App, ChordField, GeneratorDialog, LfoField, Mode, ParameterBank, TriggerField},
 };
 use crate::{
     audio::{Audio, AudioCommand},
@@ -36,6 +35,10 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     }
     if matches!(a.mode, Mode::FileInput(_, _)) {
         return handle_file_input(a, audio, k);
+    }
+    if matches!(a.mode, Mode::ProjectBrowser { .. }) {
+        handle_project_browser(a, audio, k);
+        return Ok(());
     }
     if matches!(a.mode, Mode::TempoInput(_)) {
         return handle_tempo_input(a, audio, k);
@@ -112,7 +115,10 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                     a.mode = save_as_mode()
                 }
             }
-            KeyCode::Char('o' | 'O') => a.mode = Mode::FileInput(FileAction::Open, String::new()),
+            KeyCode::Char('o' | 'O') => match project_browser_mode() {
+                Ok(mode) => a.mode = mode,
+                Err(error) => enter_error(a, error.to_string()),
+            },
             KeyCode::Char('z' | 'Z') => {
                 if audio.available_commands() == 0 {
                     a.status = "Audio command queue full; undo rejected".into();

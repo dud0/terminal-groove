@@ -31,6 +31,10 @@ pub(crate) enum Mode {
     },
     TempoInput(String),
     TrackLengthInput(String),
+    ProjectBrowser {
+        entries: Vec<PathBuf>,
+        selected: usize,
+    },
     FileInput(FileAction, String),
     OpenConfirm(PathBuf),
     NewConfirm,
@@ -112,7 +116,6 @@ impl LfoField {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FileAction {
     SaveAs,
-    Open,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

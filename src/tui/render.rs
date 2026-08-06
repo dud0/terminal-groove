@@ -1,12 +1,13 @@
 use super::overlays::{
     popup, popup_at, probability_popup_rect, quit_popup_rect, render_chord_popup,
     render_generator_popup, render_lfo_popup, render_lfo_selector, render_pattern_popup,
-    render_sidechain_popup, render_trigger_popup, swing_popup_rect, tempo_popup_rect,
+    render_project_browser, render_sidechain_popup, render_trigger_popup, swing_popup_rect,
+    tempo_popup_rect,
 };
 use super::{
-    controller::{global_name, resolved_path},
+    controller::{PROJECT_EXTENSION, global_name, project_directory, project_path_for_name},
     input::parameter_supports_direct_percentage,
-    state::{App, FileAction, Mode, ParameterBank},
+    state::{App, Mode, ParameterBank},
 };
 use crate::tui::DIRECT_PERCENTAGE_HINT;
 use crate::{
@@ -51,7 +52,8 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::SidechainEdit { .. } => "Ducking editor".into(),
         Mode::TempoInput(_) => "Tempo numeric input".into(),
         Mode::TrackLengthInput(_) => "Track length input".into(),
-        Mode::FileInput(_, _) => "File-path input".into(),
+        Mode::ProjectBrowser { .. } => "Project browser".into(),
+        Mode::FileInput(_, _) => "Project-name input".into(),
         Mode::OpenConfirm(_) => "Unsaved confirmation".into(),
         Mode::NewConfirm => "Unsaved confirmation".into(),
         Mode::Error(_) => "Error dialog".into(),
@@ -75,7 +77,7 @@ pub(super) fn help_available(mode: &Mode) -> bool {
 
 const HELP_TEXT: &str =
     "CORE  Space play/pause · . stop/reset · ? help · Esc close help
-      Ctrl+N new project · Ctrl+O open · Ctrl+S save · Ctrl+Shift+S save as
+      Ctrl+N new project · Ctrl+O browse projects · Ctrl+S save · Ctrl+Shift+S save as
       Ctrl+Q quit · Ctrl+Z undo · Ctrl+Y redo
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
@@ -1945,20 +1947,32 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 ),
             )
         }
-        Mode::FileInput(action, input) => {
-            let title = if *action == FileAction::Open {
-                "Open project"
+        Mode::ProjectBrowser { entries, selected } => {
+            render_project_browser(f, area, entries, *selected);
+        }
+        Mode::FileInput(_, input) => {
+            let directory_path = project_directory().ok();
+            let directory = directory_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| ".projects".into());
+            let destination = if input.is_empty() {
+                format!("{directory}/<name>{PROJECT_EXTENSION}")
             } else {
-                "Save project as"
+                project_path_for_name(
+                    directory_path
+                        .as_deref()
+                        .unwrap_or_else(|| std::path::Path::new(".projects")),
+                    input,
+                )
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| format!("{directory}/{input}{PROJECT_EXTENSION}"))
             };
-            let resolved = resolved_path(input)
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
             popup(
                 f,
                 area,
-                title,
-                &format!("Path: {input}_\nResolved: {resolved}\nEnter confirms  Esc cancels"),
+                "Save project",
+                &format!("Name: {input}_\nDestination: {destination}\nEnter confirms  Esc cancels"),
             );
         }
         Mode::OpenConfirm(path) => popup(

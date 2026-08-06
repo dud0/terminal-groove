@@ -10,16 +10,81 @@ use crate::{
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::{path::PathBuf, sync::atomic::Ordering};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    sync::atomic::Ordering,
+};
 
-pub(super) const DEFAULT_PROJECT_PATH: &str = ".projects/project.groove.json";
+pub(super) const PROJECT_DIRECTORY_NAME: &str = ".projects";
+pub(super) const PROJECT_EXTENSION: &str = ".groove.json";
+const PROJECT_TEMP_SUFFIX: &str = ".groove.json.tmp";
 
-pub(super) fn default_save_path() -> &'static str {
-    DEFAULT_PROJECT_PATH
+pub(super) fn project_directory() -> Result<PathBuf> {
+    Ok(std::env::current_dir()?.join(PROJECT_DIRECTORY_NAME))
 }
 
 pub(super) fn save_as_mode() -> Mode {
-    Mode::FileInput(FileAction::SaveAs, default_save_path().into())
+    Mode::FileInput(FileAction::SaveAs, String::new())
+}
+
+pub(super) fn list_projects(directory: &Path) -> io::Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut projects = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let is_temporary = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(PROJECT_TEMP_SUFFIX));
+        if !is_temporary {
+            projects.push(path);
+        }
+    }
+    projects.sort_by(|left, right| {
+        left.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .cmp(&right.file_name().unwrap_or_default().to_string_lossy())
+    });
+    Ok(projects)
+}
+
+pub(super) fn project_browser_mode() -> Result<Mode> {
+    let entries = list_projects(&project_directory()?)?;
+    Ok(Mode::ProjectBrowser {
+        entries,
+        selected: 0,
+    })
+}
+
+pub(super) fn project_path_for_name(directory: &Path, name: &str) -> Result<PathBuf> {
+    if name.trim().is_empty() {
+        anyhow::bail!("Project name cannot be empty")
+    }
+    if name == "." || name == ".." || name.contains(['/', '\\']) {
+        anyhow::bail!("Project name must be a single file name")
+    }
+    let mut base_name = name;
+    while let Some(stripped) = base_name.strip_suffix(PROJECT_EXTENSION) {
+        base_name = stripped;
+    }
+    if base_name.is_empty() {
+        anyhow::bail!("Project name cannot be empty")
+    }
+    Ok(directory.join(format!("{base_name}{PROJECT_EXTENSION}")))
+}
+
+pub(super) fn save_path_for_name(name: &str) -> Result<PathBuf> {
+    project_path_for_name(&project_directory()?, name)
 }
 
 pub(super) fn sync_project(a: &mut App, audio: &mut Audio) -> bool {
@@ -102,16 +167,8 @@ pub(super) fn save(a: &mut App) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn resolved_path(input: &str) -> Result<PathBuf> {
-    let path = PathBuf::from(input);
-    if path.is_absolute() {
-        Ok(path)
-    } else {
-        Ok(std::env::current_dir()?.join(path))
-    }
-}
 pub(super) fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
-    let Mode::FileInput(action, mut input) = a.mode.clone() else {
+    let Mode::FileInput(FileAction::SaveAs, mut input) = a.mode.clone() else {
         return Ok(());
     };
     match k.code {
@@ -123,53 +180,89 @@ pub(super) fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
         }
         KeyCode::Backspace => {
             input.pop();
-            a.mode = Mode::FileInput(action, input)
+            a.mode = Mode::FileInput(FileAction::SaveAs, input)
         }
         KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
             input.push(c);
-            a.mode = Mode::FileInput(action, input)
+            a.mode = Mode::FileInput(FileAction::SaveAs, input)
         }
         KeyCode::Enter => {
-            if input.is_empty() {
-                a.status = "Path cannot be empty".into();
-                return Ok(());
-            }
-            match resolved_path(&input) {
-                Ok(path) => match action {
-                    FileAction::SaveAs => {
-                        let project = a.editor.synchronized_project();
-                        match persistence::save_atomic(&path, &project) {
-                            Ok(()) => {
-                                a.path = Some(path.clone());
-                                a.editor.mark_saved();
-                                a.status = format!("Saved {}", path.display());
-                                a.mode = Mode::Navigation;
-                                if let Some(open) = a.pending_open.take() {
-                                    open_project(a, audio, open)
-                                } else if a.pending_new {
-                                    a.pending_new = false;
-                                    new_project(a, audio)
-                                } else if a.pending_quit {
-                                    a.quit = true
-                                }
-                            }
-                            Err(e) => enter_error(a, e.to_string()),
-                        }
+            let path = match save_path_for_name(&input) {
+                Ok(path) => path,
+                Err(error) => {
+                    a.status = error.to_string();
+                    return Ok(());
+                }
+            };
+            let project = a.editor.synchronized_project();
+            match persistence::save_atomic(&path, &project) {
+                Ok(()) => {
+                    a.path = Some(path.clone());
+                    a.editor.mark_saved();
+                    a.status = format!("Saved {}", path.display());
+                    a.mode = Mode::Navigation;
+                    if let Some(open) = a.pending_open.take() {
+                        open_project(a, audio, open)
+                    } else if a.pending_new {
+                        a.pending_new = false;
+                        new_project(a, audio)
+                    } else if a.pending_quit {
+                        a.quit = true
                     }
-                    FileAction::Open => {
-                        if a.editor.is_dirty() {
-                            a.mode = Mode::OpenConfirm(path)
-                        } else {
-                            open_project(a, audio, path)
-                        }
-                    }
-                },
+                }
                 Err(e) => enter_error(a, e.to_string()),
             }
         }
         _ => {}
     }
     Ok(())
+}
+
+pub(super) fn handle_project_browser(a: &mut App, audio: &mut Audio, k: KeyEvent) {
+    let Mode::ProjectBrowser { entries, selected } = a.mode.clone() else {
+        return;
+    };
+    match k.code {
+        KeyCode::Esc => a.mode = Mode::Navigation,
+        KeyCode::Up => {
+            a.mode = Mode::ProjectBrowser {
+                entries,
+                selected: selected.saturating_sub(1),
+            }
+        }
+        KeyCode::Down => {
+            a.mode = Mode::ProjectBrowser {
+                selected: selected
+                    .saturating_add(1)
+                    .min(entries.len().saturating_sub(1)),
+                entries,
+            }
+        }
+        KeyCode::Home => {
+            a.mode = Mode::ProjectBrowser {
+                entries,
+                selected: 0,
+            }
+        }
+        KeyCode::End => {
+            a.mode = Mode::ProjectBrowser {
+                selected: entries.len().saturating_sub(1),
+                entries,
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(path) = entries.get(selected).cloned() {
+                if a.editor.is_dirty() {
+                    a.mode = Mode::OpenConfirm(path)
+                } else {
+                    open_project(a, audio, path)
+                }
+            } else {
+                a.status = "No projects found in .projects".into();
+            }
+        }
+        _ => a.mode = Mode::ProjectBrowser { entries, selected },
+    }
 }
 pub(super) fn handle_open_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     let Mode::OpenConfirm(path) = a.mode.clone() else {

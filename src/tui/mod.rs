@@ -73,11 +73,12 @@ pub(crate) use state::{
 #[cfg(test)]
 #[allow(unused_imports)]
 use controller::{
-    adjusted_octave, change_octave, default_save_path, edit_global, enter_error, enter_global_edit,
-    global_id, global_name, global_shortcut, handle_file_input, handle_global_key,
-    handle_new_confirm, handle_open_confirm, handle_sidechain_key, handle_tempo_input,
-    move_global_editor, new_project, open_project, refresh_audio_status, request_new_project,
-    reset_project_ui, resolved_path, save, save_as_mode, sync_project, sync_project_with_smoothing,
+    adjusted_octave, change_octave, edit_global, enter_error, enter_global_edit, global_id,
+    global_name, global_shortcut, handle_file_input, handle_global_key, handle_new_confirm,
+    handle_open_confirm, handle_project_browser, handle_sidechain_key, handle_tempo_input,
+    list_projects, move_global_editor, new_project, open_project, project_browser_mode,
+    project_directory, project_path_for_name, request_new_project, reset_project_ui, save,
+    save_as_mode, save_path_for_name, sync_project, sync_project_with_smoothing,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -99,10 +100,11 @@ use input::{
 #[allow(unused_imports)]
 use overlays::{
     generator_popup_rect, lfo_inactive_style, lfo_popup_rect, pattern_is_empty, popup, popup_at,
-    popup_rect, probability_popup_rect, quit_popup_rect, render_chord_control, render_chord_popup,
-    render_generator_popup, render_lfo_control, render_lfo_fader, render_lfo_popup,
-    render_lfo_selector, render_lfo_switch, render_pattern_popup, render_trigger_popup,
-    swing_popup_rect, tempo_popup_rect, trigger_popup_rect,
+    popup_rect, probability_popup_rect, project_browser_popup_rect, quit_popup_rect,
+    render_chord_control, render_chord_popup, render_generator_popup, render_lfo_control,
+    render_lfo_fader, render_lfo_popup, render_lfo_selector, render_lfo_switch,
+    render_pattern_popup, render_project_browser, render_trigger_popup, swing_popup_rect,
+    tempo_popup_rect, trigger_popup_rect,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -1580,8 +1582,11 @@ mod tests {
             "Tempo numeric input"
         );
         assert_eq!(
-            mode_name(&Mode::FileInput(FileAction::Open, String::new())),
-            "File-path input"
+            mode_name(&Mode::ProjectBrowser {
+                entries: Vec::new(),
+                selected: 0,
+            }),
+            "Project browser"
         );
         assert_eq!(mode_name(&Mode::Error("bad".into())), "Error dialog");
         assert_eq!(mode_name(&Mode::Help), "Help");
@@ -1601,11 +1606,63 @@ mod tests {
 
     #[test]
     fn save_as_uses_the_gitignored_default_project_path() {
-        assert_eq!(default_save_path(), ".projects/project.groove.json");
         assert_eq!(
             save_as_mode(),
-            Mode::FileInput(FileAction::SaveAs, ".projects/project.groove.json".into())
+            Mode::FileInput(FileAction::SaveAs, String::new())
         );
+
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            project_path_for_name(directory.path(), "lead").unwrap(),
+            directory.path().join("lead.groove.json")
+        );
+        assert_eq!(
+            project_path_for_name(directory.path(), "lead.groove.json").unwrap(),
+            directory.path().join("lead.groove.json")
+        );
+        assert!(project_path_for_name(directory.path(), "bad/name").is_err());
+        assert!(project_path_for_name(directory.path(), "").is_err());
+    }
+
+    #[test]
+    fn project_browser_lists_sorted_regular_non_temporary_files() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("zeta"), b"legacy").unwrap();
+        std::fs::write(directory.path().join("alpha.groove.json"), b"current").unwrap();
+        std::fs::write(
+            directory.path().join("ignored.groove.json.tmp"),
+            b"temporary",
+        )
+        .unwrap();
+        std::fs::create_dir(directory.path().join("nested")).unwrap();
+
+        let entries = list_projects(directory.path()).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["alpha.groove.json", "zeta"]
+        );
+    }
+
+    #[test]
+    fn project_browser_render_shows_entries_and_selection() {
+        let mut app = App::new(Project::new(), None);
+        app.mode = Mode::ProjectBrowser {
+            entries: vec![
+                PathBuf::from(".projects/alpha.groove.json"),
+                PathBuf::from(".projects/beta"),
+            ],
+            selected: 1,
+        };
+
+        let screen = rendered(&app, 120, 34);
+
+        assert!(screen.contains("Open project"));
+        assert!(screen.contains("alpha.groove.json"));
+        assert!(screen.contains("beta"));
+        assert!(screen.contains("[Enter] open"));
     }
 
     #[test]
