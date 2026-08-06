@@ -84,7 +84,8 @@ EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
 PARAMETERS  v level · n pan · y delay send · b reverb send
            Tab PARAMS/EFFECTS · EFFECTS: d drive · t tone · x distortion mix
-           EFFECTS: r phaser rate · e depth · f feedback · M phaser mix
+           EFFECTS: r/e/f/M phaser rate/depth/feedback/mix
+           EFFECTS: R rate · q delay · E depth · F feedback · N flanger mix
            Kick: u tune · d decay · a attack
            Snare: u tune · t tone · s snappy · Hat: u tune · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
@@ -247,6 +248,7 @@ pub(super) enum ParameterGroup {
     Envelope,
     Distortion,
     Phaser,
+    Flanger,
 }
 
 impl ParameterGroup {
@@ -258,6 +260,7 @@ impl ParameterGroup {
             Self::Envelope => "ENVELOPE",
             Self::Distortion => "DISTORTION",
             Self::Phaser => "PHASER",
+            Self::Flanger => "FLANGER",
         }
     }
 
@@ -269,6 +272,7 @@ impl ParameterGroup {
             Self::Envelope => Color::Yellow,
             Self::Distortion => Color::Red,
             Self::Phaser => Color::Blue,
+            Self::Flanger => Color::LightBlue,
         }
     }
 }
@@ -520,7 +524,7 @@ pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescr
     }
 }
 
-const EFFECT_PARAMETERS: [ParameterDescriptor; 7] = [
+const EFFECT_PARAMETERS: [ParameterDescriptor; 12] = [
     ParameterDescriptor {
         id: ParameterId::DistortionDrive,
         label: "Drive",
@@ -562,6 +566,36 @@ const EFFECT_PARAMETERS: [ParameterDescriptor; 7] = [
         label: "Mix",
         shortcut: "M",
         group: ParameterGroup::Phaser,
+    },
+    ParameterDescriptor {
+        id: ParameterId::FlangerRate,
+        label: "Rate",
+        shortcut: "R",
+        group: ParameterGroup::Flanger,
+    },
+    ParameterDescriptor {
+        id: ParameterId::FlangerDelay,
+        label: "Delay",
+        shortcut: "q",
+        group: ParameterGroup::Flanger,
+    },
+    ParameterDescriptor {
+        id: ParameterId::FlangerDepth,
+        label: "Depth",
+        shortcut: "E",
+        group: ParameterGroup::Flanger,
+    },
+    ParameterDescriptor {
+        id: ParameterId::FlangerFeedback,
+        label: "Feedbk",
+        shortcut: "F",
+        group: ParameterGroup::Flanger,
+    },
+    ParameterDescriptor {
+        id: ParameterId::FlangerMix,
+        label: "Mix",
+        shortcut: "N",
+        group: ParameterGroup::Flanger,
     },
 ];
 
@@ -703,6 +737,17 @@ pub(super) fn physical_parameter_readout(
                 }
                 (_, ParameterId::PhaserFeedback) => format!("{}% feedback", value),
                 (_, ParameterId::PhaserMix) => format!("{value}% wet"),
+                (_, ParameterId::FlangerRate) => {
+                    format!("{:.2} Hz", crate::dsp::exp_map(value, 0.05, 8.0))
+                }
+                (_, ParameterId::FlangerDelay) => {
+                    format!("{:.1} ms center", 0.2 + value as f32 * 0.098)
+                }
+                (_, ParameterId::FlangerDepth) => {
+                    format!("±{:.1} ms sweep", value as f32 * 0.05)
+                }
+                (_, ParameterId::FlangerFeedback) => format!("{}% feedback", value),
+                (_, ParameterId::FlangerMix) => format!("{value}% wet"),
                 (TrackKind::Kick, ParameterId::Tune) => format!(
                     "peak {:.0} Hz · fundamental {:.0} Hz",
                     110.0 + value as f32 * 1.70,

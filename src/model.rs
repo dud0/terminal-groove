@@ -813,6 +813,28 @@ impl Default for PhaserParameters {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlangerParameters {
+    pub rate: Percent,
+    pub delay: Percent,
+    pub depth: Percent,
+    pub feedback: Percent,
+    pub mix: Percent,
+}
+
+impl Default for FlangerParameters {
+    fn default() -> Self {
+        Self {
+            rate: Percent(25),
+            delay: Percent(18),
+            depth: Percent(50),
+            feedback: Percent(20),
+            mix: Percent::ZERO,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrackEffects {
@@ -820,6 +842,8 @@ pub struct TrackEffects {
     pub distortion: DistortionParameters,
     #[serde(default)]
     pub phaser: PhaserParameters,
+    #[serde(default)]
+    pub flanger: FlangerParameters,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -866,6 +890,16 @@ pub struct ParameterLocks {
     pub phaser_feedback: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phaser_mix: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flanger_rate: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flanger_delay: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flanger_depth: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flanger_feedback: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flanger_mix: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tune: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -965,6 +999,11 @@ impl LfoAssignments {
             | ParameterId::PhaserDepth
             | ParameterId::PhaserFeedback
             | ParameterId::PhaserMix
+            | ParameterId::FlangerRate
+            | ParameterId::FlangerDelay
+            | ParameterId::FlangerDepth
+            | ParameterId::FlangerFeedback
+            | ParameterId::FlangerMix
             | ParameterId::Waveform
             | ParameterId::Chorus
             | ParameterId::Spread => None,
@@ -998,6 +1037,11 @@ impl LfoAssignments {
             | ParameterId::PhaserDepth
             | ParameterId::PhaserFeedback
             | ParameterId::PhaserMix
+            | ParameterId::FlangerRate
+            | ParameterId::FlangerDelay
+            | ParameterId::FlangerDepth
+            | ParameterId::FlangerFeedback
+            | ParameterId::FlangerMix
             | ParameterId::Waveform
             | ParameterId::Chorus
             | ParameterId::Spread => {
@@ -1026,6 +1070,11 @@ impl ParameterLocks {
             ParameterId::PhaserDepth => self.phaser_depth.map(ParameterValue::Percent),
             ParameterId::PhaserFeedback => self.phaser_feedback.map(ParameterValue::Percent),
             ParameterId::PhaserMix => self.phaser_mix.map(ParameterValue::Percent),
+            ParameterId::FlangerRate => self.flanger_rate.map(ParameterValue::Percent),
+            ParameterId::FlangerDelay => self.flanger_delay.map(ParameterValue::Percent),
+            ParameterId::FlangerDepth => self.flanger_depth.map(ParameterValue::Percent),
+            ParameterId::FlangerFeedback => self.flanger_feedback.map(ParameterValue::Percent),
+            ParameterId::FlangerMix => self.flanger_mix.map(ParameterValue::Percent),
             ParameterId::Tune => self.tune.map(ParameterValue::Percent),
             ParameterId::Tone => self.tone.map(ParameterValue::Percent),
             ParameterId::Snappy => self.snappy.map(ParameterValue::Percent),
@@ -1070,6 +1119,16 @@ impl ParameterLocks {
                 self.phaser_feedback = Some(v)
             }
             (ParameterId::PhaserMix, ParameterValue::Percent(v)) => self.phaser_mix = Some(v),
+            (ParameterId::FlangerRate, ParameterValue::Percent(v)) => self.flanger_rate = Some(v),
+            (ParameterId::FlangerDelay, ParameterValue::Percent(v)) => self.flanger_delay = Some(v),
+            (ParameterId::FlangerDepth, ParameterValue::Percent(v)) => self.flanger_depth = Some(v),
+            (ParameterId::FlangerFeedback, ParameterValue::Percent(v)) => {
+                if v.get() > 90 {
+                    return false;
+                }
+                self.flanger_feedback = Some(v)
+            }
+            (ParameterId::FlangerMix, ParameterValue::Percent(v)) => self.flanger_mix = Some(v),
             (ParameterId::Tune, ParameterValue::Percent(v)) => self.tune = Some(v),
             (ParameterId::Tone, ParameterValue::Percent(v)) => self.tone = Some(v),
             (ParameterId::Snappy, ParameterValue::Percent(v)) => self.snappy = Some(v),
@@ -1110,6 +1169,11 @@ impl ParameterLocks {
             ParameterId::PhaserDepth => self.phaser_depth = None,
             ParameterId::PhaserFeedback => self.phaser_feedback = None,
             ParameterId::PhaserMix => self.phaser_mix = None,
+            ParameterId::FlangerRate => self.flanger_rate = None,
+            ParameterId::FlangerDelay => self.flanger_delay = None,
+            ParameterId::FlangerDepth => self.flanger_depth = None,
+            ParameterId::FlangerFeedback => self.flanger_feedback = None,
+            ParameterId::FlangerMix => self.flanger_mix = None,
             ParameterId::Tune => self.tune = None,
             ParameterId::Tone => self.tone = None,
             ParameterId::Snappy => self.snappy = None,
@@ -1668,6 +1732,9 @@ impl Project {
             if t.effects.phaser.feedback.get() > 90 {
                 return Err(ValidationError::Effect(ti, "phaser_feedback"));
             }
+            if t.effects.flanger.feedback.get() > 90 {
+                return Err(ValidationError::Effect(ti, "flanger_feedback"));
+            }
             validate_lfos(ti, t)?;
             if let Some(d) = t.input_degree {
                 if !(1..=8).contains(&d) {
@@ -1809,6 +1876,9 @@ fn validate_locks(
     if l.phaser_feedback.is_some_and(|value| value.get() > 90) {
         return Err(ValidationError::Lock(ti, si, "phaser_feedback"));
     }
+    if l.flanger_feedback.is_some_and(|value| value.get() > 90) {
+        return Err(ValidationError::Lock(ti, si, "flanger_feedback"));
+    }
     let bad = ParameterId::ALL.into_iter().find_map(|parameter| {
         (l.get(parameter).is_some() && !parameter.is_valid_for(kind)).then_some(parameter.name())
     });
@@ -1885,6 +1955,11 @@ pub enum ParameterId {
     Sustain,
     Release,
     Pitch,
+    FlangerRate,
+    FlangerDelay,
+    FlangerDepth,
+    FlangerFeedback,
+    FlangerMix,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1896,7 +1971,7 @@ pub enum ParameterValue {
 }
 
 impl ParameterId {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 33] = [
         Self::Level,
         Self::Pan,
         Self::DelaySend,
@@ -1925,6 +2000,11 @@ impl ParameterId {
         Self::Sustain,
         Self::Release,
         Self::Pitch,
+        Self::FlangerRate,
+        Self::FlangerDelay,
+        Self::FlangerDepth,
+        Self::FlangerFeedback,
+        Self::FlangerMix,
     ];
 
     pub const fn is_valid_for(self, kind: TrackKind) -> bool {
@@ -1939,7 +2019,12 @@ impl ParameterId {
             | Self::PhaserRate
             | Self::PhaserDepth
             | Self::PhaserFeedback
-            | Self::PhaserMix => true,
+            | Self::PhaserMix
+            | Self::FlangerRate
+            | Self::FlangerDelay
+            | Self::FlangerDepth
+            | Self::FlangerFeedback
+            | Self::FlangerMix => true,
             Self::Tune => matches!(kind, TrackKind::Kick | TrackKind::Snare | TrackKind::Hat),
             Self::Tone | Self::Snappy => matches!(kind, TrackKind::Snare),
             Self::Decay => matches!(
@@ -1987,6 +2072,11 @@ impl ParameterId {
                         | Self::PhaserDepth
                         | Self::PhaserFeedback
                         | Self::PhaserMix
+                        | Self::FlangerRate
+                        | Self::FlangerDelay
+                        | Self::FlangerDepth
+                        | Self::FlangerFeedback
+                        | Self::FlangerMix
                         | Self::Waveform
                         | Self::Chorus
                         | Self::Spread
@@ -2023,6 +2113,11 @@ impl ParameterId {
             Self::Sustain => "sustain",
             Self::Release => "release",
             Self::Pitch => "pitch",
+            Self::FlangerRate => "flanger_rate",
+            Self::FlangerDelay => "flanger_delay",
+            Self::FlangerDepth => "flanger_depth",
+            Self::FlangerFeedback => "flanger_feedback",
+            Self::FlangerMix => "flanger_mix",
         }
     }
 
@@ -2042,6 +2137,11 @@ impl ParameterId {
             Self::PhaserDepth => "phaser depth",
             Self::PhaserFeedback => "phaser feedback",
             Self::PhaserMix => "phaser mix",
+            Self::FlangerRate => "flanger rate",
+            Self::FlangerDelay => "flanger delay",
+            Self::FlangerDepth => "flanger depth",
+            Self::FlangerFeedback => "flanger feedback",
+            Self::FlangerMix => "flanger mix",
             _ => self.name(),
         }
     }
@@ -2061,6 +2161,11 @@ impl Track {
             ParameterId::PhaserDepth => ParameterValue::Percent(self.effects.phaser.depth),
             ParameterId::PhaserFeedback => ParameterValue::Percent(self.effects.phaser.feedback),
             ParameterId::PhaserMix => ParameterValue::Percent(self.effects.phaser.mix),
+            ParameterId::FlangerRate => ParameterValue::Percent(self.effects.flanger.rate),
+            ParameterId::FlangerDelay => ParameterValue::Percent(self.effects.flanger.delay),
+            ParameterId::FlangerDepth => ParameterValue::Percent(self.effects.flanger.depth),
+            ParameterId::FlangerFeedback => ParameterValue::Percent(self.effects.flanger.feedback),
+            ParameterId::FlangerMix => ParameterValue::Percent(self.effects.flanger.mix),
             ParameterId::Tune => match self.instrument {
                 Instrument::Kick(p) => ParameterValue::Percent(p.tune),
                 Instrument::Snare(p) => ParameterValue::Percent(p.tune),
@@ -2202,6 +2307,20 @@ impl Track {
                 self.effects.phaser.feedback = v
             }
             (ParameterId::PhaserMix, ParameterValue::Percent(v)) => self.effects.phaser.mix = v,
+            (ParameterId::FlangerRate, ParameterValue::Percent(v)) => self.effects.flanger.rate = v,
+            (ParameterId::FlangerDelay, ParameterValue::Percent(v)) => {
+                self.effects.flanger.delay = v
+            }
+            (ParameterId::FlangerDepth, ParameterValue::Percent(v)) => {
+                self.effects.flanger.depth = v
+            }
+            (ParameterId::FlangerFeedback, ParameterValue::Percent(v)) => {
+                if v.get() > 90 {
+                    return false;
+                }
+                self.effects.flanger.feedback = v
+            }
+            (ParameterId::FlangerMix, ParameterValue::Percent(v)) => self.effects.flanger.mix = v,
             (ParameterId::Tune, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Kick(p) => p.tune = v,
                 Instrument::Snare(p) => p.tune = v,
@@ -2479,8 +2598,12 @@ mod tests {
         assert_eq!(project.tracks[0].effects.distortion.drive, Percent::ZERO);
         assert_eq!(project.tracks[0].effects.distortion.tone, p(50));
         assert_eq!(project.tracks[0].effects.phaser.rate, p(25));
+        assert_eq!(project.tracks[0].effects.flanger.delay, p(18));
+        assert_eq!(project.tracks[0].effects.flanger.depth, p(50));
         assert!(ParameterId::PhaserMix.is_valid_for(TrackKind::Kick));
         assert!(!ParameterId::PhaserMix.supports_lfo(TrackKind::Kick));
+        assert!(ParameterId::FlangerMix.is_valid_for(TrackKind::Kick));
+        assert!(!ParameterId::FlangerMix.supports_lfo(TrackKind::Kick));
 
         let mut locks = ParameterLocks::default();
         assert!(locks.set(ParameterId::DistortionDrive, ParameterValue::Percent(p(80))));
@@ -2492,17 +2615,31 @@ mod tests {
         assert_eq!(locks.phaser_feedback, Some(p(90)));
         assert!(!locks.set(ParameterId::PhaserFeedback, ParameterValue::Percent(p(91))));
         assert_eq!(locks.phaser_feedback, Some(p(90)));
+        assert!(locks.set(ParameterId::FlangerFeedback, ParameterValue::Percent(p(90))));
+        assert_eq!(locks.flanger_feedback, Some(p(90)));
+        assert!(!locks.set(ParameterId::FlangerFeedback, ParameterValue::Percent(p(91))));
+        assert_eq!(locks.flanger_feedback, Some(p(90)));
 
         let mut track = project.tracks[0].clone();
         assert!(track.set_parameter(ParameterId::PhaserFeedback, ParameterValue::Percent(p(90))));
         assert!(!track.set_parameter(ParameterId::PhaserFeedback, ParameterValue::Percent(p(91))));
         assert_eq!(track.effects.phaser.feedback, p(90));
+        assert!(track.set_parameter(ParameterId::FlangerFeedback, ParameterValue::Percent(p(90))));
+        assert!(!track.set_parameter(ParameterId::FlangerFeedback, ParameterValue::Percent(p(91))));
+        assert_eq!(track.effects.flanger.feedback, p(90));
 
         let mut invalid = project;
         invalid.tracks[0].effects.phaser.feedback = p(91);
         assert_eq!(
             invalid.validate(),
             Err(ValidationError::Effect(0, "phaser_feedback"))
+        );
+
+        invalid.tracks[0].effects.phaser.feedback = p(20);
+        invalid.tracks[0].effects.flanger.feedback = p(91);
+        assert_eq!(
+            invalid.validate(),
+            Err(ValidationError::Effect(0, "flanger_feedback"))
         );
     }
     #[test]

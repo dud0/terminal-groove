@@ -235,6 +235,8 @@ mod tests {
         assert_eq!(value["tracks"][4]["reverb_send"], 20);
         assert_eq!(value["tracks"][4]["instrument"]["chorus"], "i");
         assert_eq!(value["tracks"][4]["instrument"]["sub_oscillator"], 0);
+        assert_eq!(value["tracks"][0]["effects"]["flanger"]["rate"], 25);
+        assert_eq!(value["tracks"][0]["effects"]["flanger"]["delay"], 18);
         assert_eq!(value["tracks"][5]["kind"], "lead");
         assert_eq!(value["tracks"][5]["name"], "Lead");
         assert_eq!(value["tracks"][5]["reverb_send"], 20);
@@ -537,5 +539,35 @@ mod tests {
         value["tracks"][0]["effects"]["phaser"]["unexpected"] = 1.into();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+
+        value["tracks"][0]["effects"]["phaser"] =
+            serde_json::to_value(crate::model::PhaserParameters::default()).unwrap();
+        value["tracks"][0]["effects"]["flanger"]["unexpected"] = 1.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+    }
+
+    #[test]
+    fn flanger_settings_round_trip_and_validate_feedback() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("flanger.groove.json");
+        let mut project = Project::new();
+        project.tracks[0].effects.flanger = crate::model::FlangerParameters {
+            rate: crate::model::Percent::new(73).unwrap(),
+            delay: crate::model::Percent::new(18).unwrap(),
+            depth: crate::model::Percent::new(92).unwrap(),
+            feedback: crate::model::Percent::new(66).unwrap(),
+            mix: crate::model::Percent::new(48).unwrap(),
+        };
+        save_atomic(&path, &project).unwrap();
+        assert_eq!(load(&path).unwrap(), project);
+
+        let mut value = serde_json::to_value(project).unwrap();
+        value["tracks"][0]["effects"]["flanger"]["feedback"] = 91.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            load(&path),
+            Err(ProjectIoError::Validation { .. })
+        ));
     }
 }

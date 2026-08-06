@@ -216,9 +216,9 @@ All pitched tracks default to input degree 1 and octave 3. Their oscillators and
 
 ### 3.7 Mixer and effects
 
-Each track has a serial distortion-then-phaser chain before its fader, pan, and delay/reverb sends. Distortion drive maps exponentially from unity to approximately 31.6× pre-gain, followed by soft clipping; tone is a 700 Hz–18 kHz low-pass; and mix is dry/wet. The phaser is a four-stage stereo all-pass network with opposite-channel logarithmic modulation: rate maps exponentially from 0.05–8 Hz, depth controls a 300 Hz–8 kHz sweep, feedback is limited to 90%, and mix is dry/wet. Distortion defaults to drive 0%, tone 50%, mix 0%; phaser defaults to rate 25%, depth 50%, feedback 20%, mix 0%. Both chains are fixed-allocation, separately stateful for live playback and audition, smoothed on changes, and cleared by Stop and project reset.
+Each track has a serial distortion-then-phaser-then-flanger chain before its fader, pan, and delay/reverb sends. Distortion drive maps exponentially from unity to approximately 31.6× pre-gain, followed by soft clipping; tone is a 700 Hz–18 kHz low-pass; and mix is dry/wet. The phaser is a four-stage stereo all-pass network with opposite-channel logarithmic modulation: rate maps exponentially from 0.05–8 Hz, depth controls a 300 Hz–8 kHz sweep, feedback is limited to 90%, and mix is dry/wet. The flanger is a stereo fractional-delay network with independent feedback lines and opposite-channel sine modulation: rate maps exponentially from 0.05–8 Hz, center delay maps linearly from 0.2–10 ms, depth maps to a 0–5 ms modulation excursion, feedback is limited to 90%, and mix is dry/wet. Distortion defaults to drive 0%, tone 50%, mix 0%; phaser defaults to rate 25%, depth 50%, feedback 20%, mix 0%; flanger defaults to rate 25%, approximately 2 ms center delay, depth 50%, feedback 20%, mix 0%. All three chains use preallocated state, are separately stateful for live playback and audition, smooth parameter changes, and clear state on Stop and project reset.
 
-The track detail panel has `PARAMS` and `EFFECTS` banks. `Tab` toggles banks; the effects bank exposes distortion `d/t/x` and phaser `r/e/f/M` controls. Effects are shared across patterns and support BASE and per-step LOCK values, but not LFO modulation.
+The track detail panel has `PARAMS` and `EFFECTS` banks. `Tab` toggles banks; the effects bank exposes distortion `d/t/x`, phaser `r/e/f/M`, and flanger `R/q/E/F/N` controls for rate, delay, depth, feedback, and mix. Effects are shared across patterns and support BASE and per-step LOCK values, but not LFO modulation.
 
 Each track provides:
 
@@ -333,6 +333,9 @@ The application uses ordinary portable terminal press events. It must not requir
 | Pitched track | `t` | Insert, replace with, or clear a tie subject to validation |
 | Bass | `w` / `c` / `R` / `f` | Edit waveform, cutoff, resonance, or filter-envelope amount |
 | Bass | `d` | Edit decay |
+| Effects bank | `d/t/x` | Edit distortion drive, tone, or mix |
+| Effects bank | `r/e/f/M` | Edit phaser rate, depth, feedback, or mix |
+| Effects bank | `R/q/E/F/N` | Edit flanger rate, center delay, depth, feedback, or mix |
 | Chord/Lead | `w` / `Shift+P` / `u` | Edit oscillator mix, pulse width, or sub-oscillator level |
 | Chord/Lead | `c` / `R` / `f` | Edit cutoff, resonance, or filter-envelope amount |
 | Chord/Lead | `a` / `d` / `s` / `r` | Edit ADSR |
@@ -393,7 +396,7 @@ At `120x34` or larger, the normal screen contains:
 4. A selected-control panel: vertical parameter faders for the selected track, or eight titled global detail cards when the global row is selected. The global cards show a tempo numeric readout, delay-division/key/scale selectors, and faders for delay feedback, reverb time, reverb tone, and reverb pre-delay. Global faders use their model ranges (`0–95%`, `0.2–10.0 s`, `0–100%`, and `0–200 ms`) and show exact values with units beside the fader; every card retains its local shortcut.
 5. Status line: current mode, last successful operation or actionable error, and active-editor guidance. While a track parameter is being edited in `LOCK` scope, the selected-control panel and status line prominently show `LOCK PARAMETER EDITING` using contrasting styling.
 
-Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows event accent, the empty-step input accent default, inherited accent/source on ties, and Bass slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, and envelope groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.
+Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows event accent, the empty-step input accent default, inherited accent/source on ties, and Bass slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, envelope, distortion, phaser, and flanger groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout; flanger readouts show Hz, center delay/excursion in ms, feedback, and wet mix. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.
 
 The compact, centered track-level LFO modal arranges enabled, waveform, rate mode, rate, and depth as five control columns from left to right, matching left/right field selection and up/down value adjustment. Its size is capped rather than expanding with larger terminals, and control names occupy their card borders to avoid duplicated labels and empty space. Enabled and rate mode use two-position switches, waveform and synchronized rate use multi-value selectors that fill all available rows, and free rate and depth use ten-segment faders. Up selects the displayed option above and Down selects the option below; both two-position switches and multi-value selectors stop at their first and last values instead of cycling. For faders, Up increases and Down decreases. The selected column uses the same heavy outline, reverse styling, and bold labeling as an active parameter. Rate shows its synchronized division or free percentage together with the resulting physical Hz value; ordinary depth is labeled in bipolar percentage points, while pitch depth also shows its ±semitone range. The Chord editor uses the same compact treatment as LFO, with four equal-width Shape, Arp, Type, and Rate fields, disabled Type/Rate styling while Arp is off, trigger-origin indicators, and PageUp/PageDown step navigation. The trigger editor uses the same large card treatment with five horizontal Mode, Phase, Length, Chance, and Retrigger fields: Mode, Phase, Length, and Retrigger are multi-option selectors, Chance is a ten-segment percentage fader, and selector arrows follow the displayed order. Inactive mode-specific fields remain visibly muted. Swing and pattern-generator dialogs use compact, content-sized centered overlays.
 
@@ -500,7 +503,8 @@ The top-level object is:
 - `delay_send`: integer 0–100
 - `reverb_send`: integer 0–100
 - `effects.distortion.drive`, `effects.distortion.tone`, `effects.distortion.mix`: integer 0–100
-- `effects.phaser.rate`, `effects.phaser.depth`, `effects.phaser.feedback`, `effects.phaser.mix`: integer 0–100
+- `effects.phaser.rate`, `effects.phaser.depth`, `effects.phaser.feedback`, `effects.phaser.mix`: integer 0–100; phaser feedback is limited to 90
+- `effects.flanger.rate`, `effects.flanger.delay`, `effects.flanger.depth`, `effects.flanger.feedback`, `effects.flanger.mix`: integer 0–100; flanger feedback is limited to 90
 - An `instrument` object with the applicable base values
 - A required sparse `lfos` object containing compatible per-destination assignments
 - Bass, Chord, and Lead additionally store `input_degree` and `input_octave`. Chord tracks may store `input_chord_shape` and `input_chord_arpeggio`; omitted values mean `1-3-5` and disabled/Up/`1/16`.
@@ -516,7 +520,7 @@ Chord notes may include an optional `chord_shape` string. Omitted values mean `t
 
 For example, a Chord note may contain `degree`, `octave`, `accent`, `chord_shape`, `arpeggio`, and `locks`; a tie contains only `locks`.
 
-The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `distortion_drive`, `distortion_tone`, `distortion_mix`, `phaser_rate`, `phaser_depth`, `phaser_feedback`, `phaser_mix`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. `pitch` is not a lock key. Chord chorus values are `off`, `i`, and `ii`; arpeggio settings are note-trigger values, not lock values. `mute`, `accent`, and `slide` are invalid in a lock object.
+The `locks` object is always present on populated steps and contains only overridden values. Lock keys use the stable names `level`, `delay_send`, `reverb_send`, `distortion_drive`, `distortion_tone`, `distortion_mix`, `phaser_rate`, `phaser_depth`, `phaser_feedback`, `phaser_mix`, `flanger_rate`, `flanger_delay`, `flanger_depth`, `flanger_feedback`, `flanger_mix`, `tune`, `tone`, `snappy`, `decay`, `waveform`, `oscillator_mix`, `pulse_width`, `sub_oscillator`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `sustain`, and `release`, subject to track compatibility. `pitch` is not a lock key. Chord chorus values are `off`, `i`, and `ii`; arpeggio settings are note-trigger values, not lock values. `mute`, `accent`, and `slide` are invalid in a lock object.
 
 An empty LFO collection is `{}`. Assignment keys are the compatible continuous instrument parameters plus `level`; Chord and Lead may additionally use the LFO-only `pitch` key. Bass waveform, Chord chorus, and mixer sends are excluded. A synchronized assignment is:
 
@@ -632,11 +636,11 @@ Use one binary package with testable modules for model/validation, reducer and h
 
 ### 12.1 Unit and reducer tests
 
-Cover musical degree/frequency mapping, input limits, tie creation/resolution/cleanup, Bass and Lead gates, Chord shapes and eight-voice overlap, retriggers, ties, releases, accents, audition, and Bass slide behavior. Cover lock overlay/compatibility, percentage editing, undo/redo/coalescing, dirty revisions, tempo accumulation, independent cycles, resize/doubling, delay divisions, and LFO compatibility, rates, phase, clamping, pitch range, ties, and release tails.
+Cover musical degree/frequency mapping, input limits, tie creation/resolution/cleanup, Bass and Lead gates, Chord shapes and eight-voice overlap, retriggers, ties, releases, accents, audition, and Bass slide behavior. Cover lock overlay/compatibility, percentage editing, undo/redo/coalescing, dirty revisions, tempo accumulation, independent cycles, resize/doubling, delay divisions, track-effect parameter bounds, and LFO compatibility, rates, phase, clamping, pitch range, ties, and release tails.
 
 ### 12.2 Persistence tests
 
-Round-trip default and populated version-12 projects, including every event, lock, LFO, effect, and articulation variant. Reject unknown versions/fields, invalid ranges/layouts/events/locks/LFOs/ties, and malformed sequences; import version 11 with defaults; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, and history reset on load.
+Round-trip default and populated version-12 projects, including every event, lock, LFO, effect, flanger setting, and articulation variant. Reject unknown versions/fields, invalid ranges/layouts/events/locks/LFOs/ties, and malformed sequences; import version 11 with defaults; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, and history reset on load.
 
 ### 12.3 TUI tests
 
@@ -644,14 +648,14 @@ Use Ratatui `TestBackend` at `120x34` and larger to cover fixed-width grids, con
 
 ### 12.4 DSP tests
 
-Cover bounded oscillator pitch, ADSR timing, filter stability, finite drum output, lock smoothing, LFO waveform/rate/phase behavior, pitch modulation, delay/reverb timing and decay, limiter ceiling and makeup gain, sample conversion, deterministic offline rendering, and callback-path allocation safety.
+Cover bounded oscillator pitch, ADSR timing, filter stability, finite drum output, lock smoothing, LFO waveform/rate/phase behavior, pitch modulation, delay/reverb/flanger timing and decay, limiter ceiling and makeup gain, sample conversion, deterministic offline rendering, and callback-path allocation safety.
 
 ### 12.5 Manual acceptance scenarios
 
 1. Start an untitled project in a `120x34` terminal; navigate every row, enter events, and verify visible state, local shortcuts, playhead/cursor styling, and small-terminal behavior.
 2. Build a drum loop; edit all drum parameters, accents, mute, sends, conditions, retriggers, swing, and locks while stopped and playing.
 3. Enter Bass, Chord, and Lead notes with octave changes, shapes, inversions, arpeggiation, accents, slide, ordinary and wrapped ties; verify gates, releases, inherited articulation, and the fixed-time Bass glide.
-4. Edit base values, locks, and synced/free LFOs; verify faders, readouts, badges, modulation centers, smoothing, and next-pass live updates.
+4. Edit base values, locks, synced/free LFOs, and all track effects including flanger center delay/depth; verify faders, readouts, badges, modulation centers, smoothing, and next-pass live updates.
 5. Audition empty and occupied steps with `o` while stopped and playing, including Chord shapes; change key and scale and verify existing degrees are reinterpreted on future triggers.
 6. Exercise undo/redo, tie cleanup, coalesced parameter edits, dirty restoration, and version-12 save/load with all event, lock, LFO, effect, mixer, articulation, and input settings; verify v11 defaults and rejection of other versions.
 7. List devices, use the default output, select a unique explicit device, and play for at least ten minutes at a supported low-latency configuration without stream errors, non-finite output, timing drift, or audible edit clicks.

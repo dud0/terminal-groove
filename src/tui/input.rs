@@ -924,7 +924,13 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
                     return Ok(true);
                 }
             };
-            let value = ParameterValue::Percent(current.saturating_add(delta));
+            let maximum = parameter_upper_bound(parameter);
+            let value = ParameterValue::Percent(
+                crate::model::Percent::new(
+                    (current.get() as i16 + delta).clamp(0, maximum as i16) as u8
+                )
+                .unwrap(),
+            );
             set_parameter(a, audio, parameter, value, true, false);
             Ok(true)
         }
@@ -1017,6 +1023,13 @@ pub(super) fn parameter_supports_direct_percentage(parameter: ParameterId) -> bo
         parameter,
         ParameterId::Waveform | ParameterId::Chorus | ParameterId::Spread | ParameterId::Pitch
     )
+}
+
+pub(super) const fn parameter_upper_bound(parameter: ParameterId) -> u8 {
+    match parameter {
+        ParameterId::PhaserFeedback | ParameterId::FlangerFeedback => 90,
+        _ => 100,
+    }
 }
 
 pub(super) fn parameter_edit_passthrough(key: KeyCode) -> bool {

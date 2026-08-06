@@ -171,7 +171,18 @@ impl EffectAllpass {
     }
 }
 
+const FLANGER_BUFFER_SIZE: usize = 8_192;
+
 #[derive(Clone, Copy, Debug)]
+struct FlangerControls {
+    rate: f32,
+    delay: f32,
+    depth: f32,
+    feedback: f32,
+    mix: f32,
+}
+
+#[derive(Debug)]
 pub struct TrackEffectChain {
     distortion_drive: Smoother,
     distortion_tone: Smoother,
@@ -187,11 +198,22 @@ pub struct TrackEffectChain {
     phaser_feedback_r: f32,
     phaser_l: [EffectAllpass; 4],
     phaser_r: [EffectAllpass; 4],
+    flanger_rate: Smoother,
+    flanger_delay: Smoother,
+    flanger_depth: Smoother,
+    flanger_feedback: Smoother,
+    flanger_mix: Smoother,
+    flanger_phase: f32,
+    flanger_write: usize,
+    flanger_l: Box<[f32]>,
+    flanger_r: Box<[f32]>,
     sample_rate: f32,
 }
 
 impl TrackEffectChain {
     pub fn new(sample_rate: u32) -> Self {
+        let flanger_l = vec![0.0; FLANGER_BUFFER_SIZE].into_boxed_slice();
+        let flanger_r = vec![0.0; FLANGER_BUFFER_SIZE].into_boxed_slice();
         Self {
             distortion_drive: Smoother::new(0.0),
             distortion_tone: Smoother::new(50.0),
@@ -207,6 +229,15 @@ impl TrackEffectChain {
             phaser_feedback_r: 0.0,
             phaser_l: [EffectAllpass::new(); 4],
             phaser_r: [EffectAllpass::new(); 4],
+            flanger_rate: Smoother::new(25.0),
+            flanger_delay: Smoother::new(18.0),
+            flanger_depth: Smoother::new(50.0),
+            flanger_feedback: Smoother::new(20.0),
+            flanger_mix: Smoother::new(0.0),
+            flanger_phase: 0.0,
+            flanger_write: 0,
+            flanger_l,
+            flanger_r,
             sample_rate: sample_rate as f32,
         }
     }
@@ -249,6 +280,29 @@ impl TrackEffectChain {
             locks.phaser_mix.unwrap_or(effects.phaser.mix).get() as f32,
             samples,
         );
+        self.flanger_rate.set(
+            locks.flanger_rate.unwrap_or(effects.flanger.rate).get() as f32,
+            samples,
+        );
+        self.flanger_delay.set(
+            locks.flanger_delay.unwrap_or(effects.flanger.delay).get() as f32,
+            samples,
+        );
+        self.flanger_depth.set(
+            locks.flanger_depth.unwrap_or(effects.flanger.depth).get() as f32,
+            samples,
+        );
+        self.flanger_feedback.set(
+            locks
+                .flanger_feedback
+                .unwrap_or(effects.flanger.feedback)
+                .get() as f32,
+            samples,
+        );
+        self.flanger_mix.set(
+            locks.flanger_mix.unwrap_or(effects.flanger.mix).get() as f32,
+            samples,
+        );
     }
 
     pub fn process(&mut self, input: f32) -> (f32, f32) {
@@ -263,7 +317,12 @@ impl TrackEffectChain {
         let phaser_depth = self.phaser_depth.next_value();
         let phaser_feedback = (self.phaser_feedback.next_value() / 100.0).clamp(0.0, 0.9);
         let phaser_mix = self.phaser_mix.next_value() / 100.0;
-        if distortion_mix <= 0.0 && phaser_mix <= 0.0 {
+        let flanger_rate = self.flanger_rate.next_value();
+        let flanger_delay = self.flanger_delay.next_value();
+        let flanger_depth = self.flanger_depth.next_value();
+        let flanger_feedback = (self.flanger_feedback.next_value() / 100.0).clamp(0.0, 0.9);
+        let flanger_mix = self.flanger_mix.next_value() / 100.0;
+        if distortion_mix <= 0.0 && phaser_mix <= 0.0 && flanger_mix <= 0.0 {
             return (input_l, input_r);
         }
 
@@ -285,34 +344,51 @@ impl TrackEffectChain {
             &mut self.distortion_state_r,
         );
 
-        if phaser_mix <= 0.0 {
-            return (distorted_l, distorted_r);
+        let (processed_l, processed_r) = if phaser_mix <= 0.0 {
+            (distorted_l, distorted_r)
+        } else {
+            let sweep = (8_000.0_f32 / 300.0).ln() * phaser_depth / 100.0;
+            let rate = exp_map_f32(phaser_rate, 0.05, 8.0);
+            let feedback =
+                (self.phaser_feedback_l + self.phaser_feedback_r) * 0.5 * phaser_feedback;
+            let left_input = distorted_l + feedback;
+            let right_input = distorted_r - feedback;
+            let left = Self::phaser_sample(
+                &mut self.phaser_l,
+                left_input,
+                self.phaser_phase,
+                sweep,
+                self.sample_rate,
+            );
+            let right = Self::phaser_sample(
+                &mut self.phaser_r,
+                right_input,
+                (self.phaser_phase + 0.5).fract(),
+                sweep,
+                self.sample_rate,
+            );
+            self.phaser_feedback_l = left;
+            self.phaser_feedback_r = right;
+            self.phaser_phase = (self.phaser_phase + rate / self.sample_rate).fract();
+            (
+                distorted_l * (1.0 - phaser_mix) + left * phaser_mix,
+                distorted_r * (1.0 - phaser_mix) + right * phaser_mix,
+            )
+        };
+
+        if flanger_mix <= 0.0 {
+            return (processed_l, processed_r);
         }
-        let sweep = (8_000.0_f32 / 300.0).ln() * phaser_depth / 100.0;
-        let rate = exp_map_f32(phaser_rate, 0.05, 8.0);
-        let feedback = (self.phaser_feedback_l + self.phaser_feedback_r) * 0.5 * phaser_feedback;
-        let left_input = distorted_l + feedback;
-        let right_input = distorted_r - feedback;
-        let left = Self::phaser_sample(
-            &mut self.phaser_l,
-            left_input,
-            self.phaser_phase,
-            sweep,
-            self.sample_rate,
-        );
-        let right = Self::phaser_sample(
-            &mut self.phaser_r,
-            right_input,
-            (self.phaser_phase + 0.5).fract(),
-            sweep,
-            self.sample_rate,
-        );
-        self.phaser_feedback_l = left;
-        self.phaser_feedback_r = right;
-        self.phaser_phase = (self.phaser_phase + rate / self.sample_rate).fract();
-        (
-            distorted_l * (1.0 - phaser_mix) + left * phaser_mix,
-            distorted_r * (1.0 - phaser_mix) + right * phaser_mix,
+        self.flanger_sample(
+            processed_l,
+            processed_r,
+            FlangerControls {
+                rate: flanger_rate,
+                delay: flanger_delay,
+                depth: flanger_depth,
+                feedback: flanger_feedback,
+                mix: flanger_mix,
+            },
         )
     }
 
@@ -340,6 +416,49 @@ impl TrackEffectChain {
         value
     }
 
+    fn flanger_sample(
+        &mut self,
+        input_l: f32,
+        input_r: f32,
+        controls: FlangerControls,
+    ) -> (f32, f32) {
+        let center_ms = 0.2 + controls.delay.clamp(0.0, 100.0) * 0.098;
+        let depth_ms = controls.depth.clamp(0.0, 100.0) * 0.05;
+        let rate = exp_map_f32(controls.rate.clamp(0.0, 100.0), 0.05, 8.0);
+        let left_delay = self.flanger_delay_samples(center_ms, depth_ms, self.flanger_phase);
+        let right_delay =
+            self.flanger_delay_samples(center_ms, depth_ms, (self.flanger_phase + 0.5).fract());
+        let delayed_l = Self::read_delay(&self.flanger_l, self.flanger_write, left_delay);
+        let delayed_r = Self::read_delay(&self.flanger_r, self.flanger_write, right_delay);
+        self.flanger_l[self.flanger_write] =
+            finite_or_zero(input_l + delayed_l * controls.feedback);
+        self.flanger_r[self.flanger_write] =
+            finite_or_zero(input_r + delayed_r * controls.feedback);
+        self.flanger_write = (self.flanger_write + 1) % FLANGER_BUFFER_SIZE;
+        self.flanger_phase = (self.flanger_phase + rate / self.sample_rate).fract();
+        (
+            finite_or_zero(input_l * (1.0 - controls.mix) + delayed_l * controls.mix),
+            finite_or_zero(input_r * (1.0 - controls.mix) + delayed_r * controls.mix),
+        )
+    }
+
+    fn flanger_delay_samples(&self, center_ms: f32, depth_ms: f32, phase: f32) -> f32 {
+        let delay_ms = center_ms + (std::f32::consts::TAU * phase).sin() * depth_ms;
+        (delay_ms.max(0.1) * self.sample_rate / 1_000.0)
+            .clamp(0.1, (self.flanger_l.len() - 2) as f32)
+    }
+
+    fn read_delay(buffer: &[f32], write: usize, delay: f32) -> f32 {
+        let mut position = write as f32 - delay;
+        if position < 0.0 {
+            position += buffer.len() as f32;
+        }
+        let first = position.floor() as usize % buffer.len();
+        let second = (first + 1) % buffer.len();
+        let fraction = position.fract();
+        finite_or_zero(buffer[first] * (1.0 - fraction) + buffer[second] * fraction)
+    }
+
     pub fn clear(&mut self) {
         self.distortion_state_l = 0.0;
         self.distortion_state_r = 0.0;
@@ -349,7 +468,15 @@ impl TrackEffectChain {
         for stage in self.phaser_l.iter_mut().chain(self.phaser_r.iter_mut()) {
             stage.clear();
         }
+        self.flanger_phase = 0.0;
+        self.flanger_write = 0;
+        self.flanger_l.fill(0.0);
+        self.flanger_r.fill(0.0);
     }
+}
+
+fn finite_or_zero(value: f32) -> f32 {
+    if value.is_finite() { value } else { 0.0 }
 }
 
 fn sweep_value(phase: f32) -> f32 {
@@ -1618,6 +1745,13 @@ mod tests {
                 feedback: crate::model::Percent::new(90).unwrap(),
                 mix: crate::model::Percent::new(100).unwrap(),
             },
+            flanger: crate::model::FlangerParameters {
+                rate: crate::model::Percent::new(100).unwrap(),
+                delay: crate::model::Percent::new(100).unwrap(),
+                depth: crate::model::Percent::new(100).unwrap(),
+                feedback: crate::model::Percent::new(90).unwrap(),
+                mix: crate::model::Percent::new(100).unwrap(),
+            },
         };
         chain.configure(effects, ParameterLocks::default(), 0);
         let mut stereo = false;
@@ -1642,6 +1776,13 @@ mod tests {
                 depth: crate::model::Percent::new(50).unwrap(),
                 feedback: crate::model::Percent::new(80).unwrap(),
                 mix: crate::model::Percent::new(60).unwrap(),
+            },
+            flanger: crate::model::FlangerParameters {
+                rate: crate::model::Percent::new(35).unwrap(),
+                delay: crate::model::Percent::new(18).unwrap(),
+                depth: crate::model::Percent::new(70).unwrap(),
+                feedback: crate::model::Percent::new(65).unwrap(),
+                mix: crate::model::Percent::new(55).unwrap(),
             },
         };
         let mut first = TrackEffectChain::new(8_000);

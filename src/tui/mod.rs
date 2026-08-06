@@ -88,9 +88,9 @@ use input::{
     handle_trigger_key, lfo_choice_index, move_chord_editor_step, move_generator_field,
     move_parameter_editor, move_step, move_step_bank, move_step_page, move_step_vertical,
     normalize_cursor, open_chord_editor, open_lfo_editor, parameter_edit_passthrough,
-    parameter_shortcut, parameter_supports_direct_percentage, pattern_edit_at, select_global,
-    select_track, set_lfo_config, set_parameter, set_selected_track_length,
-    switch_parameter_editor, toggle_parameter_bank, track_jump_index,
+    parameter_shortcut, parameter_supports_direct_percentage, parameter_upper_bound,
+    pattern_edit_at, select_global, select_track, set_lfo_config, set_parameter,
+    set_selected_track_length, switch_parameter_editor, toggle_parameter_bank, track_jump_index,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -245,11 +245,15 @@ mod tests {
             ParameterGroup::Filter.color()
         );
         let effects = effect_descriptors();
-        assert_eq!(effects.len(), 7);
+        assert_eq!(effects.len(), 12);
         assert_eq!(effects[0].id, ParameterId::DistortionDrive);
         assert_eq!(effects[2].shortcut, "x");
         assert_eq!(effects[3].id, ParameterId::PhaserRate);
         assert_eq!(effects[6].shortcut, "M");
+        assert_eq!(effects[7].id, ParameterId::FlangerRate);
+        assert_eq!(effects[8].shortcut, "q");
+        assert_eq!(effects[11].id, ParameterId::FlangerMix);
+        assert_eq!(effects[11].group, ParameterGroup::Flanger);
     }
 
     #[test]
@@ -277,6 +281,25 @@ mod tests {
         assert_eq!(
             active_parameter_shortcut(&app, 'd'),
             Some(ParameterId::DistortionDrive)
+        );
+        assert_eq!(
+            active_parameter_shortcut(&app, 'q'),
+            Some(ParameterId::FlangerDelay)
+        );
+        assert_eq!(parameter_upper_bound(ParameterId::FlangerFeedback), 90);
+    }
+
+    #[test]
+    fn flanger_readouts_show_physical_units() {
+        let mut app = App::new(Project::new(), None);
+        app.row = 1;
+        assert_eq!(
+            physical_parameter_readout(&app, 0, 0, ParameterId::FlangerDelay),
+            "2.0 ms center · BASE"
+        );
+        assert_eq!(
+            physical_parameter_readout(&app, 0, 0, ParameterId::FlangerDepth),
+            "±2.5 ms sweep · BASE"
         );
     }
 

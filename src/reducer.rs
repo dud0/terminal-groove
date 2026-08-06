@@ -1626,16 +1626,30 @@ mod tests {
             editor.project.tracks[0].effects.distortion.drive,
             Percent::new(80).unwrap()
         );
+        editor
+            .set_parameter(0, 0, Scope::Base, ParameterId::FlangerMix, value(45), None)
+            .unwrap();
+        assert_eq!(
+            editor.project.tracks[0].effects.flanger.mix,
+            Percent::new(45).unwrap()
+        );
         editor.toggle_event(0, 0).unwrap();
         editor
-            .set_parameter(0, 0, Scope::Lock, ParameterId::PhaserMix, value(60), None)
+            .set_parameter(
+                0,
+                0,
+                Scope::Lock,
+                ParameterId::FlangerFeedback,
+                value(60),
+                None,
+            )
             .unwrap();
         assert_eq!(
             editor.project.tracks[0].steps[0]
                 .as_ref()
                 .unwrap()
                 .locks()
-                .phaser_mix,
+                .flanger_feedback,
             Percent::new(60)
         );
         assert!(editor.undo());
@@ -1644,7 +1658,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .locks()
-                .phaser_mix
+                .flanger_feedback
                 .is_none()
         );
     }
