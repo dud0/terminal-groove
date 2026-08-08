@@ -133,6 +133,8 @@ struct Renderer {
     preview_chord: ChordVoicePool,
     effects: [TrackEffectChain; TRACK_COUNT],
     preview_effects: [TrackEffectChain; TRACK_COUNT],
+    chord_effects: [TrackEffectChain; 2],
+    preview_chord_effects: [TrackEffectChain; 2],
     sidechain: SidechainCompressor,
     delay: Delay,
     reverb: Reverb,
@@ -2241,6 +2243,67 @@ mod tests {
             let expected = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
             assert!((frequency - expected).abs() < 0.001);
         }
+    }
+
+    #[test]
+    fn releasing_chord_group_keeps_its_latched_level_after_a_new_lock() {
+        fn note(locks: ParameterLocks) -> StepEvent {
+            StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                chord_shape: None,
+                arpeggio: ArpeggioConfig::default(),
+                condition: Default::default(),
+                retrigger_count: 1,
+                locks,
+            }
+        }
+
+        let mut project = Project::new();
+        for (index, track) in project.tracks.iter_mut().enumerate() {
+            track.muted = index != CHORD_TRACK_INDEX;
+        }
+        let mut old_locks = ParameterLocks::default();
+        assert!(old_locks.set(
+            ParameterId::Level,
+            crate::model::ParameterValue::Percent(Percent::new(100).unwrap()),
+        ));
+        let mut new_locks = ParameterLocks::default();
+        assert!(new_locks.set(
+            ParameterId::Level,
+            crate::model::ParameterValue::Percent(Percent::ZERO),
+        ));
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[0] = Some(note(old_locks));
+        project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[1] = Some(note(new_locks));
+
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.process_track_action(CHORD_TRACK_INDEX, 0, false, true);
+        for _ in 0..500 {
+            renderer.next();
+        }
+        renderer.process_track_action(CHORD_TRACK_INDEX, 1, false, true);
+        let releasing_group = 1 - renderer.chord.group;
+        assert_eq!(
+            renderer.chord.voices[releasing_group * CHORD_GROUP_SIZE]
+                .level
+                .value(),
+            100.0
+        );
+
+        // Wait for the new silent group to finish its fader ramp, then prove
+        // that the old release is still audible.
+        for _ in 0..500 {
+            renderer.next();
+        }
+        let energy: f32 = (0..500)
+            .map(|_| {
+                let (left, right) = renderer.next();
+                (left * left + right * right) * 0.5
+            })
+            .sum();
+        assert!(energy > 0.000_1, "latched tail energy {energy}");
     }
 
     #[test]

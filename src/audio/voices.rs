@@ -207,7 +207,9 @@ pub(super) struct ChordVoicePool {
     pub(super) group: usize,
     pub(super) voice_count: usize,
     pub(super) active: bool,
-    pub(super) chorus: StereoChorus,
+    /// Each physical voice group owns its delay state so an overlapping
+    /// release cannot borrow modulation history from a newly-triggered chord.
+    pub(super) choruses: [StereoChorus; 2],
     pub(super) arpeggiated: bool,
     pub(super) arpeggio: ArpeggioState,
     pub(super) arpeggio_trigger: SynthTrigger,
@@ -227,7 +229,7 @@ impl ChordVoicePool {
             group: 1,
             voice_count: 0,
             active: false,
-            chorus: StereoChorus::new(sample_rate),
+            choruses: std::array::from_fn(|_| StereoChorus::new(sample_rate)),
             arpeggiated: false,
             arpeggio: ArpeggioState::default(),
             arpeggio_trigger: SynthTrigger {

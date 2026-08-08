@@ -767,6 +767,16 @@ pub(super) fn physical_parameter_readout(
         ValueOrigin::Base => "BASE",
         ValueOrigin::Lock => "LOCK",
     };
+    let flanger_geometry = || {
+        let percent = |id| match displayed_parameter(a, track, step, id) {
+            Some((ParameterValue::Percent(value), _)) => value.get() as f32,
+            _ => 0.0,
+        };
+        crate::dsp::flanger_delay_geometry(
+            percent(ParameterId::FlangerDelay),
+            percent(ParameterId::FlangerDepth),
+        )
+    };
     let physical = match value {
         ParameterValue::Waveform(Waveform::Square) => "Square".into(),
         ParameterValue::Waveform(Waveform::Saw) => "Saw".into(),
@@ -807,10 +817,12 @@ pub(super) fn physical_parameter_readout(
                     format!("{:.2} Hz", crate::dsp::exp_map(value, 0.05, 8.0))
                 }
                 (_, ParameterId::FlangerDelay) => {
-                    format!("{:.1} ms center", 0.2 + value as f32 * 0.098)
+                    let (center, _, low, high) = flanger_geometry();
+                    format!("{center:.1} ms center · {low:.1}–{high:.1} ms range")
                 }
                 (_, ParameterId::FlangerDepth) => {
-                    format!("±{:.1} ms sweep", value as f32 * 0.05)
+                    let (_, depth, low, high) = flanger_geometry();
+                    format!("±{depth:.1} ms effective · {low:.1}–{high:.1} ms range")
                 }
                 (_, ParameterId::FlangerFeedback) => format!("{}% feedback", value),
                 (_, ParameterId::FlangerMix) => format!("{value}% wet"),

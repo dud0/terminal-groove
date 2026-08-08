@@ -277,6 +277,22 @@ impl EffectAllpass {
 }
 
 const FLANGER_BUFFER_SIZE: usize = 8_192;
+pub const FLANGER_MIN_DELAY_MS: f32 = 0.1;
+
+/// Returns the center, effective depth, and physical delay endpoints for the
+/// flanger controls.  Depth is constrained before modulation rather than
+/// clamping the waveform, so the lowest part of the cycle remains smooth.
+pub fn flanger_delay_geometry(delay_percent: f32, depth_percent: f32) -> (f32, f32, f32, f32) {
+    let center_ms = 0.2 + delay_percent.clamp(0.0, 100.0) * 0.098;
+    let requested_depth_ms = depth_percent.clamp(0.0, 100.0) * 0.05;
+    let depth_ms = requested_depth_ms.min(center_ms - FLANGER_MIN_DELAY_MS);
+    (
+        center_ms,
+        depth_ms,
+        center_ms - depth_ms,
+        center_ms + depth_ms,
+    )
+}
 
 #[derive(Clone, Copy, Debug)]
 struct FlangerControls {
@@ -647,7 +663,7 @@ impl TrackEffectChain {
     #[cfg(test)]
     fn flanger_delay_samples(&self, center_ms: f32, depth_ms: f32, phase: f32) -> f32 {
         let delay_ms = center_ms + (std::f32::consts::TAU * phase).sin() * depth_ms;
-        (delay_ms.max(0.1) * self.sample_rate / 1_000.0)
+        (delay_ms.max(FLANGER_MIN_DELAY_MS) * self.sample_rate / 1_000.0)
             .clamp(1.0, (self.flanger_l.len() - 2) as f32)
     }
 
@@ -704,10 +720,9 @@ impl TrackEffectChain {
             self.cached_flanger_delay = delay;
             self.cached_flanger_depth = depth;
             self.flanger_rate_hz = exp_map_f32(rate, 0.05, 8.0);
-            self.flanger_center_samples =
-                (0.2 + delay.clamp(0.0, 100.0) * 0.098) * self.sample_rate / 1_000.0;
-            self.flanger_depth_samples =
-                depth.clamp(0.0, 100.0) * 0.05 * self.sample_rate / 1_000.0;
+            let (center_ms, depth_ms, _, _) = flanger_delay_geometry(delay, depth);
+            self.flanger_center_samples = center_ms * self.sample_rate / 1_000.0;
+            self.flanger_depth_samples = depth_ms * self.sample_rate / 1_000.0;
         }
     }
 
@@ -2958,6 +2973,29 @@ mod tests {
             TrackEffectChain::read_delay(&chain.flanger_l, 0, delay),
             0.25
         );
+    }
+
+    #[test]
+    fn flanger_geometry_constrains_depth_without_clipping_the_cycle() {
+        let (center, depth, low, high) = flanger_delay_geometry(0.0, 100.0);
+        assert_eq!(center, 0.2);
+        assert!((depth - 0.1).abs() < 0.000_001);
+        assert!((low - FLANGER_MIN_DELAY_MS).abs() < 0.000_001);
+        assert!((high - 0.3).abs() < 0.000_001);
+
+        let (_, full_depth, full_low, full_high) = flanger_delay_geometry(100.0, 100.0);
+        assert_eq!(full_depth, 5.0);
+        assert_eq!(full_low, 5.0);
+        assert_eq!(full_high, 15.0);
+
+        for delay in 0..=100 {
+            for depth in 0..=100 {
+                let (center, depth, low, high) = flanger_delay_geometry(delay as f32, depth as f32);
+                assert!(low >= FLANGER_MIN_DELAY_MS - 0.000_01);
+                assert!((center - depth - low).abs() < 0.000_01);
+                assert!((center + depth - high).abs() < 0.000_01);
+            }
+        }
     }
 
     #[test]

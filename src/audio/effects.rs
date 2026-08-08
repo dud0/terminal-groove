@@ -41,6 +41,14 @@ impl Renderer {
                 smoothing_samples,
             );
         }
+        let chord_effects = self.project.tracks[super::CHORD_TRACK_INDEX].effects;
+        for effect in self
+            .chord_effects
+            .iter_mut()
+            .chain(self.preview_chord_effects.iter_mut())
+        {
+            effect.configure(chord_effects, ParameterLocks::default(), smoothing_samples);
+        }
     }
 
     pub(super) fn configure_track_effects(
@@ -51,6 +59,17 @@ impl Renderer {
         preview: bool,
     ) {
         let effects = self.project.tracks[track].effects;
+        if track == super::CHORD_TRACK_INDEX {
+            let chains = if preview {
+                &mut self.preview_chord_effects
+            } else {
+                &mut self.chord_effects
+            };
+            for effect in chains {
+                effect.configure(effects, locks, smoothing_samples);
+            }
+            return;
+        }
         if preview {
             self.preview_effects[track].configure(effects, locks, smoothing_samples);
         } else {
@@ -63,6 +82,8 @@ impl Renderer {
             .effects
             .iter_mut()
             .chain(self.preview_effects.iter_mut())
+            .chain(self.chord_effects.iter_mut())
+            .chain(self.preview_chord_effects.iter_mut())
         {
             effect.clear();
         }

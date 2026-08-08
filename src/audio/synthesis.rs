@@ -499,7 +499,9 @@ impl Renderer {
             );
             pool.voice_count = 1;
             Self::trigger_arpeggio_tone(project, sr, pool);
-            Self::configure_chorus(&mut pool.chorus, project.tracks[CHORD_TRACK_INDEX], locks);
+            for chorus in &mut pool.choruses {
+                Self::configure_chorus(chorus, project.tracks[CHORD_TRACK_INDEX], locks);
+            }
             pool.active = true;
             return;
         }
@@ -508,13 +510,6 @@ impl Renderer {
             for voice in &mut pool.voices
                 [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
             {
-                Self::apply_synth_params_core(
-                    project,
-                    4,
-                    locks,
-                    voice,
-                    ParameterSmoothing::Default.samples(sr),
-                );
                 voice.gate_off();
                 voice.active = false;
             }
@@ -561,7 +556,9 @@ impl Renderer {
                 .pan
                 .set(target.clamp(0.0, 100.0), 0);
         }
-        Self::configure_chorus(&mut pool.chorus, project.tracks[CHORD_TRACK_INDEX], locks);
+        for chorus in &mut pool.choruses {
+            Self::configure_chorus(chorus, project.tracks[CHORD_TRACK_INDEX], locks);
+        }
         pool.active = true;
     }
 
@@ -701,11 +698,13 @@ impl Renderer {
                     smoothing,
                 );
             }
-            Self::configure_chorus(
-                &mut self.chord.chorus,
-                self.project.tracks[CHORD_TRACK_INDEX],
-                chorus_locks,
-            );
+            for chorus in &mut self.chord.choruses {
+                Self::configure_chorus(
+                    chorus,
+                    self.project.tracks[CHORD_TRACK_INDEX],
+                    chorus_locks,
+                );
+            }
         }
         if self.preview_chord.active {
             let chorus_locks =
@@ -722,11 +721,13 @@ impl Renderer {
                     smoothing,
                 );
             }
-            Self::configure_chorus(
-                &mut self.preview_chord.chorus,
-                self.project.tracks[CHORD_TRACK_INDEX],
-                chorus_locks,
-            );
+            for chorus in &mut self.preview_chord.choruses {
+                Self::configure_chorus(
+                    chorus,
+                    self.project.tracks[CHORD_TRACK_INDEX],
+                    chorus_locks,
+                );
+            }
         }
     }
     pub(super) fn audition(&mut self, track: usize, step: usize) {
@@ -1059,7 +1060,9 @@ impl Renderer {
                                 ParameterSmoothing::Default.samples(self.sr),
                             );
                         }
-                        Self::configure_chorus(&mut self.chord.chorus, t, locks);
+                        for chorus in &mut self.chord.choruses {
+                            Self::configure_chorus(chorus, t, locks);
+                        }
                     } else {
                         Self::apply_synth_params_core(
                             &self.project,
@@ -1079,19 +1082,13 @@ impl Renderer {
                     false,
                 );
                 if track == CHORD_TRACK_INDEX {
-                    for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
-                        ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
-                    {
-                        Self::apply_synth_params_core(
-                            &self.project,
-                            track,
-                            ParameterLocks::default(),
-                            voice,
-                            ParameterSmoothing::Default.samples(self.sr),
-                        );
-                    }
+                    // The group has finished its step but may still be in
+                    // release.  Keep its latched mixer and voice controls;
+                    // only the shared track effect controls return to base.
                     Self::release_chord(&mut self.chord);
-                    Self::configure_chorus(&mut self.chord.chorus, t, ParameterLocks::default());
+                    for chorus in &mut self.chord.choruses {
+                        Self::configure_chorus(chorus, t, ParameterLocks::default());
+                    }
                 } else {
                     Self::apply_synth_params_core(
                         &self.project,

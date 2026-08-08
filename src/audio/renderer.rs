@@ -44,7 +44,15 @@ impl Renderer {
                     .voices
                     .iter()
                     .any(|voice| voice.env.stage != EnvStage::Idle)
-                || self.preview_chord.chorus.is_active()
+                || self
+                    .preview_chord
+                    .choruses
+                    .iter()
+                    .any(|chorus| chorus.is_active())
+                || self
+                    .preview_chord_effects
+                    .iter()
+                    .any(TrackEffectChain::is_active)
         } else {
             !self.preview[track - super::SYNTH_TRACK_START].is_idle()
         };
@@ -120,6 +128,8 @@ impl Renderer {
             preview_chord: ChordVoicePool::new(sr),
             effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
             preview_effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
+            chord_effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
+            preview_chord_effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
             sidechain: SidechainCompressor::new(sr),
             delay: Delay::new(sr),
             reverb: Reverb::new(sr),
@@ -641,117 +651,80 @@ impl Renderer {
             reverb_l += effect_l * pl * rs * gain;
             reverb_r += effect_r * pr * rs * gain;
         }
-        let mut chord_left = 0.0;
-        let mut chord_right = 0.0;
-        let mut chord_ds = 0.0;
-        let mut chord_rs = 0.0;
-        let chord_start = self.chord.group * CHORD_GROUP_SIZE;
-        let chord_end = chord_start + self.chord.voice_count;
-        let mut chord_has_active_send = false;
-        let mut chord_tail_send = None;
-        let mut chord_active_level = None;
-        let mut chord_tail_level = None;
-        for (index, voice) in self.chord.voices.iter_mut().enumerate() {
-            let (x, ds, rs) =
-                Self::render_synth(voice, self.sr, &self.lfo_offsets[super::CHORD_TRACK_INDEX]);
-            let pan = modulated_percent(
-                voice.pan.next_value(),
-                self.lfo_offsets[super::CHORD_TRACK_INDEX][ParameterId::Pan as usize],
-            );
-            let (pl, pr) = voice.pan_gains(pan);
-            chord_left += x * pl;
-            chord_right += x * pr;
-            if voice.env.stage != EnvStage::Idle {
-                let level = modulated_percent(
-                    voice.level.next_value(),
-                    self.lfo_offsets[super::CHORD_TRACK_INDEX][ParameterId::Level as usize],
-                ) / 100.0;
-                if self.chord.active && (chord_start..chord_end).contains(&index) {
-                    chord_active_level.get_or_insert(level.powi(2));
-                    chord_ds = ds;
-                    chord_rs = rs;
-                    chord_has_active_send = true;
-                } else if chord_tail_send.is_none() {
-                    chord_tail_level = Some(level.powi(2));
-                    chord_tail_send = Some((ds, rs));
-                }
-            }
-        }
-        if !chord_has_active_send {
-            (chord_ds, chord_rs) = chord_tail_send.unwrap_or((0.0, 0.0));
-        }
-        let (chord_l, chord_r) = self.chord.chorus.process_stereo(chord_left, chord_right);
-        let (chord_effect_l, chord_effect_r) =
-            self.effects[super::CHORD_TRACK_INDEX].process_stereo(chord_l, chord_r);
-        let chord_duck_gain = duck_gain;
-        let chord_gain = self.mute[super::CHORD_TRACK_INDEX].next_value()
-            * selected_chord_level(chord_active_level, chord_tail_level);
-        dry_l += chord_effect_l * chord_duck_gain * chord_gain;
-        dry_r += chord_effect_r * chord_duck_gain * chord_gain;
-        delay_l += chord_effect_l * chord_duck_gain * chord_ds * chord_gain;
-        delay_r += chord_effect_r * chord_duck_gain * chord_ds * chord_gain;
-        reverb_l += chord_effect_l * chord_duck_gain * chord_rs * chord_gain;
-        reverb_r += chord_effect_r * chord_duck_gain * chord_rs * chord_gain;
-
-        let mut preview_left = 0.0;
-        let mut preview_right = 0.0;
-        let mut preview_ds = 0.0;
-        let mut preview_rs = 0.0;
-        let preview_start = self.preview_chord.group * CHORD_GROUP_SIZE;
-        let preview_end = preview_start + self.preview_chord.voice_count;
-        let mut preview_has_active_send = false;
-        let mut preview_tail_send = None;
-        let mut preview_active_level = None;
-        let mut preview_tail_level = None;
-        if self.preview_activity[super::CHORD_TRACK_INDEX] {
-            for (index, voice) in self.preview_chord.voices.iter_mut().enumerate() {
-                let (x, ds, rs) = Self::render_synth(
-                    voice,
-                    self.sr,
-                    &self.preview_lfo_offsets[super::CHORD_TRACK_INDEX],
-                );
+        // Chord groups overlap during release.  Keep their post-effect mixer
+        // controls separate so a new lock cannot change an older tail's level
+        // or sends.  The two processors share current controls, not state.
+        let chord_track = super::CHORD_TRACK_INDEX;
+        let chord_mute = self.mute[chord_track].next_value();
+        for group in 0..2 {
+            let start = group * CHORD_GROUP_SIZE;
+            let end = start + CHORD_GROUP_SIZE;
+            let mut left = 0.0;
+            let mut right = 0.0;
+            for voice in &mut self.chord.voices[start..end] {
+                let (x, _, _) = Self::render_synth(voice, self.sr, &self.lfo_offsets[chord_track]);
                 let pan = modulated_percent(
                     voice.pan.next_value(),
-                    self.preview_lfo_offsets[super::CHORD_TRACK_INDEX][ParameterId::Pan as usize],
+                    self.lfo_offsets[chord_track][ParameterId::Pan as usize],
                 );
-                let (pl, pr) = voice.pan_gains(pan);
-                preview_left += x * pl;
-                preview_right += x * pr;
-                if voice.env.stage != EnvStage::Idle {
-                    let level = modulated_percent(
-                        voice.level.next_value(),
-                        self.preview_lfo_offsets[super::CHORD_TRACK_INDEX]
-                            [ParameterId::Level as usize],
-                    ) / 100.0;
-                    if self.preview_chord.active && (preview_start..preview_end).contains(&index) {
-                        preview_active_level.get_or_insert(level.powi(2));
-                        preview_ds = ds;
-                        preview_rs = rs;
-                        preview_has_active_send = true;
-                    } else if preview_tail_send.is_none() {
-                        preview_tail_level = Some(level.powi(2));
-                        preview_tail_send = Some((ds, rs));
-                    }
-                }
+                let (pan_l, pan_r) = voice.pan_gains(pan);
+                left += x * pan_l;
+                right += x * pan_r;
             }
+            let control_voice = &mut self.chord.voices[start];
+            let level = modulated_percent(
+                control_voice.level.next_value(),
+                self.lfo_offsets[chord_track][ParameterId::Level as usize],
+            ) / 100.0;
+            let delay_send = control_voice.delay_send.next_value();
+            let reverb_send = control_voice.reverb_send.next_value();
+            let (chorus_l, chorus_r) = self.chord.choruses[group].process_stereo(left, right);
+            let (effect_l, effect_r) = self.chord_effects[group].process_stereo(chorus_l, chorus_r);
+            let gain = chord_mute * duck_gain * level.powi(2);
+            dry_l += effect_l * gain;
+            dry_r += effect_r * gain;
+            delay_l += effect_l * delay_send * gain;
+            delay_r += effect_r * delay_send * gain;
+            reverb_l += effect_l * reverb_send * gain;
+            reverb_r += effect_r * reverb_send * gain;
         }
-        if !preview_has_active_send {
-            (preview_ds, preview_rs) = preview_tail_send.unwrap_or((0.0, 0.0));
-        }
-        if self.preview_activity[super::CHORD_TRACK_INDEX] {
-            let (preview_l, preview_r) = self
-                .preview_chord
-                .chorus
-                .process_stereo(preview_left, preview_right);
-            let (preview_effect_l, preview_effect_r) =
-                self.preview_effects[super::CHORD_TRACK_INDEX].process_stereo(preview_l, preview_r);
-            let preview_gain = selected_chord_level(preview_active_level, preview_tail_level);
-            dry_l += preview_effect_l * preview_gain;
-            dry_r += preview_effect_r * preview_gain;
-            delay_l += preview_effect_l * preview_ds * preview_gain;
-            delay_r += preview_effect_r * preview_ds * preview_gain;
-            reverb_l += preview_effect_l * preview_rs * preview_gain;
-            reverb_r += preview_effect_r * preview_rs * preview_gain;
+
+        if self.preview_activity[chord_track] {
+            for group in 0..2 {
+                let start = group * CHORD_GROUP_SIZE;
+                let end = start + CHORD_GROUP_SIZE;
+                let mut left = 0.0;
+                let mut right = 0.0;
+                for voice in &mut self.preview_chord.voices[start..end] {
+                    let (x, _, _) =
+                        Self::render_synth(voice, self.sr, &self.preview_lfo_offsets[chord_track]);
+                    let pan = modulated_percent(
+                        voice.pan.next_value(),
+                        self.preview_lfo_offsets[chord_track][ParameterId::Pan as usize],
+                    );
+                    let (pan_l, pan_r) = voice.pan_gains(pan);
+                    left += x * pan_l;
+                    right += x * pan_r;
+                }
+                let control_voice = &mut self.preview_chord.voices[start];
+                let level = modulated_percent(
+                    control_voice.level.next_value(),
+                    self.preview_lfo_offsets[chord_track][ParameterId::Level as usize],
+                ) / 100.0;
+                let delay_send = control_voice.delay_send.next_value();
+                let reverb_send = control_voice.reverb_send.next_value();
+                let (chorus_l, chorus_r) =
+                    self.preview_chord.choruses[group].process_stereo(left, right);
+                let (effect_l, effect_r) =
+                    self.preview_chord_effects[group].process_stereo(chorus_l, chorus_r);
+                let gain = level.powi(2);
+                dry_l += effect_l * gain;
+                dry_r += effect_r * gain;
+                delay_l += effect_l * delay_send * gain;
+                delay_r += effect_r * delay_send * gain;
+                reverb_l += effect_l * reverb_send * gain;
+                reverb_r += effect_r * reverb_send * gain;
+            }
         }
 
         let (dl, dr) = self.delay.process(delay_l, delay_r);
@@ -786,20 +759,9 @@ impl Renderer {
     }
 }
 
-fn selected_chord_level(active_level: Option<f32>, tail_level: Option<f32>) -> f32 {
-    active_level.or(tail_level).unwrap_or(0.0)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{selected_chord_level, sh101_keyboard_tracked_cutoff};
-
-    #[test]
-    fn active_chord_level_takes_precedence_over_releasing_tail() {
-        assert_eq!(selected_chord_level(Some(0.25), Some(0.01)), 0.25);
-        assert_eq!(selected_chord_level(None, Some(0.01)), 0.01);
-        assert_eq!(selected_chord_level(None, None), 0.0);
-    }
+    use super::sh101_keyboard_tracked_cutoff;
 
     #[test]
     fn sh101_keyboard_tracking_is_centered_on_c3_and_moves_cutoff_by_half_octaves() {

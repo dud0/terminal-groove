@@ -317,11 +317,11 @@ mod tests {
         app.row = 1;
         assert_eq!(
             physical_parameter_readout(&app, 0, 0, ParameterId::FlangerDelay),
-            "2.0 ms center · BASE"
+            "2.0 ms center · 0.1–3.8 ms range · BASE"
         );
         assert_eq!(
             physical_parameter_readout(&app, 0, 0, ParameterId::FlangerDepth),
-            "±2.5 ms sweep · BASE"
+            "±1.9 ms effective · 0.1–3.8 ms range · BASE"
         );
     }
 
