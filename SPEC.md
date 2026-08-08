@@ -182,7 +182,7 @@ Defaults: tune 50%, tone 50%, snappy 55%. Accent adds about 4 dB and 20% more sn
 
 ### 3.5 Hi-hat
 
-The hi-hat remains sample-free: six band-limited square oscillators at fixed inharmonic ratios mix with deterministic noise, then pass through high-pass/band-pass shaping and coarse nonlinear coloration.
+The hi-hat is an intentionally sample-free metallic percussion voice rather than an emulation of the TR-909's sampled hi-hat source. Six band-limited square oscillators at fixed inharmonic ratios mix with deterministic noise, then pass through high-pass/band-pass shaping and coarse nonlinear coloration. Its tuning, short-to-long decay range, and accent response are designed to sit alongside the 909-inspired analog drum voices while retaining a distinct synthesized character.
 
 - `tune`: moves the metallic source base from approximately 310–670 Hz and its filter bands.
 - `decay`: maps exponentially from approximately 25–800 ms, spanning closed to open behavior.
@@ -201,7 +201,7 @@ Defaults: tune 50%, tone 50%, decay 40%. Accent adds about 3 dB and a stronger a
 
 ### 3.7 Cymbal
 
-The Cymbal is a 909-style metallic voice built from six fixed inharmonic square oscillators blended with deterministic noise and shaped by high-pass and band-pass filters.
+The Cymbal is an intentionally sample-free metallic percussion voice rather than an emulation of the TR-909's sampled cymbal source. It is built from six fixed inharmonic square oscillators blended with deterministic noise and shaped by high-pass and band-pass filters. It complements the 909-inspired analog drum voices but deliberately retains its own synthesized character.
 
 - `tune`: maps the metallic source base from approximately 240–720 Hz.
 - `tone`: balances the metallic oscillator bank against the filtered noise component.
