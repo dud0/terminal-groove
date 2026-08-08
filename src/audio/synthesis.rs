@@ -1,5 +1,7 @@
 use super::effects::modulated_percent;
-use super::voices::{CHORD_GROUP_SIZE, ChordVoicePool, DrumControls, DrumVoice, SynthTrigger};
+use super::voices::{
+    CHORD_GROUP_SIZE, ChordVoicePool, DrumControls, DrumVoice, SynthTrigger, SynthVoiceKind,
+};
 use super::{
     AudioProject, AudioTrack, ParameterSmoothing, PreviewAction, Renderer, ScheduledTrackAction,
     SynthVoice, TRACK_COUNT,
@@ -205,8 +207,9 @@ impl Renderer {
         let (cutoff, resonance, filter_envelope, attack, decay, sustain, release) =
             match t.instrument {
                 Instrument::Bass(p) => {
-                    voice.bass = true;
-                    voice.chord = false;
+                    voice.kind = SynthVoiceKind::Bass;
+                    voice.sub_mode = crate::dsp::SubOscillatorMode::OneOctave;
+                    voice.noise_level = 0.0;
                     voice.wave = locks.waveform.unwrap_or(p.waveform);
                     voice
                         .bass_decay_percent
@@ -222,8 +225,12 @@ impl Renderer {
                     )
                 }
                 Instrument::Chord(p) => {
-                    voice.bass = false;
-                    voice.chord = true;
+                    voice.kind = SynthVoiceKind::Juno;
+                    voice.sub_mode = crate::dsp::SubOscillatorMode::OneOctave;
+                    // A very low, deterministic noise bed keeps the source
+                    // available for the Juno path without forcing obvious
+                    // vintage noise into every patch.
+                    voice.noise_level = 0.012;
                     voice.env.set_profile(EnvelopeProfile::Juno);
                     voice.oscillator_mix.set(
                         locks.oscillator_mix.unwrap_or(p.oscillator_mix).get() as f32,
@@ -248,8 +255,12 @@ impl Renderer {
                     )
                 }
                 Instrument::Lead(p) => {
-                    voice.bass = false;
-                    voice.chord = false;
+                    voice.kind = SynthVoiceKind::Sh101;
+                    // The SH-101 sub divider is kept at the deeper internal
+                    // choice.  It remains a level-only persisted parameter
+                    // until a discrete model control is deliberately added.
+                    voice.sub_mode = crate::dsp::SubOscillatorMode::TwoOctaves;
+                    voice.noise_level = 0.006;
                     voice.env.set_profile(EnvelopeProfile::Sh101);
                     voice.oscillator_mix.set(
                         locks.oscillator_mix.unwrap_or(p.oscillator_mix).get() as f32,
@@ -285,7 +296,7 @@ impl Renderer {
             locks.filter_envelope.unwrap_or(filter_envelope).get() as f32,
             smoothing,
         );
-        if !voice.bass {
+        if voice.kind != SynthVoiceKind::Bass {
             voice.env.configure_percent(
                 locks.attack.unwrap_or(attack).get(),
                 locks.decay.unwrap_or(decay).get(),
@@ -305,7 +316,7 @@ impl Renderer {
             locks.reverb_send.unwrap_or(t.reverb_send).normalized(),
             smoothing,
         );
-        if !(voice.chord && voice.active) {
+        if !(voice.kind == SynthVoiceKind::Juno && voice.active) {
             voice
                 .pan
                 .set(locks.pan.unwrap_or(t.pan).get() as f32, smoothing);
@@ -354,6 +365,9 @@ impl Renderer {
     ) {
         let bass_track = matches!(project.tracks[track].instrument, Instrument::Bass(_));
         let legato_slide = bass_track && voice.active && voice.slide_armed;
+        let lead_legato = matches!(project.tracks[track].instrument, Instrument::Lead(_))
+            && voice.active
+            && trigger.slide;
         voice.freq.set(
             frequency,
             if legato_slide {
@@ -369,7 +383,7 @@ impl Renderer {
             voice,
             ParameterSmoothing::Default.samples(sr),
         );
-        let gain = if voice.bass {
+        let gain = if voice.kind == SynthVoiceKind::Bass {
             1.0
         } else if trigger.accent {
             1.413
@@ -381,13 +395,17 @@ impl Renderer {
             .set(gain, ParameterSmoothing::Default.samples(sr));
         voice.accent_filter.set(
             if trigger.accent {
-                if voice.bass { 1.0 } else { 0.2 }
+                if voice.kind == SynthVoiceKind::Bass {
+                    1.0
+                } else {
+                    0.2
+                }
             } else {
                 0.0
             },
             ParameterSmoothing::Default.samples(sr),
         );
-        if voice.bass {
+        if voice.kind == SynthVoiceKind::Bass {
             voice.bass_accent_envelope.trigger(trigger.accent);
             if !legato_slide {
                 voice.bass_vca.gate_on();
@@ -395,10 +413,10 @@ impl Renderer {
                     .bass_filter_envelope
                     .trigger(voice.bass_decay_percent.value());
             }
-        } else if !legato_slide {
+        } else if !legato_slide && !lead_legato {
             voice.env.gate_on();
         }
-        voice.slide_armed = voice.bass && trigger.slide;
+        voice.slide_armed = voice.kind == SynthVoiceKind::Bass && trigger.slide;
         voice.active = true;
     }
 

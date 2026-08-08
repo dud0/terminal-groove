@@ -1,5 +1,5 @@
 use super::effects::{modulated_percent, pitch_modulated_frequency};
-use super::voices::CHORD_GROUP_SIZE;
+use super::voices::{CHORD_GROUP_SIZE, SynthVoiceKind};
 use super::{
     AudioProject, AudioStatus, ChordVoicePool, DrumVoice, ParameterId, Renderer, StepClock,
     SynthVoice, TRACK_COUNT, TrackEffectChain,
@@ -13,6 +13,16 @@ use std::f32::consts::TAU;
 use std::sync::{Arc, atomic::Ordering};
 
 const BASS_OUTPUT_GAIN: f32 = 1.8;
+
+/// The SH-101 filter is calibrated for 50% keyboard tracking around C3.  A
+/// reference-centered mapping keeps the existing cutoff control useful while
+/// making higher notes naturally brighter and lower notes darker.
+pub(super) fn sh101_keyboard_tracked_cutoff(base_cutoff: f32, frequency: f32) -> f32 {
+    let reference = 130.8128;
+    let key_ratio = (frequency.max(1.0) / reference).clamp(0.25, 4.0);
+    base_cutoff * key_ratio.sqrt()
+}
+
 impl Renderer {
     fn refresh_preview_activity(&mut self) {
         self.preview_activity = std::array::from_fn(|track| self.preview_track_active(track));
@@ -90,8 +100,18 @@ impl Renderer {
                     ][i],
                 )
             }),
-            synth: std::array::from_fn(|_| SynthVoice::new(sr as f32)),
-            preview: std::array::from_fn(|_| SynthVoice::new(sr as f32)),
+            synth: std::array::from_fn(|index| {
+                SynthVoice::new_with_seed(
+                    sr as f32,
+                    0x1357_9bdf ^ (index as u32).wrapping_mul(0x9e37_79b9),
+                )
+            }),
+            preview: std::array::from_fn(|index| {
+                SynthVoice::new_with_seed(
+                    sr as f32,
+                    0x2468_ace1 ^ (index as u32).wrapping_mul(0x7f4a_7c15),
+                )
+            }),
             chord: ChordVoicePool::new(sr),
             preview_chord: ChordVoicePool::new(sr),
             effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
@@ -142,11 +162,24 @@ impl Renderer {
         // envelope is idle there is no signal to render, so avoid running
         // oscillators and filters for those voices on every callback sample.
         if v.is_idle() {
-            if v.bass {
-                v.bass_filter.reset();
+            match v.kind {
+                SynthVoiceKind::Bass => v.bass_filter.reset(),
+                SynthVoiceKind::Juno => {
+                    v.juno_filter.reset();
+                    v.juno_highpass.clear_state();
+                }
+                SynthVoiceKind::Sh101 => v.sh101_filter.reset(),
             }
             return (0.0, 0.0, 0.0);
         }
+        match v.kind {
+            SynthVoiceKind::Bass => Self::render_bass(v, sr, offsets),
+            SynthVoiceKind::Juno => Self::render_chord(v, sr, offsets),
+            SynthVoiceKind::Sh101 => Self::render_lead(v, sr, offsets),
+        }
+    }
+
+    fn advance_voice_gate(v: &mut SynthVoice) {
         if v.remaining > 0 {
             v.remaining -= 1;
             if v.remaining == 0 {
@@ -154,72 +187,50 @@ impl Renderer {
                 v.active = false;
             }
         }
-        let mut frequency = v.freq.next_value();
-        if !v.bass {
-            frequency = pitch_modulated_frequency(frequency, offsets[ParameterId::Pitch as usize]);
-        }
-        let env = if v.bass {
-            v.bass_vca.next_sample()
-        } else {
-            v.env.next_sample_modulated(
-                offsets[ParameterId::Attack as usize],
-                offsets[ParameterId::Decay as usize],
-                offsets[ParameterId::Sustain as usize],
-                offsets[ParameterId::Release as usize],
-            )
-        };
+    }
+
+    fn render_bass(
+        v: &mut SynthVoice,
+        sr: f32,
+        offsets: &[f32; ParameterId::ALL.len()],
+    ) -> (f32, f32, f32) {
+        Self::advance_voice_gate(v);
+        let frequency = v.freq.next_value();
+        let env = v.bass_vca.next_sample();
         let cutoff_base = v.cutoff_percent.next_value();
         let cutoff_offset = offsets[ParameterId::Cutoff as usize];
-        let bass_decay = if v.bass {
-            modulated_percent(
-                v.bass_decay_percent.next_value(),
-                offsets[ParameterId::Decay as usize],
-            )
-        } else {
-            0.0
-        };
+        let bass_decay = modulated_percent(
+            v.bass_decay_percent.next_value(),
+            offsets[ParameterId::Decay as usize],
+        );
         let filter_env = modulated_percent(
             v.filter_env_percent.next_value(),
             offsets[ParameterId::FilterEnvelope as usize],
         ) / 100.0;
-        let (filter_contour, accent_filter) = if v.bass {
-            (
-                v.bass_filter_envelope.next_sample(),
-                v.bass_accent_envelope.next_sample() * 1.15,
-            )
-        } else {
-            (env, v.accent_filter.next_value())
-        };
-        let (minimum_cutoff, maximum_cutoff, envelope_octaves) = if v.bass {
-            (80.0, 8_000.0_f32.min(sr * 0.45), 5.0)
-        } else {
-            (20.0, 20_000.0_f32.min(sr * 0.45), 6.0)
-        };
+        let filter_contour = v.bass_filter_envelope.next_sample();
+        let accent_filter = v.bass_accent_envelope.next_sample() * 1.15;
+        let minimum_cutoff = 80.0;
+        let maximum_cutoff = 8_000.0_f32.min(sr * 0.45);
+        let envelope_octaves = 5.0;
         let resonance_percent = modulated_percent(
             v.resonance_percent.next_value(),
             offsets[ParameterId::Resonance as usize],
         );
-        let accent_gain = if v.bass {
-            1.0 + v.bass_accent_envelope.value() * 0.413
-        } else {
-            v.accent_gain.next_value()
-        };
+        let accent_gain = 1.0 + v.bass_accent_envelope.value() * 0.413;
         let delay_send = v.delay_send.next_value();
         let reverb_send = v.reverb_send.next_value();
         let oversampled_rate = sr * 2.0;
         let bass_resonance = resonance_percent / 100.0;
         if v.filter_control_remaining == 0 {
-            if v.bass {
-                v.bass_filter_envelope.set_decay(bass_decay);
-            }
+            v.bass_filter_envelope.set_decay(bass_decay);
             let cutoff_percent = modulated_percent(cutoff_base, cutoff_offset);
             let base_cutoff = if cutoff_offset == 0.0 {
                 if cutoff_base != v.cached_cutoff_percent
-                    || v.cached_cutoff_bass != v.bass
+                    || v.cached_cutoff_kind != SynthVoiceKind::Bass
                     || v.cached_cutoff_hz > maximum_cutoff
                 {
                     v.cached_cutoff_percent = cutoff_base;
-                    v.cached_cutoff_bass = v.bass;
+                    v.cached_cutoff_kind = SynthVoiceKind::Bass;
                     v.cached_cutoff_hz = exp_map_f32(cutoff_base, minimum_cutoff, maximum_cutoff);
                 }
                 v.cached_cutoff_hz
@@ -229,75 +240,175 @@ impl Renderer {
             let cutoff = (base_cutoff
                 * 2.0_f32.powf(filter_contour * filter_env * envelope_octaves + accent_filter))
             .min(maximum_cutoff);
-            if v.bass {
-                v.bass_filter
-                    .set_parameters_smoothed(cutoff, bass_resonance, oversampled_rate, 16);
+            v.bass_filter
+                .set_parameters_smoothed(cutoff, bass_resonance, oversampled_rate, 16);
+            v.filter_control_remaining = 8;
+        }
+        v.filter_control_remaining -= 1;
+        let mut filtered = 0.0;
+        for _ in 0..2 {
+            let osc = match v.wave {
+                Waveform::Saw => v.osc.next_saw(frequency, oversampled_rate),
+                Waveform::Square => v.osc.next_square(frequency, oversampled_rate),
+            };
+            filtered += v.bass_filter.process((osc * 1.35).tanh());
+        }
+        filtered *= 0.5 / (1.0 + resonance_percent * 0.0035);
+        (
+            filtered * env * accent_gain * BASS_OUTPUT_GAIN,
+            delay_send,
+            reverb_send,
+        )
+    }
+
+    fn render_chord(
+        v: &mut SynthVoice,
+        sr: f32,
+        offsets: &[f32; ParameterId::ALL.len()],
+    ) -> (f32, f32, f32) {
+        Self::render_poly_voice(v, sr, offsets, SynthVoiceKind::Juno)
+    }
+
+    fn render_lead(
+        v: &mut SynthVoice,
+        sr: f32,
+        offsets: &[f32; ParameterId::ALL.len()],
+    ) -> (f32, f32, f32) {
+        Self::render_poly_voice(v, sr, offsets, SynthVoiceKind::Sh101)
+    }
+
+    fn render_poly_voice(
+        v: &mut SynthVoice,
+        sr: f32,
+        offsets: &[f32; ParameterId::ALL.len()],
+        kind: SynthVoiceKind,
+    ) -> (f32, f32, f32) {
+        Self::advance_voice_gate(v);
+        let frequency =
+            pitch_modulated_frequency(v.freq.next_value(), offsets[ParameterId::Pitch as usize]);
+        let env = v.env.next_sample_modulated(
+            offsets[ParameterId::Attack as usize],
+            offsets[ParameterId::Decay as usize],
+            offsets[ParameterId::Sustain as usize],
+            offsets[ParameterId::Release as usize],
+        );
+        let cutoff_base = v.cutoff_percent.next_value();
+        let cutoff_offset = offsets[ParameterId::Cutoff as usize];
+        let filter_env = modulated_percent(
+            v.filter_env_percent.next_value(),
+            offsets[ParameterId::FilterEnvelope as usize],
+        ) / 100.0;
+        let resonance_percent = modulated_percent(
+            v.resonance_percent.next_value(),
+            offsets[ParameterId::Resonance as usize],
+        );
+        let accent_filter = v.accent_filter.next_value();
+        let minimum_cutoff = 20.0;
+        let maximum_cutoff = 20_000.0_f32.min(sr * 0.45);
+        let envelope_octaves = if kind == SynthVoiceKind::Juno {
+            5.5
+        } else {
+            6.0
+        };
+        if v.filter_control_remaining == 0 {
+            let cutoff_percent = modulated_percent(cutoff_base, cutoff_offset);
+            let base_cutoff = if cutoff_offset == 0.0 {
+                if cutoff_base != v.cached_cutoff_percent
+                    || v.cached_cutoff_kind != kind
+                    || v.cached_cutoff_hz > maximum_cutoff
+                {
+                    v.cached_cutoff_percent = cutoff_base;
+                    v.cached_cutoff_kind = kind;
+                    v.cached_cutoff_hz = exp_map_f32(cutoff_base, minimum_cutoff, maximum_cutoff);
+                }
+                v.cached_cutoff_hz
             } else {
-                v.roland_filter.set_parameters_smoothed(
+                exp_map_f32(cutoff_percent, minimum_cutoff, maximum_cutoff)
+            };
+            let mut cutoff = (base_cutoff
+                * 2.0_f32.powf(env * filter_env * envelope_octaves + accent_filter))
+            .min(maximum_cutoff);
+            if kind == SynthVoiceKind::Sh101 {
+                cutoff = sh101_keyboard_tracked_cutoff(cutoff, frequency).min(maximum_cutoff);
+            }
+            match kind {
+                SynthVoiceKind::Juno => {
+                    // The fixed low corner is intentionally subtle: it gives
+                    // the Chord path the Juno high-pass architecture without
+                    // adding a new persisted panel control.
+                    v.juno_highpass.set_highpass(32.0, 0.707, sr * 2.0);
+                    v.juno_filter.set_parameters_smoothed(
+                        cutoff,
+                        resonance_percent / 100.0,
+                        sr * 2.0,
+                        16,
+                    );
+                }
+                SynthVoiceKind::Sh101 => v.sh101_filter.set_parameters_smoothed(
                     cutoff,
-                    bass_resonance * if v.chord { 0.95 } else { 1.0 },
-                    oversampled_rate,
+                    resonance_percent / 100.0,
+                    sr * 2.0,
                     16,
-                );
+                ),
+                SynthVoiceKind::Bass => unreachable!(),
             }
             v.filter_control_remaining = 8;
         }
         v.filter_control_remaining -= 1;
-        let (mix, width, sub) = if v.bass {
-            (0.0, 0.5, 0.0)
-        } else {
-            (
-                modulated_percent(
-                    v.oscillator_mix.next_value(),
-                    offsets[ParameterId::OscillatorMix as usize],
-                ) / 100.0,
-                0.05 + modulated_percent(
-                    v.pulse_width.next_value(),
-                    offsets[ParameterId::PulseWidth as usize],
-                ) / 100.0
-                    * 0.90,
-                modulated_percent(
-                    v.sub_oscillator.next_value(),
-                    offsets[ParameterId::SubOscillator as usize],
-                ) / 100.0,
-            )
-        };
-        let (mix_cos, mix_sin) = v.oscillator_mix_gains(mix);
+        let mix = modulated_percent(
+            v.oscillator_mix.next_value(),
+            offsets[ParameterId::OscillatorMix as usize],
+        ) / 100.0;
+        let width = 0.05
+            + modulated_percent(
+                v.pulse_width.next_value(),
+                offsets[ParameterId::PulseWidth as usize],
+            ) / 100.0
+                * 0.90;
+        let sub = modulated_percent(
+            v.sub_oscillator.next_value(),
+            offsets[ParameterId::SubOscillator as usize],
+        ) / 100.0;
+        let (pulse_gain, saw_gain) = v.oscillator_mix_gains(mix);
         let mut filtered = 0.0;
         for _ in 0..2 {
-            let osc = if v.bass {
-                match v.wave {
-                    Waveform::Saw => v.osc.next_saw(frequency, oversampled_rate),
-                    Waveform::Square => v.osc.next_square(frequency, oversampled_rate),
-                }
+            let (saw, pulse) = if saw_gain == 0.0 {
+                (0.0, v.osc.next_pulse(frequency, width, sr * 2.0))
+            } else if pulse_gain == 0.0 {
+                (v.osc.next_saw(frequency, sr * 2.0), 0.0)
             } else {
-                let (saw, pulse) = v.osc.next_saw_pulse(frequency, width, oversampled_rate);
-                pulse * mix_cos
-                    + saw * mix_sin
-                    + v.sub_osc.next_square(frequency * 0.5, oversampled_rate) * sub
+                v.osc.next_saw_pulse(frequency, width, sr * 2.0)
             };
-            filtered += if v.bass {
-                let driven = (osc * 1.35).tanh();
-                v.bass_filter.process(driven)
+            let sub_sample = match v.sub_mode {
+                crate::dsp::SubOscillatorMode::OneOctave => {
+                    v.sub_osc.next_sub(frequency, v.sub_mode, sr * 2.0)
+                }
+                crate::dsp::SubOscillatorMode::TwoOctaves => {
+                    v.sub_osc_2.next_sub(frequency, v.sub_mode, sr * 2.0)
+                }
+            };
+            let noise = if v.noise_level > 0.0 {
+                v.noise.next_sample() * v.noise_level
             } else {
-                let driven = (osc * if v.chord { 1.10 } else { 1.35 }).tanh();
-                v.roland_filter.process(driven)
+                0.0
+            };
+            let source = pulse * pulse_gain + saw * saw_gain + sub_sample * sub + noise;
+            filtered += match kind {
+                SynthVoiceKind::Juno => v.juno_filter.process(v.juno_highpass.process(source)),
+                SynthVoiceKind::Sh101 => v.sh101_filter.process(source),
+                SynthVoiceKind::Bass => unreachable!(),
             };
         }
-        filtered *= 0.5 / (1.0 + resonance_percent * 0.0035);
+        filtered *= 0.5 / (1.0 + resonance_percent * 0.0025);
+        let output_gain = if kind == SynthVoiceKind::Juno {
+            1.15 * std::f32::consts::FRAC_1_SQRT_2
+        } else {
+            1.85
+        };
         (
-            filtered
-                * env
-                * accent_gain
-                * if v.bass {
-                    BASS_OUTPUT_GAIN
-                } else if v.chord {
-                    1.15 * std::f32::consts::FRAC_1_SQRT_2
-                } else {
-                    2.0
-                },
-            delay_send,
-            reverb_send,
+            filtered * env * v.accent_gain.next_value() * output_gain,
+            v.delay_send.next_value(),
+            v.reverb_send.next_value(),
         )
     }
     fn render_drum_raw(
@@ -675,12 +786,23 @@ fn selected_chord_level(active_level: Option<f32>, tail_level: Option<f32>) -> f
 
 #[cfg(test)]
 mod tests {
-    use super::selected_chord_level;
+    use super::{selected_chord_level, sh101_keyboard_tracked_cutoff};
 
     #[test]
     fn active_chord_level_takes_precedence_over_releasing_tail() {
         assert_eq!(selected_chord_level(Some(0.25), Some(0.01)), 0.25);
         assert_eq!(selected_chord_level(None, Some(0.01)), 0.01);
         assert_eq!(selected_chord_level(None, None), 0.0);
+    }
+
+    #[test]
+    fn sh101_keyboard_tracking_is_centered_on_c3_and_moves_cutoff_by_half_octaves() {
+        let base = 1_000.0;
+        let c3 = sh101_keyboard_tracked_cutoff(base, 130.8128);
+        let c4 = sh101_keyboard_tracked_cutoff(base, 261.6256);
+        let c2 = sh101_keyboard_tracked_cutoff(base, 65.4064);
+        assert!((c3 - base).abs() < 0.01);
+        assert!((c4 / base - 2.0_f32.sqrt()).abs() < 0.01);
+        assert!((c2 / base - 2.0_f32.sqrt().recip()).abs() < 0.01);
     }
 }

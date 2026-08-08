@@ -221,11 +221,11 @@ The Bass track is a 303-inspired engine with:
 
 Defaults: saw, cutoff 45%, resonance 55%, filter envelope 65%, decay 40%.
 
-Chord is a Juno-60-inspired polyphonic engine; Lead is an SH-101-inspired monophonic engine. Both provide phase-aligned band-limited Pulse and Saw sources, an octave-down square sub oscillator, a nonlinear four-stage resonant low-pass filter, one ADSR for amplitude and positive filter modulation, and these controls:
+Chord is a Juno-60-inspired polyphonic engine; Lead is an SH-101-inspired monophonic engine. Both provide phase-aligned band-limited Pulse and Saw sources, an additive source mixer, a nonlinear four-stage resonant low-pass filter, one ADSR for amplitude and positive filter modulation, and these controls:
 
-- `oscillator mix`: 0% is Pulse, 100% is Saw, with an equal-power blend between them.
+- `oscillator mix`: 0% is Pulse, 100% is Saw. Intermediate values are additive pulse/saw source levels with equal-power macro gains, so both sources contribute simultaneously without changing the saved-project meaning of this control.
 - `pulse width`: maps from 5% through 95% duty cycle.
-- `sub oscillator`: linear octave-down source level.
+- `sub oscillator`: linear source level; Chord uses the octave-down square divider and Lead uses its internal two-octave divider.
 - `cutoff`: maps exponentially from 20 Hz to the lower of 20 kHz or 45% of sample rate.
 - `resonance`, and positive `filter envelope` up to six octaves.
 - `attack`, `decay`, `sustain`, and `release`; Chord uses approximately 1 ms–3 s attack and 2 ms–12 s decay/release, while Lead uses 1.5 ms–4 s and 2 ms–10 s respectively.
@@ -236,6 +236,10 @@ Chord also has a `spread` selector: Off keeps every voice at the track pan, Narr
 Chord's arpeggiator can be enabled with Up, Down, Up-Down, Down-Up, or Random ordering at `1/32`, `1/16T`, `1/16`, `1/8T`, `1/8`, `1/4T`, or `1/4`. Up-Down and Down-Up omit repeated endpoints. Random uses deterministic shuffled no-repeat cycles, and each arpeggiated tone retains its original Chord voice-position stereo spread.
 
 Chord defaults: 70% Saw mix, pulse width 50%, sub 0%, chorus I, cutoff 55%, resonance 15%, filter envelope 25%, and ADSR 55/45/75/65%. Lead defaults: 75% Saw mix, pulse width 50%, sub 25%, cutoff 50%, resonance 35%, filter envelope 55%, and ADSR 0/35/55/20%.
+
+The Chord render path uses a stable DCO-style oscillator with additive pulse, saw, octave-down square, and a very low deterministic voice-local noise source. A fixed 32 Hz high-pass stage precedes its dedicated Juno-calibrated four-pole VCF; resonance compensation reduces pass-band loss and the filter remains finite at self-oscillation extremes. Chorus keeps the existing two-mode stereo delay geometry with a calibrated dry-biased equal-power mix.
+
+The Lead render path uses the same phase-aligned primitive only for its common oscillator work, then uses an additive pulse/saw mixer, an internal two-octave sub divider, a low-level deterministic voice-local noise source, and a dedicated SH-101-calibrated four-pole VCF. Its cutoff has 50% keyboard tracking around C3, so higher notes open the filter and lower notes close it. Lead ties preserve the gate and ADSR state for legato phrases; ordinary notes retrigger the envelope. The sub divider is deliberately internal until a discrete persisted control and migration are designed.
 
 All pitched tracks default to input degree 1 and octave 3. Their oscillators and filters run at 2x oversampling. Chord uses stable DCO pitch and a smoother resonance-compensated response; Lead uses stronger drive and feedback.
 

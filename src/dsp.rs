@@ -766,6 +766,57 @@ impl Default for TrackEffectChain {
 pub struct PolyBlepOsc {
     phase: f32,
 }
+
+/// The sub oscillator choices used by the hardware-inspired voices.  The
+/// persisted control remains a level macro for compatibility; the voice
+/// chooses its instrument-appropriate divider internally.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubOscillatorMode {
+    OneOctave,
+    TwoOctaves,
+}
+
+impl SubOscillatorMode {
+    pub fn ratio(self) -> f32 {
+        match self {
+            Self::OneOctave => 0.5,
+            Self::TwoOctaves => 0.25,
+        }
+    }
+}
+
+/// Map the legacy oscillator macro to additive source gains.  Both sources
+/// are still generated at the same phase, while the end points remain the
+/// original pulse-only and saw-only settings.
+pub fn additive_source_gains(mix: f32) -> (f32, f32) {
+    let mix = mix.clamp(0.0, 1.0);
+    ((1.0 - mix).sqrt(), mix.sqrt())
+}
+
+/// A small deterministic xorshift source.  Each synth voice owns one so
+/// preview rendering and overlapping chord tails cannot share noise state.
+#[derive(Clone, Copy, Debug)]
+pub struct NoiseSource {
+    state: u32,
+}
+
+impl NoiseSource {
+    pub fn new(seed: u32) -> Self {
+        Self {
+            state: if seed == 0 { 0x6d2b_79f5 } else { seed },
+        }
+    }
+
+    pub fn next_sample(&mut self) -> f32 {
+        let mut value = self.state;
+        value ^= value << 13;
+        value ^= value >> 17;
+        value ^= value << 5;
+        self.state = value;
+        value as i32 as f32 / i32::MAX as f32
+    }
+}
+
 impl PolyBlepOsc {
     fn blep(t: f32, dt: f32) -> f32 {
         if t < dt {
@@ -787,6 +838,10 @@ impl PolyBlepOsc {
     }
     pub fn next_square(&mut self, hz: f32, sr: f32) -> f32 {
         self.next_pulse(hz, 0.5, sr)
+    }
+
+    pub fn next_sub(&mut self, hz: f32, mode: SubOscillatorMode, sr: f32) -> f32 {
+        self.next_square(hz * mode.ratio(), sr)
     }
     pub fn next_pulse(&mut self, hz: f32, width: f32, sr: f32) -> f32 {
         let dt = (hz / sr).clamp(0.0, 0.49);
@@ -1312,6 +1367,198 @@ impl Default for LadderFilter {
     }
 }
 
+/// Shared implementation for the two four-pole low-pass calibrations.  The
+/// wrappers below intentionally expose separate instrument types so their
+/// resonance and pass-band behavior cannot silently converge again.
+struct CalibratedFourPole {
+    stages: [f32; 4],
+    coefficient: f32,
+    feedback: f32,
+    passband_gain: f32,
+    coefficient_step: f32,
+    feedback_step: f32,
+    passband_gain_step: f32,
+    parameter_smoothing_remaining: u8,
+    cached_cutoff: f32,
+    cached_resonance: f32,
+    cached_sr: f32,
+}
+
+#[derive(Clone, Copy)]
+struct FourPoleCalibration {
+    cutoff_scale: f32,
+    feedback_scale: f32,
+    resonance_loss: f32,
+}
+
+impl CalibratedFourPole {
+    fn new() -> Self {
+        Self {
+            stages: [0.0; 4],
+            coefficient: 0.0,
+            feedback: 0.0,
+            passband_gain: 1.0,
+            coefficient_step: 0.0,
+            feedback_step: 0.0,
+            passband_gain_step: 0.0,
+            parameter_smoothing_remaining: 0,
+            cached_cutoff: f32::NAN,
+            cached_resonance: f32::NAN,
+            cached_sr: f32::NAN,
+        }
+    }
+
+    fn set_parameters_smoothed(
+        &mut self,
+        cutoff: f32,
+        resonance: f32,
+        sr: f32,
+        samples: u8,
+        calibration: FourPoleCalibration,
+    ) {
+        let sr = sr.max(1.0);
+        let cutoff = (cutoff * calibration.cutoff_scale).clamp(20.0, sr * 0.45);
+        let resonance = resonance.clamp(0.0, 1.0);
+        if cutoff == self.cached_cutoff
+            && resonance == self.cached_resonance
+            && sr == self.cached_sr
+        {
+            return;
+        }
+        let initialize = samples == 0 || !self.cached_sr.is_finite();
+        self.cached_cutoff = cutoff;
+        self.cached_resonance = resonance;
+        self.cached_sr = sr;
+        let coefficient = 1.0 - (-2.0 * PI * cutoff / sr).exp();
+        // Keep the feedback below the unstable region.  The final stage is
+        // still allowed to ring strongly, but extreme resonance remains
+        // finite and does not turn the filter into an uncontrolled oscillator.
+        let feedback = (resonance * calibration.feedback_scale).min(4.15);
+        let passband_gain = 1.0 / (1.0 + resonance * calibration.resonance_loss);
+        if initialize {
+            self.coefficient = coefficient;
+            self.feedback = feedback;
+            self.passband_gain = passband_gain;
+            self.parameter_smoothing_remaining = 0;
+        } else {
+            let samples = f32::from(samples);
+            self.coefficient_step = (coefficient - self.coefficient) / samples;
+            self.feedback_step = (feedback - self.feedback) / samples;
+            self.passband_gain_step = (passband_gain - self.passband_gain) / samples;
+            self.parameter_smoothing_remaining = samples as u8;
+        }
+    }
+
+    fn process(&mut self, input: f32, input_drive: f32) -> f32 {
+        if self.parameter_smoothing_remaining > 0 {
+            self.coefficient += self.coefficient_step;
+            self.feedback += self.feedback_step;
+            self.passband_gain += self.passband_gain_step;
+            self.parameter_smoothing_remaining -= 1;
+        }
+        let mut stage_input = (input * input_drive - self.stages[3] * self.feedback).tanh();
+        for stage in &mut self.stages {
+            *stage += self.coefficient * (stage_input - stage.tanh());
+            stage_input = stage.tanh();
+        }
+        let output = self.stages[3] * self.passband_gain;
+        if output.is_finite() && self.stages.iter().all(|state| state.is_finite()) {
+            output
+        } else {
+            self.reset();
+            0.0
+        }
+    }
+
+    fn reset(&mut self) {
+        self.stages = [0.0; 4];
+    }
+}
+
+/// Four-pole low-pass calibration for the Juno-inspired Chord voice.
+pub struct JunoFilter {
+    inner: CalibratedFourPole,
+}
+
+impl JunoFilter {
+    pub fn new() -> Self {
+        Self {
+            inner: CalibratedFourPole::new(),
+        }
+    }
+
+    pub fn set_parameters_smoothed(&mut self, cutoff: f32, resonance: f32, sr: f32, samples: u8) {
+        self.inner.set_parameters_smoothed(
+            cutoff,
+            resonance,
+            sr,
+            samples,
+            FourPoleCalibration {
+                cutoff_scale: 0.92,
+                feedback_scale: 3.45,
+                resonance_loss: 0.48,
+            },
+        );
+    }
+
+    pub fn process(&mut self, input: f32) -> f32 {
+        self.inner.process(input, 1.08)
+    }
+
+    pub fn reset(&mut self) {
+        self.inner.reset();
+    }
+}
+
+impl Default for JunoFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Four-pole low-pass calibration for the SH-101-inspired Lead voice.  Its
+/// stronger drive and feedback retain the sharper, more aggressive response
+/// of the monophonic instrument.
+pub struct Sh101Filter {
+    inner: CalibratedFourPole,
+}
+
+impl Sh101Filter {
+    pub fn new() -> Self {
+        Self {
+            inner: CalibratedFourPole::new(),
+        }
+    }
+
+    pub fn set_parameters_smoothed(&mut self, cutoff: f32, resonance: f32, sr: f32, samples: u8) {
+        self.inner.set_parameters_smoothed(
+            cutoff,
+            resonance,
+            sr,
+            samples,
+            FourPoleCalibration {
+                cutoff_scale: 1.06,
+                feedback_scale: 4.05,
+                resonance_loss: 0.22,
+            },
+        );
+    }
+
+    pub fn process(&mut self, input: f32) -> f32 {
+        self.inner.process(input, 1.42)
+    }
+
+    pub fn reset(&mut self) {
+        self.inner.reset();
+    }
+}
+
+impl Default for Sh101Filter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A three-pole, 18 dB/octave, transistor-ladder-inspired low-pass filter for
 /// the Bass voice.  It is intended to be driven at 2x the host sample rate.
 /// Parameter updates are cached and interpolated at control rate so cutoff
@@ -1478,7 +1725,7 @@ impl Biquad {
         }
     }
 
-    fn clear(&mut self) {
+    pub fn clear_state(&mut self) {
         self.z1 = 0.0;
         self.z2 = 0.0;
     }
@@ -1553,10 +1800,13 @@ impl StereoChorus {
         let base = base_ms * self.sample_rate / 1_000.0;
         let depth = depth_ms * self.sample_rate / 1_000.0;
         let modulation = depth * (std::f32::consts::TAU * phase).sin();
-        let wet = std::f32::consts::FRAC_1_SQRT_2;
+        // Slightly dry-biased equal-power calibration keeps engaging a mode
+        // close to unity in the presence of correlated delay taps.
+        const DRY: f32 = 0.84;
+        const WET: f32 = 0.54;
         let left = self.tap(base + modulation);
         let right = self.tap(base - modulation);
-        (input * wet + left * wet, input * wet + right * wet)
+        (input * DRY + left * WET, input * DRY + right * WET)
     }
 
     pub fn process(&mut self, input: f32) -> (f32, f32) {
@@ -1911,8 +2161,8 @@ impl Reverb {
         self.pre_delay_r.fill(0.0);
         self.pre_delay_pos = 0;
         self.pre_delay_fade_remaining = 0;
-        self.highpass_l.clear();
-        self.highpass_r.clear();
+        self.highpass_l.clear_state();
+        self.highpass_r.clear_state();
         self.active = false;
         self.tail_remaining = 0;
     }
@@ -2176,6 +2426,53 @@ mod tests {
         for _ in 0..10000 {
             assert!(o.next_saw(440., 48000.).abs() <= 1.1);
         }
+    }
+
+    #[test]
+    fn additive_source_mapping_keeps_both_sources_at_the_midpoint() {
+        let (pulse, saw) = additive_source_gains(0.5);
+        assert!(pulse > 0.0 && saw > 0.0);
+        assert_eq!(additive_source_gains(0.0), (1.0, 0.0));
+        assert_eq!(additive_source_gains(1.0), (0.0, 1.0));
+    }
+
+    #[test]
+    fn sub_oscillator_modes_have_the_documented_dividers() {
+        assert_eq!(SubOscillatorMode::OneOctave.ratio(), 0.5);
+        assert_eq!(SubOscillatorMode::TwoOctaves.ratio(), 0.25);
+    }
+
+    #[test]
+    fn voice_local_noise_is_deterministic_finite_and_seeded() {
+        let mut first = NoiseSource::new(0x1234_5678);
+        let mut second = NoiseSource::new(0x1234_5678);
+        let mut different = NoiseSource::new(0x8765_4321);
+        let a: Vec<_> = (0..32).map(|_| first.next_sample()).collect();
+        let b: Vec<_> = (0..32).map(|_| second.next_sample()).collect();
+        let c: Vec<_> = (0..32).map(|_| different.next_sample()).collect();
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert!(
+            a.iter()
+                .all(|sample| sample.is_finite() && sample.abs() <= 1.01)
+        );
+    }
+
+    #[test]
+    fn juno_and_sh101_filters_have_distinct_resonant_responses() {
+        let mut juno = JunoFilter::new();
+        let mut sh101 = Sh101Filter::new();
+        juno.set_parameters_smoothed(1_200.0, 0.75, 96_000.0, 0);
+        sh101.set_parameters_smoothed(1_200.0, 0.75, 96_000.0, 0);
+        let mut juno_energy = 0.0;
+        let mut sh101_energy = 0.0;
+        for sample in 0..512 {
+            let input = if sample == 0 { 1.0 } else { 0.0 };
+            juno_energy += juno.process(input).abs();
+            sh101_energy += sh101.process(input).abs();
+        }
+        assert!((juno_energy - sh101_energy).abs() > 0.001);
+        assert!(juno_energy.is_finite() && sh101_energy.is_finite());
     }
     #[test]
     fn filter_finite() {

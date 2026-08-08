@@ -1,21 +1,35 @@
 use crate::dsp::{
-    Adsr, BassAccentEnvelope, BassFilterEnvelope, BassVcaEnvelope, Biquad, LadderFilter,
-    PolyBlepOsc, Smoother, StereoChorus, Tb303Filter,
+    Adsr, BassAccentEnvelope, BassFilterEnvelope, BassVcaEnvelope, Biquad, JunoFilter, NoiseSource,
+    PolyBlepOsc, Sh101Filter, Smoother, StereoChorus, SubOscillatorMode, Tb303Filter,
+    additive_source_gains,
 };
 use crate::model::{
     ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, ParameterLocks, Waveform,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SynthVoiceKind {
+    Bass,
+    Juno,
+    Sh101,
+}
+
 pub(super) struct SynthVoice {
     pub(super) osc: PolyBlepOsc,
     pub(super) sub_osc: PolyBlepOsc,
+    pub(super) sub_osc_2: PolyBlepOsc,
+    pub(super) sub_mode: SubOscillatorMode,
+    pub(super) noise: NoiseSource,
+    pub(super) noise_level: f32,
     pub(super) env: Adsr,
     pub(super) bass_filter: Tb303Filter,
     pub(super) bass_vca: BassVcaEnvelope,
     pub(super) bass_filter_envelope: BassFilterEnvelope,
     pub(super) bass_accent_envelope: BassAccentEnvelope,
     pub(super) bass_decay_percent: Smoother,
-    pub(super) roland_filter: LadderFilter,
+    pub(super) juno_filter: JunoFilter,
+    pub(super) sh101_filter: Sh101Filter,
+    pub(super) juno_highpass: Biquad,
     pub(super) freq: Smoother,
     pub(super) wave: Waveform,
     pub(super) oscillator_mix: Smoother,
@@ -24,7 +38,7 @@ pub(super) struct SynthVoice {
     pub(super) cutoff_percent: Smoother,
     pub(super) cached_cutoff_percent: f32,
     pub(super) cached_cutoff_hz: f32,
-    pub(super) cached_cutoff_bass: bool,
+    pub(super) cached_cutoff_kind: SynthVoiceKind,
     pub(super) filter_control_remaining: u8,
     pub(super) resonance_percent: Smoother,
     pub(super) filter_env_percent: Smoother,
@@ -34,8 +48,7 @@ pub(super) struct SynthVoice {
     pub(super) accent_gain: Smoother,
     pub(super) accent_filter: Smoother,
     pub(super) slide_armed: bool,
-    pub(super) bass: bool,
-    pub(super) chord: bool,
+    pub(super) kind: SynthVoiceKind,
     pub(super) level: Smoother,
     pub(super) delay_send: Smoother,
     pub(super) reverb_send: Smoother,
@@ -204,7 +217,12 @@ pub(super) struct ChordVoicePool {
 impl ChordVoicePool {
     pub(super) fn new(sample_rate: u32) -> Self {
         Self {
-            voices: std::array::from_fn(|_| SynthVoice::new(sample_rate as f32)),
+            voices: std::array::from_fn(|index| {
+                SynthVoice::new_with_seed(
+                    sample_rate as f32,
+                    0x91e1_0da5 ^ (index as u32).wrapping_mul(0x9e37_79b9),
+                )
+            }),
             group: 1,
             voice_count: 0,
             active: false,
@@ -426,17 +444,28 @@ impl DrumVoice {
     }
 }
 impl SynthVoice {
+    #[cfg(test)]
     pub(super) fn new(sr: f32) -> Self {
+        Self::new_with_seed(sr, 0x6d2b_79f5)
+    }
+
+    pub(super) fn new_with_seed(sr: f32, seed: u32) -> Self {
         Self {
             osc: Default::default(),
             sub_osc: Default::default(),
+            sub_osc_2: Default::default(),
+            sub_mode: SubOscillatorMode::OneOctave,
+            noise: NoiseSource::new(seed),
+            noise_level: 0.0,
             env: Adsr::new(sr),
             bass_filter: Default::default(),
             bass_vca: BassVcaEnvelope::new(sr),
             bass_filter_envelope: BassFilterEnvelope::new(sr),
             bass_accent_envelope: BassAccentEnvelope::new(sr),
             bass_decay_percent: Smoother::new(40.0),
-            roland_filter: Default::default(),
+            juno_filter: Default::default(),
+            sh101_filter: Default::default(),
+            juno_highpass: Biquad::new(),
             freq: Smoother::new(110.0),
             wave: Waveform::Saw,
             oscillator_mix: Smoother::new(70.0),
@@ -445,7 +474,7 @@ impl SynthVoice {
             cutoff_percent: Smoother::new(65.0),
             cached_cutoff_percent: f32::NAN,
             cached_cutoff_hz: 0.0,
-            cached_cutoff_bass: false,
+            cached_cutoff_kind: SynthVoiceKind::Bass,
             filter_control_remaining: 0,
             resonance_percent: Smoother::new(10.0),
             filter_env_percent: Smoother::new(25.0),
@@ -455,8 +484,7 @@ impl SynthVoice {
             accent_gain: Smoother::new(1.0),
             accent_filter: Smoother::new(0.0),
             slide_armed: false,
-            bass: false,
-            chord: false,
+            kind: SynthVoiceKind::Bass,
             level: Smoother::new(0.0),
             delay_send: Smoother::new(0.0),
             reverb_send: Smoother::new(0.0),
@@ -497,9 +525,7 @@ impl SynthVoice {
     pub(super) fn oscillator_mix_gains(&mut self, mix: f32) -> (f32, f32) {
         if self.oscillator_mix_control_remaining == 0 && mix != self.oscillator_mix_cache {
             self.oscillator_mix_cache = mix;
-            let angle = mix * std::f32::consts::FRAC_PI_2;
-            let target_cos = angle.cos();
-            let target_sin = angle.sin();
+            let (target_cos, target_sin) = additive_source_gains(mix);
             self.oscillator_mix_cos_step = (target_cos - self.oscillator_mix_cos) / 8.0;
             self.oscillator_mix_sin_step = (target_sin - self.oscillator_mix_sin) / 8.0;
             self.oscillator_mix_control_remaining = 8;
@@ -513,7 +539,7 @@ impl SynthVoice {
     }
 
     pub(super) fn is_idle(&self) -> bool {
-        if self.bass {
+        if self.kind == SynthVoiceKind::Bass {
             self.bass_vca.is_idle()
         } else {
             self.env.stage == crate::dsp::EnvStage::Idle
@@ -521,7 +547,7 @@ impl SynthVoice {
     }
 
     pub(super) fn gate_off(&mut self) {
-        if self.bass {
+        if self.kind == SynthVoiceKind::Bass {
             self.bass_vca.gate_off();
         } else {
             self.env.gate_off();
