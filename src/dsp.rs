@@ -1034,6 +1034,137 @@ impl Adsr {
     }
 }
 
+/// The 303's amplifier is a gate, rather than a second copy of its filter
+/// contour.  Its deliberately fixed timing keeps held notes present after the
+/// filter sweep has completed.
+pub struct BassVcaEnvelope {
+    value: f32,
+    gate: bool,
+    attack_coefficient: f32,
+    release_coefficient: f32,
+}
+
+impl BassVcaEnvelope {
+    pub fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(1.0);
+        Self {
+            value: 0.0,
+            gate: false,
+            // A short but non-zero rise avoids discontinuities at note starts.
+            attack_coefficient: 1.0 - (-6.907_755 / (0.003 * sr)).exp(),
+            // This is intentionally independent of the Bass Decay control.
+            release_coefficient: (-6.907_755 / (0.055 * sr)).exp(),
+        }
+    }
+
+    pub fn gate_on(&mut self) {
+        self.gate = true;
+    }
+
+    pub fn gate_off(&mut self) {
+        self.gate = false;
+    }
+
+    pub fn is_idle(&self) -> bool {
+        !self.gate && self.value <= 0.001
+    }
+
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+
+    pub fn next_sample(&mut self) -> f32 {
+        if self.gate {
+            self.value += (1.0 - self.value) * self.attack_coefficient;
+        } else {
+            self.value *= self.release_coefficient;
+            if self.value <= 0.001 {
+                self.value = 0.0;
+            }
+        }
+        self.value
+    }
+}
+
+/// Exponential filter contour for the Bass voice.  It has no sustain stage:
+/// the decay knob changes timbre, not how long a held note remains audible.
+pub struct BassFilterEnvelope {
+    value: f32,
+    coefficient: f32,
+    sample_rate: f32,
+    cached_decay_percent: f32,
+}
+
+impl BassFilterEnvelope {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            value: 0.0,
+            coefficient: 0.0,
+            sample_rate: sample_rate.max(1.0),
+            cached_decay_percent: f32::NAN,
+        }
+    }
+
+    pub fn trigger(&mut self, decay_percent: f32) {
+        self.set_decay(decay_percent);
+        self.value = 1.0;
+    }
+
+    pub fn set_decay(&mut self, decay_percent: f32) {
+        let decay_percent = decay_percent.clamp(0.0, 100.0);
+        if decay_percent == self.cached_decay_percent {
+            return;
+        }
+        self.cached_decay_percent = decay_percent;
+        let seconds = exp_map_f32(decay_percent, 0.080, 2.0);
+        self.coefficient = (-6.907_755 / (seconds * self.sample_rate).max(1.0)).exp();
+    }
+
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+
+    pub fn next_sample(&mut self) -> f32 {
+        self.value *= self.coefficient;
+        if self.value <= 0.0001 {
+            self.value = 0.0;
+        }
+        self.value
+    }
+}
+
+/// A short accent contour.  It is separate from both gate and filter contour,
+/// so consecutive accents retrigger deterministically and ties leave it alone.
+pub struct BassAccentEnvelope {
+    value: f32,
+    coefficient: f32,
+}
+
+impl BassAccentEnvelope {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            value: 0.0,
+            coefficient: (-6.907_755 / (0.180 * sample_rate.max(1.0))).exp(),
+        }
+    }
+
+    pub fn trigger(&mut self, accented: bool) {
+        self.value = if accented { 1.0 } else { 0.0 };
+    }
+
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+
+    pub fn next_sample(&mut self) -> f32 {
+        self.value *= self.coefficient;
+        if self.value <= 0.0001 {
+            self.value = 0.0;
+        }
+        self.value
+    }
+}
+
 pub struct Svf {
     ic1: f32,
     ic2: f32,
@@ -1065,7 +1196,7 @@ impl Default for Svf {
     }
 }
 
-/// A compact nonlinear four-stage ladder used by the Bass voice.
+/// A compact nonlinear four-stage ladder used by the Chord and Lead voices.
 pub struct LadderFilter {
     stages: [f32; 4],
     coefficient: f32,
@@ -1148,6 +1279,106 @@ impl LadderFilter {
 }
 
 impl Default for LadderFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A three-pole, 18 dB/octave, transistor-ladder-inspired low-pass filter for
+/// the Bass voice.  It is intended to be driven at 2x the host sample rate.
+/// Parameter updates are cached and interpolated at control rate so cutoff
+/// changes do not produce zipper noise in the audio callback.
+pub struct Tb303Filter {
+    stages: [f32; 3],
+    coefficient: f32,
+    feedback: f32,
+    passband_gain: f32,
+    coefficient_step: f32,
+    feedback_step: f32,
+    passband_gain_step: f32,
+    parameter_smoothing_remaining: u8,
+    cached_cutoff: f32,
+    cached_resonance: f32,
+    cached_sr: f32,
+}
+
+impl Tb303Filter {
+    pub fn new() -> Self {
+        Self {
+            stages: [0.0; 3],
+            coefficient: 0.0,
+            feedback: 0.0,
+            passband_gain: 1.0,
+            coefficient_step: 0.0,
+            feedback_step: 0.0,
+            passband_gain_step: 0.0,
+            parameter_smoothing_remaining: 0,
+            cached_cutoff: f32::NAN,
+            cached_resonance: f32::NAN,
+            cached_sr: f32::NAN,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.stages = [0.0; 3];
+    }
+
+    pub fn set_parameters_smoothed(&mut self, cutoff: f32, resonance: f32, sr: f32, samples: u8) {
+        if cutoff == self.cached_cutoff
+            && resonance == self.cached_resonance
+            && sr == self.cached_sr
+        {
+            return;
+        }
+        let sr = sr.max(1.0);
+        let cutoff = cutoff.clamp(20.0, sr * 0.42);
+        let resonance = resonance.clamp(0.0, 1.0);
+        let coefficient = 1.0 - (-2.0 * PI * cutoff / sr).exp();
+        // The conservative feedback ceiling, paired with the tanh stages,
+        // keeps self-oscillation character finite at extreme controls.
+        let feedback = resonance * 2.75;
+        let passband_gain = 1.0 / (1.0 + resonance * 0.32);
+        let initialize = !self.cached_sr.is_finite() || samples == 0;
+        self.cached_cutoff = cutoff;
+        self.cached_resonance = resonance;
+        self.cached_sr = sr;
+        if initialize {
+            self.coefficient = coefficient;
+            self.feedback = feedback;
+            self.passband_gain = passband_gain;
+            self.parameter_smoothing_remaining = 0;
+        } else {
+            let samples = f32::from(samples);
+            self.coefficient_step = (coefficient - self.coefficient) / samples;
+            self.feedback_step = (feedback - self.feedback) / samples;
+            self.passband_gain_step = (passband_gain - self.passband_gain) / samples;
+            self.parameter_smoothing_remaining = samples as u8;
+        }
+    }
+
+    pub fn process(&mut self, input: f32) -> f32 {
+        if self.parameter_smoothing_remaining > 0 {
+            self.coefficient += self.coefficient_step;
+            self.feedback += self.feedback_step;
+            self.passband_gain += self.passband_gain_step;
+            self.parameter_smoothing_remaining -= 1;
+        }
+        let mut stage_input = (input * 1.25 - self.stages[2] * self.feedback).tanh();
+        for stage in &mut self.stages {
+            *stage += self.coefficient * (stage_input - stage.tanh());
+            stage_input = stage.tanh();
+        }
+        let output = self.stages[2] * self.passband_gain;
+        if output.is_finite() && self.stages.iter().all(|state| state.is_finite()) {
+            output
+        } else {
+            self.reset();
+            0.0
+        }
+    }
+}
+
+impl Default for Tb303Filter {
     fn default() -> Self {
         Self::new()
     }
@@ -2503,5 +2734,80 @@ mod tests {
         }
         assert!(compressor.envelope() > 0.99);
         assert!(compressor.current_gain() < 0.13);
+    }
+
+    #[test]
+    fn bass_vca_holds_after_its_independent_filter_contour_has_decayed() {
+        let mut vca = BassVcaEnvelope::new(8_000.0);
+        let mut contour = BassFilterEnvelope::new(8_000.0);
+        vca.gate_on();
+        contour.trigger(0.0);
+        for _ in 0..1_600 {
+            vca.next_sample();
+            contour.next_sample();
+        }
+        assert!(vca.value() > 0.99, "a held Bass gate must remain audible");
+        assert!(
+            contour.value() < 0.001,
+            "minimum decay should only close the filter contour"
+        );
+    }
+
+    #[test]
+    fn bass_vca_releases_with_fixed_timing() {
+        let mut vca = BassVcaEnvelope::new(8_000.0);
+        vca.gate_on();
+        for _ in 0..80 {
+            vca.next_sample();
+        }
+        vca.gate_off();
+        for _ in 0..500 {
+            vca.next_sample();
+        }
+        assert!(vca.is_idle());
+    }
+
+    #[test]
+    fn tb303_filter_is_finite_at_extreme_parameters_and_sample_rates() {
+        for sample_rate in [8_000.0, 44_100.0, 96_000.0] {
+            for cutoff in [20.0, sample_rate * 0.42] {
+                for resonance in [0.0, 1.0] {
+                    let mut filter = Tb303Filter::new();
+                    filter.set_parameters_smoothed(cutoff, resonance, sample_rate * 2.0, 0);
+                    for sample in 0..20_000 {
+                        let input = ((sample as f32) * 0.071).sin() * 2.0;
+                        assert!(filter.process(input).is_finite());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tb303_filter_has_three_pole_lowpass_rolloff() {
+        fn rms_at(frequency: f32) -> f32 {
+            let sample_rate = 48_000.0;
+            let mut filter = Tb303Filter::new();
+            filter.set_parameters_smoothed(250.0, 0.0, sample_rate, 0);
+            let mut energy = 0.0;
+            let mut count = 0;
+            for sample in 0..48_000 {
+                let input = (std::f32::consts::TAU * frequency * sample as f32 / sample_rate).sin();
+                let output = filter.process(input);
+                if sample > 24_000 {
+                    energy += output * output;
+                    count += 1;
+                }
+            }
+            (energy / count as f32).sqrt()
+        }
+
+        let low = rms_at(80.0);
+        let high = rms_at(640.0);
+        let attenuation_db = 20.0 * (high / low).log10();
+        assert!(
+            attenuation_db < -15.0,
+            "expected 18 dB/octave-like attenuation, got {attenuation_db:.1} dB"
+        );
     }
 }

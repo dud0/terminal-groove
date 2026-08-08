@@ -1589,9 +1589,13 @@ mod tests {
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
         renderer.boundary(0);
         for _ in 0..40 {
-            renderer.synth[0].accent_gain.next_value();
+            Renderer::render_synth(
+                &mut renderer.synth[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
         }
-        assert!(renderer.synth[0].accent_gain.next_value() > 1.3);
+        assert!(renderer.synth[0].bass_accent_envelope.value() > 0.7);
 
         renderer.boundary(0);
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
@@ -1605,9 +1609,13 @@ mod tests {
         });
         renderer.command(Audio::snapshot(&project));
         for _ in 0..40 {
-            renderer.synth[0].accent_gain.next_value();
+            Renderer::render_synth(
+                &mut renderer.synth[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
         }
-        assert!(renderer.synth[0].accent_gain.next_value() > 1.3);
+        assert!(renderer.synth[0].bass_accent_envelope.value() > 0.5);
     }
 
     #[test]
@@ -1655,6 +1663,42 @@ mod tests {
         }
         let final_frequency = renderer.synth[0].freq.next_value();
         assert!((final_frequency - starting_frequency * 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn empty_bass_step_releases_the_fixed_vca_gate() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+
+        renderer.boundary(0);
+        for _ in 0..80 {
+            Renderer::render_synth(
+                &mut renderer.synth[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+        }
+        assert!(renderer.synth[0].bass_vca.value() > 0.99);
+
+        renderer.boundary(1);
+        for _ in 0..500 {
+            Renderer::render_synth(
+                &mut renderer.synth[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+        }
+        assert!(renderer.synth[0].is_idle());
     }
 
     #[test]

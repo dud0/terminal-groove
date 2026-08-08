@@ -11,6 +11,8 @@ use crate::model::{MAX_STEP_COUNT, Waveform};
 use rtrb::{Producer, RingBuffer};
 use std::f32::consts::TAU;
 use std::sync::{Arc, atomic::Ordering};
+
+const BASS_OUTPUT_GAIN: f32 = 1.8;
 impl Renderer {
     fn refresh_preview_activity(&mut self) {
         self.preview_activity = std::array::from_fn(|track| self.preview_track_active(track));
@@ -30,7 +32,7 @@ impl Renderer {
                     .any(|voice| voice.env.stage != EnvStage::Idle)
                 || self.preview_chord.chorus.is_active()
         } else {
-            self.preview[track - super::SYNTH_TRACK_START].env.stage != EnvStage::Idle
+            !self.preview[track - super::SYNTH_TRACK_START].is_idle()
         };
         voice_active
             || self.preview_effects[track].is_active()
@@ -139,13 +141,16 @@ impl Renderer {
         // Chord pools keep a spare group for released notes.  Once an
         // envelope is idle there is no signal to render, so avoid running
         // oscillators and filters for those voices on every callback sample.
-        if v.env.stage == EnvStage::Idle {
+        if v.is_idle() {
+            if v.bass {
+                v.bass_filter.reset();
+            }
             return (0.0, 0.0, 0.0);
         }
         if v.remaining > 0 {
             v.remaining -= 1;
             if v.remaining == 0 {
-                v.env.gate_off();
+                v.gate_off();
                 v.active = false;
             }
         }
@@ -153,19 +158,38 @@ impl Renderer {
         if !v.bass {
             frequency = pitch_modulated_frequency(frequency, offsets[ParameterId::Pitch as usize]);
         }
-        let env = v.env.next_sample_modulated(
-            offsets[ParameterId::Attack as usize],
-            offsets[ParameterId::Decay as usize],
-            offsets[ParameterId::Sustain as usize],
-            offsets[ParameterId::Release as usize],
-        );
+        let env = if v.bass {
+            v.bass_vca.next_sample()
+        } else {
+            v.env.next_sample_modulated(
+                offsets[ParameterId::Attack as usize],
+                offsets[ParameterId::Decay as usize],
+                offsets[ParameterId::Sustain as usize],
+                offsets[ParameterId::Release as usize],
+            )
+        };
         let cutoff_base = v.cutoff_percent.next_value();
         let cutoff_offset = offsets[ParameterId::Cutoff as usize];
+        let bass_decay = if v.bass {
+            modulated_percent(
+                v.bass_decay_percent.next_value(),
+                offsets[ParameterId::Decay as usize],
+            )
+        } else {
+            0.0
+        };
         let filter_env = modulated_percent(
             v.filter_env_percent.next_value(),
             offsets[ParameterId::FilterEnvelope as usize],
         ) / 100.0;
-        let accent_filter = v.accent_filter.next_value();
+        let (filter_contour, accent_filter) = if v.bass {
+            (
+                v.bass_filter_envelope.next_sample(),
+                v.bass_accent_envelope.next_sample() * 1.15,
+            )
+        } else {
+            (env, v.accent_filter.next_value())
+        };
         let (minimum_cutoff, maximum_cutoff, envelope_octaves) = if v.bass {
             (80.0, 8_000.0_f32.min(sr * 0.45), 5.0)
         } else {
@@ -175,12 +199,19 @@ impl Renderer {
             v.resonance_percent.next_value(),
             offsets[ParameterId::Resonance as usize],
         );
-        let accent_gain = v.accent_gain.next_value();
+        let accent_gain = if v.bass {
+            1.0 + v.bass_accent_envelope.value() * 0.413
+        } else {
+            v.accent_gain.next_value()
+        };
         let delay_send = v.delay_send.next_value();
         let reverb_send = v.reverb_send.next_value();
         let oversampled_rate = sr * 2.0;
         let bass_resonance = resonance_percent / 100.0;
         if v.filter_control_remaining == 0 {
+            if v.bass {
+                v.bass_filter_envelope.set_decay(bass_decay);
+            }
             let cutoff_percent = modulated_percent(cutoff_base, cutoff_offset);
             let base_cutoff = if cutoff_offset == 0.0 {
                 if cutoff_base != v.cached_cutoff_percent
@@ -196,7 +227,7 @@ impl Renderer {
                 exp_map_f32(cutoff_percent, minimum_cutoff, maximum_cutoff)
             };
             let cutoff = (base_cutoff
-                * 2.0_f32.powf(env * (filter_env * envelope_octaves + accent_filter)))
+                * 2.0_f32.powf(filter_contour * filter_env * envelope_octaves + accent_filter))
             .min(maximum_cutoff);
             if v.bass {
                 v.bass_filter
@@ -259,7 +290,7 @@ impl Renderer {
                 * env
                 * accent_gain
                 * if v.bass {
-                    5.0
+                    BASS_OUTPUT_GAIN
                 } else if v.chord {
                     1.15 * std::f32::consts::FRAC_1_SQRT_2
                 } else {

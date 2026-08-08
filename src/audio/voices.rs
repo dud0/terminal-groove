@@ -1,4 +1,7 @@
-use crate::dsp::{Adsr, Biquad, LadderFilter, PolyBlepOsc, Smoother, StereoChorus};
+use crate::dsp::{
+    Adsr, BassAccentEnvelope, BassFilterEnvelope, BassVcaEnvelope, Biquad, LadderFilter,
+    PolyBlepOsc, Smoother, StereoChorus, Tb303Filter,
+};
 use crate::model::{
     ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, ParameterLocks, Waveform,
 };
@@ -7,7 +10,11 @@ pub(super) struct SynthVoice {
     pub(super) osc: PolyBlepOsc,
     pub(super) sub_osc: PolyBlepOsc,
     pub(super) env: Adsr,
-    pub(super) bass_filter: LadderFilter,
+    pub(super) bass_filter: Tb303Filter,
+    pub(super) bass_vca: BassVcaEnvelope,
+    pub(super) bass_filter_envelope: BassFilterEnvelope,
+    pub(super) bass_accent_envelope: BassAccentEnvelope,
+    pub(super) bass_decay_percent: Smoother,
     pub(super) roland_filter: LadderFilter,
     pub(super) freq: Smoother,
     pub(super) wave: Waveform,
@@ -425,6 +432,10 @@ impl SynthVoice {
             sub_osc: Default::default(),
             env: Adsr::new(sr),
             bass_filter: Default::default(),
+            bass_vca: BassVcaEnvelope::new(sr),
+            bass_filter_envelope: BassFilterEnvelope::new(sr),
+            bass_accent_envelope: BassAccentEnvelope::new(sr),
+            bass_decay_percent: Smoother::new(40.0),
             roland_filter: Default::default(),
             freq: Smoother::new(110.0),
             wave: Waveform::Saw,
@@ -499,5 +510,21 @@ impl SynthVoice {
             self.oscillator_mix_control_remaining -= 1;
         }
         (self.oscillator_mix_cos, self.oscillator_mix_sin)
+    }
+
+    pub(super) fn is_idle(&self) -> bool {
+        if self.bass {
+            self.bass_vca.is_idle()
+        } else {
+            self.env.stage == crate::dsp::EnvStage::Idle
+        }
+    }
+
+    pub(super) fn gate_off(&mut self) {
+        if self.bass {
+            self.bass_vca.gate_off();
+        } else {
+            self.env.gate_off();
+        }
     }
 }

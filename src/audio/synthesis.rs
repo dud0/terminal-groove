@@ -207,16 +207,18 @@ impl Renderer {
                 Instrument::Bass(p) => {
                     voice.bass = true;
                     voice.chord = false;
-                    voice.env.set_profile(EnvelopeProfile::Generic);
                     voice.wave = locks.waveform.unwrap_or(p.waveform);
+                    voice
+                        .bass_decay_percent
+                        .set(locks.decay.unwrap_or(p.decay).get() as f32, 0);
                     (
                         p.cutoff,
                         p.resonance,
                         p.filter_envelope,
                         Percent::ZERO,
-                        Percent::new((43.3 + p.decay.get() as f32 * 0.504).round() as u8).unwrap(),
                         Percent::ZERO,
-                        Percent::new(4).unwrap(),
+                        Percent::ZERO,
+                        Percent::ZERO,
                     )
                 }
                 Instrument::Chord(p) => {
@@ -283,13 +285,15 @@ impl Renderer {
             locks.filter_envelope.unwrap_or(filter_envelope).get() as f32,
             smoothing,
         );
-        voice.env.configure_percent(
-            locks.attack.unwrap_or(attack).get(),
-            locks.decay.unwrap_or(decay).get(),
-            locks.sustain.unwrap_or(sustain).get(),
-            locks.release.unwrap_or(release).get(),
-            smoothing,
-        );
+        if !voice.bass {
+            voice.env.configure_percent(
+                locks.attack.unwrap_or(attack).get(),
+                locks.decay.unwrap_or(decay).get(),
+                locks.sustain.unwrap_or(sustain).get(),
+                locks.release.unwrap_or(release).get(),
+                smoothing,
+            );
+        }
         voice
             .level
             .set(locks.level.unwrap_or(t.level).get() as f32, smoothing);
@@ -348,7 +352,8 @@ impl Renderer {
         locks: ParameterLocks,
         voice: &mut SynthVoice,
     ) {
-        let legato_slide = voice.bass && voice.active && voice.slide_armed;
+        let bass_track = matches!(project.tracks[track].instrument, Instrument::Bass(_));
+        let legato_slide = bass_track && voice.active && voice.slide_armed;
         voice.freq.set(
             frequency,
             if legato_slide {
@@ -364,7 +369,13 @@ impl Renderer {
             voice,
             ParameterSmoothing::Default.samples(sr),
         );
-        let gain = if trigger.accent { 1.413 } else { 1.0 };
+        let gain = if voice.bass {
+            1.0
+        } else if trigger.accent {
+            1.413
+        } else {
+            1.0
+        };
         voice
             .accent_gain
             .set(gain, ParameterSmoothing::Default.samples(sr));
@@ -376,7 +387,15 @@ impl Renderer {
             },
             ParameterSmoothing::Default.samples(sr),
         );
-        if !legato_slide {
+        if voice.bass {
+            voice.bass_accent_envelope.trigger(trigger.accent);
+            if !legato_slide {
+                voice.bass_vca.gate_on();
+                voice
+                    .bass_filter_envelope
+                    .trigger(voice.bass_decay_percent.value());
+            }
+        } else if !legato_slide {
             voice.env.gate_on();
         }
         voice.slide_armed = voice.bass && trigger.slide;
@@ -459,7 +478,7 @@ impl Renderer {
                     voice,
                     ParameterSmoothing::Default.samples(sr),
                 );
-                voice.env.gate_off();
+                voice.gate_off();
                 voice.active = false;
             }
         }
@@ -561,7 +580,7 @@ impl Renderer {
             for voice in &mut pool.voices
                 [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
             {
-                voice.env.gate_off();
+                voice.gate_off();
                 voice.active = false;
             }
             pool.active = false;
@@ -851,7 +870,7 @@ impl Renderer {
         {
             self.activate_pattern(pattern);
             for voice in &mut self.synth {
-                voice.env.gate_off();
+                voice.gate_off();
                 voice.active = false;
             }
             Self::release_chord(&mut self.chord);
@@ -1044,7 +1063,7 @@ impl Renderer {
                         &mut self.synth[vi],
                         ParameterSmoothing::Default.samples(self.sr),
                     );
-                    self.synth[vi].env.gate_off();
+                    self.synth[vi].gate_off();
                     self.synth[vi].active = false;
                     self.synth[vi].slide_armed = false;
                 }

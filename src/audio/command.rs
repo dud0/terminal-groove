@@ -41,7 +41,7 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
                 .store(!renderer.playing, Ordering::Release);
             if !renderer.playing {
                 for v in &mut renderer.synth {
-                    v.env.gate_off();
+                    v.gate_off();
                     v.active = false;
                 }
                 Renderer::release_chord(&mut renderer.chord);
@@ -61,7 +61,7 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
                 voice.envelope.elapsed = voice.envelope.decay_samples;
             }
             for v in renderer.synth.iter_mut().chain(renderer.preview.iter_mut()) {
-                v.env.gate_off();
+                v.gate_off();
                 v.active = false;
                 v.remaining = 0;
             }
@@ -71,7 +71,7 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
                 .iter_mut()
                 .chain(renderer.preview_chord.voices.iter_mut())
             {
-                v.env.gate_off();
+                v.gate_off();
                 v.active = false;
                 v.remaining = 0;
             }
