@@ -219,16 +219,18 @@ mod tests {
         assert_eq!(cymbal[5].id, ParameterId::Tone);
         assert_eq!(cymbal[6].id, ParameterId::Decay);
         let synth = parameter_descriptors(TrackKind::Chord);
-        assert_eq!(synth.len(), 17);
+        assert_eq!(synth.len(), 18);
         assert_eq!(synth[4].id, ParameterId::OscillatorMix);
         assert_eq!(synth[4].group, ParameterGroup::Instrument);
         assert_eq!(synth[5].id, ParameterId::PulseWidth);
-        assert_eq!(synth[7].id, ParameterId::Chorus);
-        assert_eq!(synth[9].id, ParameterId::Pitch);
-        assert_eq!(synth[9].shortcut, "i");
-        assert_eq!(synth[10].group, ParameterGroup::Filter);
-        assert_eq!(synth[11].shortcut, "R");
-        assert_eq!(synth[13].group, ParameterGroup::Envelope);
+        assert_eq!(synth[7].id, ParameterId::Noise);
+        assert_eq!(synth[8].id, ParameterId::Chorus);
+        assert_eq!(synth[10].id, ParameterId::Pitch);
+        assert_eq!(synth[10].shortcut, "i");
+        assert_eq!(synth[11].group, ParameterGroup::Filter);
+        assert_eq!(synth[12].shortcut, "R");
+        assert_eq!(synth[13].group, ParameterGroup::Filter);
+        assert_eq!(synth[14].group, ParameterGroup::Envelope);
         let lead = parameter_descriptors(TrackKind::Lead);
         assert_eq!(
             lead.iter()
@@ -242,6 +244,7 @@ mod tests {
                 ParameterId::OscillatorMix,
                 ParameterId::PulseWidth,
                 ParameterId::SubOscillator,
+                ParameterId::Noise,
                 ParameterId::Pitch,
                 ParameterId::Cutoff,
                 ParameterId::Resonance,
@@ -250,11 +253,14 @@ mod tests {
                 ParameterId::Decay,
                 ParameterId::Sustain,
                 ParameterId::Release,
+                ParameterId::LeadSubMode,
+                ParameterId::KeyboardTracking,
+                ParameterId::PortamentoTime,
             ]
         );
-        assert_eq!(lead[7].group, ParameterGroup::Instrument);
-        assert_eq!(lead[8].group, ParameterGroup::Filter);
-        assert_eq!(lead[11].group, ParameterGroup::Envelope);
+        assert_eq!(lead[8].group, ParameterGroup::Instrument);
+        assert_eq!(lead[9].group, ParameterGroup::Filter);
+        assert_eq!(lead[12].group, ParameterGroup::Envelope);
         assert_ne!(
             ParameterGroup::Mixer.color(),
             ParameterGroup::Filter.color()

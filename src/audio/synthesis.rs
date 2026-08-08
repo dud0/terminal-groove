@@ -230,7 +230,7 @@ impl Renderer {
                     // A very low, deterministic noise bed keeps the source
                     // available for the Juno path without forcing obvious
                     // vintage noise into every patch.
-                    voice.noise_level = 0.012;
+                    voice.noise_level = locks.noise.unwrap_or(p.noise).normalized() * 0.04;
                     voice.env.set_profile(EnvelopeProfile::Juno);
                     voice.oscillator_mix.set(
                         locks.oscillator_mix.unwrap_or(p.oscillator_mix).get() as f32,
@@ -259,8 +259,20 @@ impl Renderer {
                     // The SH-101 sub divider is kept at the deeper internal
                     // choice.  It remains a level-only persisted parameter
                     // until a discrete model control is deliberately added.
-                    voice.sub_mode = crate::dsp::SubOscillatorMode::TwoOctaves;
-                    voice.noise_level = 0.006;
+                    voice.sub_mode = match locks.sub_mode.unwrap_or(p.sub_mode) {
+                        crate::model::LeadSubMode::OneOctaveSquare => {
+                            crate::dsp::SubOscillatorMode::OneOctave
+                        }
+                        crate::model::LeadSubMode::TwoOctaveSquare => {
+                            crate::dsp::SubOscillatorMode::TwoOctaves
+                        }
+                        crate::model::LeadSubMode::TwoOctaveNarrowPulse => {
+                            crate::dsp::SubOscillatorMode::TwoOctavesNarrowPulse
+                        }
+                    };
+                    voice.noise_level = locks.noise.unwrap_or(p.noise).normalized() * 0.04;
+                    voice.keyboard_tracking =
+                        locks.keyboard_tracking.unwrap_or(p.keyboard_tracking).get() as f32;
                     voice.env.set_profile(EnvelopeProfile::Sh101);
                     voice.oscillator_mix.set(
                         locks.oscillator_mix.unwrap_or(p.oscillator_mix).get() as f32,
@@ -365,13 +377,19 @@ impl Renderer {
     ) {
         let bass_track = matches!(project.tracks[track].instrument, Instrument::Bass(_));
         let legato_slide = bass_track && voice.active && voice.slide_armed;
-        let lead_legato = matches!(project.tracks[track].instrument, Instrument::Lead(_))
-            && voice.active
-            && trigger.slide;
+        let lead_track = matches!(project.tracks[track].instrument, Instrument::Lead(_));
+        let lead_legato = lead_track && voice.active && voice.slide_armed;
+        let lead_time = match project.tracks[track].instrument {
+            Instrument::Lead(p) => locks.portamento_time.unwrap_or(p.portamento_time).get(),
+            _ => 0,
+        };
         voice.freq.set(
             frequency,
             if legato_slide {
                 (sr * 0.060).round() as u32
+            } else if lead_legato && lead_time > 0 {
+                // 1–100% maps exponentially from 1 ms to 5 s.
+                (sr * (0.001 * 5000.0_f32.powf((lead_time - 1) as f32 / 99.0))).round() as u32
             } else {
                 0
             },
@@ -416,7 +434,8 @@ impl Renderer {
         } else if !legato_slide && !lead_legato {
             voice.env.gate_on();
         }
-        voice.slide_armed = voice.kind == SynthVoiceKind::Bass && trigger.slide;
+        voice.slide_armed =
+            matches!(voice.kind, SynthVoiceKind::Bass | SynthVoiceKind::Sh101) && trigger.slide;
         voice.active = true;
     }
 

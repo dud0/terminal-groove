@@ -86,6 +86,20 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
             chord_shape: None,
             arpeggio: ArpeggioConfig::default(),
         },
+        Some(StepEvent::LeadNote {
+            degree,
+            octave,
+            accent,
+            slide,
+            ..
+        }) => GateAction::Trigger {
+            degree: *degree,
+            octave: *octave,
+            accent: *accent,
+            slide: *slide,
+            chord_shape: None,
+            arpeggio: ArpeggioConfig::default(),
+        },
         Some(StepEvent::Tie { .. }) if voice_active => GateAction::Hold,
         Some(StepEvent::Tie { .. }) => tie_source(steps, step)
             .and_then(|i| match steps[i] {
@@ -105,6 +119,20 @@ pub fn synth_action(steps: &[crate::model::Step], step: usize, voice_active: boo
                     arpeggio,
                 }),
                 Some(StepEvent::BassNote {
+                    degree,
+                    octave,
+                    accent,
+                    slide,
+                    ..
+                }) => Some(GateAction::Trigger {
+                    degree,
+                    octave,
+                    accent,
+                    slide,
+                    chord_shape: None,
+                    arpeggio: ArpeggioConfig::default(),
+                }),
+                Some(StepEvent::LeadNote {
                     degree,
                     octave,
                     accent,

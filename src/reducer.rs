@@ -634,22 +634,25 @@ impl Editor {
                     retrigger_count: 1,
                     locks: Default::default(),
                 }
-            } else if matches!(t.kind, TrackKind::Chord | TrackKind::Lead) {
+            } else if t.kind == TrackKind::Chord {
                 StepEvent::Note {
                     degree: t.input_degree.unwrap(),
                     octave: t.input_octave.unwrap(),
                     accent: t.input_accent,
-                    chord_shape: if t.kind == TrackKind::Chord {
-                        t.input_chord_shape
-                            .filter(|shape| *shape != ChordShape::default())
-                    } else {
-                        None
-                    },
-                    arpeggio: if t.kind == TrackKind::Chord {
-                        t.input_chord_arpeggio.unwrap_or_default()
-                    } else {
-                        ArpeggioConfig::default()
-                    },
+                    chord_shape: t
+                        .input_chord_shape
+                        .filter(|shape| *shape != ChordShape::default()),
+                    arpeggio: t.input_chord_arpeggio.unwrap_or_default(),
+                    condition: TriggerCondition::Always,
+                    retrigger_count: 1,
+                    locks: Default::default(),
+                }
+            } else if t.kind == TrackKind::Lead {
+                StepEvent::LeadNote {
+                    degree: t.input_degree.unwrap(),
+                    octave: t.input_octave.unwrap(),
+                    accent: t.input_accent,
+                    slide: false,
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
                     locks: Default::default(),
@@ -701,6 +704,23 @@ impl Editor {
                     retrigger_count,
                     false,
                 ),
+                Some(StepEvent::LeadNote {
+                    accent,
+                    slide,
+                    condition,
+                    retrigger_count,
+                    locks,
+                    ..
+                }) => (
+                    locks,
+                    accent,
+                    slide,
+                    None,
+                    ArpeggioConfig::default(),
+                    condition,
+                    retrigger_count,
+                    true,
+                ),
                 Some(StepEvent::Note {
                     accent,
                     chord_shape,
@@ -744,6 +764,16 @@ impl Editor {
             t.input_degree = Some(degree);
             t.steps[step] = Some(if t.kind == TrackKind::Bass {
                 StepEvent::BassNote {
+                    degree,
+                    octave,
+                    accent,
+                    slide,
+                    condition,
+                    retrigger_count,
+                    locks,
+                }
+            } else if t.kind == TrackKind::Lead {
+                StepEvent::LeadNote {
                     degree,
                     octave,
                     accent,
@@ -1274,7 +1304,10 @@ impl Editor {
         let next = match self.parameter_value(track, step, scope, ParameterId::Waveform)? {
             ParameterValue::Waveform(Waveform::Square) => Waveform::Saw,
             ParameterValue::Waveform(Waveform::Saw) => Waveform::Square,
-            ParameterValue::Percent(_) | ParameterValue::Chorus(_) | ParameterValue::Spread(_) => {
+            ParameterValue::Percent(_)
+            | ParameterValue::Chorus(_)
+            | ParameterValue::Spread(_)
+            | ParameterValue::LeadSubMode(_) => {
                 return Err(EditError::InvalidParameter);
             }
         };

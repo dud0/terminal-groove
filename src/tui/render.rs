@@ -155,6 +155,13 @@ pub(super) fn step_cell(event: Option<&StepEvent>) -> String {
             accent,
             locks,
             ..
+        })
+        | Some(StepEvent::LeadNote {
+            degree,
+            octave,
+            accent,
+            locks,
+            ..
         }) => format!(
             "{degree}{}{octave}",
             match (*accent, locks.is_empty()) {
@@ -441,7 +448,7 @@ const BASS_PARAMETERS: [ParameterDescriptor; 9] = [
     },
 ];
 
-const CHORD_PARAMETERS: [ParameterDescriptor; 17] = [
+const CHORD_PARAMETERS: [ParameterDescriptor; 18] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
@@ -462,6 +469,12 @@ const CHORD_PARAMETERS: [ParameterDescriptor; 17] = [
         id: ParameterId::SubOscillator,
         label: "Sub",
         shortcut: "u",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Noise,
+        label: "Noise",
+        shortcut: "o",
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
@@ -526,7 +539,7 @@ const CHORD_PARAMETERS: [ParameterDescriptor; 17] = [
     },
 ];
 
-const LEAD_PARAMETERS: [ParameterDescriptor; 15] = [
+const LEAD_PARAMETERS: [ParameterDescriptor; 19] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
@@ -534,7 +547,7 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 15] = [
     CHORD_PARAMETERS[4],
     CHORD_PARAMETERS[5],
     CHORD_PARAMETERS[6],
-    CHORD_PARAMETERS[9],
+    CHORD_PARAMETERS[7],
     CHORD_PARAMETERS[10],
     CHORD_PARAMETERS[11],
     CHORD_PARAMETERS[12],
@@ -542,6 +555,25 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 15] = [
     CHORD_PARAMETERS[14],
     CHORD_PARAMETERS[15],
     CHORD_PARAMETERS[16],
+    CHORD_PARAMETERS[17],
+    ParameterDescriptor {
+        id: ParameterId::LeadSubMode,
+        label: "Sub mode",
+        shortcut: "U",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::KeyboardTracking,
+        label: "KYBD",
+        shortcut: "k",
+        group: ParameterGroup::Filter,
+    },
+    ParameterDescriptor {
+        id: ParameterId::PortamentoTime,
+        label: "Porta",
+        shortcut: "g",
+        group: ParameterGroup::Instrument,
+    },
 ];
 
 pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescriptor] {
@@ -742,6 +774,7 @@ pub(super) fn physical_parameter_readout(
         ParameterValue::Chorus(ChorusMode::I) => "Mode I".into(),
         ParameterValue::Chorus(ChorusMode::Ii) => "Mode II".into(),
         ParameterValue::Spread(value) => value.to_string(),
+        ParameterValue::LeadSubMode(value) => format!("{value:?}"),
         ParameterValue::Percent(value) => {
             let value = value.get();
             match (a.editor.project.tracks[track].kind, parameter) {
@@ -1305,6 +1338,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 crate::model::ChordSpread::Narrow => "NAR".into(),
                 crate::model::ChordSpread::Wide => "WIDE".into(),
             },
+            ParameterValue::LeadSubMode(value) => format!("{value:?}"),
         };
         render_centered(f, &value_label, content, style);
         for segment in 0..10 {
@@ -1354,6 +1388,14 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                         crate::model::ChordSpread::Off => 9,
                         crate::model::ChordSpread::Narrow => 5,
                         crate::model::ChordSpread::Wide => 0,
+                    };
+                    if segment == selected { "●" } else { "│" }
+                }
+                ParameterValue::LeadSubMode(mode) => {
+                    let selected = match mode {
+                        crate::model::LeadSubMode::OneOctaveSquare => 9,
+                        crate::model::LeadSubMode::TwoOctaveSquare => 5,
+                        crate::model::LeadSubMode::TwoOctaveNarrowPulse => 0,
                     };
                     if segment == selected { "●" } else { "│" }
                 }

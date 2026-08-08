@@ -813,6 +813,7 @@ pub struct ChordParameters {
     pub oscillator_mix: Percent,
     pub pulse_width: Percent,
     pub sub_oscillator: Percent,
+    pub noise: Percent,
     pub chorus: ChorusMode,
     #[serde(default)]
     pub spread: ChordSpread,
@@ -831,6 +832,10 @@ pub struct LeadParameters {
     pub oscillator_mix: Percent,
     pub pulse_width: Percent,
     pub sub_oscillator: Percent,
+    pub noise: Percent,
+    pub sub_mode: LeadSubMode,
+    pub keyboard_tracking: Percent,
+    pub portamento_time: Percent,
     pub cutoff: Percent,
     pub resonance: Percent,
     pub filter_envelope: Percent,
@@ -838,6 +843,17 @@ pub struct LeadParameters {
     pub decay: Percent,
     pub sustain: Percent,
     pub release: Percent,
+}
+
+/// The SH-101 divider is phase locked to the main oscillator.  The narrow
+/// mode deliberately keeps the two-octave divider's shorter pulse shape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeadSubMode {
+    OneOctaveSquare,
+    #[default]
+    TwoOctaveSquare,
+    TwoOctaveNarrowPulse,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -984,6 +1000,14 @@ pub struct ParameterLocks {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_oscillator: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub noise: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_mode: Option<LeadSubMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyboard_tracking: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub portamento_time: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub chorus: Option<ChorusMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spread: Option<ChordSpread>,
@@ -1023,6 +1047,10 @@ pub struct LfoAssignments {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_oscillator: Option<LfoConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub noise: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyboard_tracking: Option<LfoConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff: Option<LfoConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resonance: Option<LfoConfig>,
@@ -1050,6 +1078,8 @@ impl LfoAssignments {
             ParameterId::OscillatorMix => self.oscillator_mix,
             ParameterId::PulseWidth => self.pulse_width,
             ParameterId::SubOscillator => self.sub_oscillator,
+            ParameterId::Noise => self.noise,
+            ParameterId::KeyboardTracking => self.keyboard_tracking,
             ParameterId::Cutoff => self.cutoff,
             ParameterId::Resonance => self.resonance,
             ParameterId::FilterEnvelope => self.filter_envelope,
@@ -1074,6 +1104,7 @@ impl LfoAssignments {
             | ParameterId::Waveform
             | ParameterId::Chorus
             | ParameterId::Spread => None,
+            ParameterId::LeadSubMode | ParameterId::PortamentoTime => None,
         }
     }
 
@@ -1088,6 +1119,8 @@ impl LfoAssignments {
             ParameterId::OscillatorMix => &mut self.oscillator_mix,
             ParameterId::PulseWidth => &mut self.pulse_width,
             ParameterId::SubOscillator => &mut self.sub_oscillator,
+            ParameterId::Noise => &mut self.noise,
+            ParameterId::KeyboardTracking => &mut self.keyboard_tracking,
             ParameterId::Cutoff => &mut self.cutoff,
             ParameterId::Resonance => &mut self.resonance,
             ParameterId::FilterEnvelope => &mut self.filter_envelope,
@@ -1114,6 +1147,7 @@ impl LfoAssignments {
             | ParameterId::Spread => {
                 return false;
             }
+            ParameterId::LeadSubMode | ParameterId::PortamentoTime => return false,
         };
         *slot = config;
         true
@@ -1150,6 +1184,10 @@ impl ParameterLocks {
             ParameterId::OscillatorMix => self.oscillator_mix.map(ParameterValue::Percent),
             ParameterId::PulseWidth => self.pulse_width.map(ParameterValue::Percent),
             ParameterId::SubOscillator => self.sub_oscillator.map(ParameterValue::Percent),
+            ParameterId::Noise => self.noise.map(ParameterValue::Percent),
+            ParameterId::LeadSubMode => self.sub_mode.map(ParameterValue::LeadSubMode),
+            ParameterId::KeyboardTracking => self.keyboard_tracking.map(ParameterValue::Percent),
+            ParameterId::PortamentoTime => self.portamento_time.map(ParameterValue::Percent),
             ParameterId::Chorus => self.chorus.map(ParameterValue::Chorus),
             ParameterId::Spread => self.spread.map(ParameterValue::Spread),
             ParameterId::Cutoff => self.cutoff.map(ParameterValue::Percent),
@@ -1208,6 +1246,14 @@ impl ParameterLocks {
             (ParameterId::SubOscillator, ParameterValue::Percent(v)) => {
                 self.sub_oscillator = Some(v)
             }
+            (ParameterId::Noise, ParameterValue::Percent(v)) => self.noise = Some(v),
+            (ParameterId::LeadSubMode, ParameterValue::LeadSubMode(v)) => self.sub_mode = Some(v),
+            (ParameterId::KeyboardTracking, ParameterValue::Percent(v)) => {
+                self.keyboard_tracking = Some(v)
+            }
+            (ParameterId::PortamentoTime, ParameterValue::Percent(v)) => {
+                self.portamento_time = Some(v)
+            }
             (ParameterId::Chorus, ParameterValue::Chorus(v)) => self.chorus = Some(v),
             (ParameterId::Spread, ParameterValue::Spread(v)) => self.spread = Some(v),
             (ParameterId::Cutoff, ParameterValue::Percent(v)) => self.cutoff = Some(v),
@@ -1249,6 +1295,10 @@ impl ParameterLocks {
             ParameterId::OscillatorMix => self.oscillator_mix = None,
             ParameterId::PulseWidth => self.pulse_width = None,
             ParameterId::SubOscillator => self.sub_oscillator = None,
+            ParameterId::Noise => self.noise = None,
+            ParameterId::LeadSubMode => self.sub_mode = None,
+            ParameterId::KeyboardTracking => self.keyboard_tracking = None,
+            ParameterId::PortamentoTime => self.portamento_time = None,
             ParameterId::Chorus => self.chorus = None,
             ParameterId::Spread => self.spread = None,
             ParameterId::Cutoff => self.cutoff = None,
@@ -1351,6 +1401,20 @@ pub enum StepEvent {
         retrigger_count: u8,
         locks: ParameterLocks,
     },
+    LeadNote {
+        degree: u8,
+        octave: u8,
+        accent: bool,
+        slide: bool,
+        #[serde(default, skip_serializing_if = "trigger_condition_is_default")]
+        condition: TriggerCondition,
+        #[serde(
+            default = "default_retrigger_count",
+            skip_serializing_if = "retrigger_count_is_default"
+        )]
+        retrigger_count: u8,
+        locks: ParameterLocks,
+    },
     Tie {
         locks: ParameterLocks,
     },
@@ -1370,6 +1434,7 @@ impl StepEvent {
             Self::Trigger { locks, .. }
             | Self::BassNote { locks, .. }
             | Self::Note { locks, .. }
+            | Self::LeadNote { locks, .. }
             | Self::Tie { locks } => locks,
         }
     }
@@ -1378,6 +1443,7 @@ impl StepEvent {
             Self::Trigger { locks, .. }
             | Self::BassNote { locks, .. }
             | Self::Note { locks, .. }
+            | Self::LeadNote { locks, .. }
             | Self::Tie { locks } => locks,
         }
     }
@@ -1387,6 +1453,7 @@ impl StepEvent {
             Self::Trigger { accent, .. }
             | Self::BassNote { accent, .. }
             | Self::Note { accent, .. } => Some(*accent),
+            Self::LeadNote { accent, .. } => Some(*accent),
             Self::Tie { .. } => None,
         }
     }
@@ -1396,13 +1463,14 @@ impl StepEvent {
             Self::Trigger { accent, .. }
             | Self::BassNote { accent, .. }
             | Self::Note { accent, .. } => Some(accent),
+            Self::LeadNote { accent, .. } => Some(accent),
             Self::Tie { .. } => None,
         }
     }
 
     pub fn slide_mut(&mut self) -> Option<&mut bool> {
         match self {
-            Self::BassNote { slide, .. } => Some(slide),
+            Self::BassNote { slide, .. } | Self::LeadNote { slide, .. } => Some(slide),
             _ => None,
         }
     }
@@ -1411,6 +1479,7 @@ impl StepEvent {
             Self::Trigger { condition, .. }
             | Self::BassNote { condition, .. }
             | Self::Note { condition, .. } => Some(*condition),
+            Self::LeadNote { condition, .. } => Some(*condition),
             Self::Tie { .. } => None,
         }
     }
@@ -1419,6 +1488,7 @@ impl StepEvent {
             Self::Trigger { condition, .. }
             | Self::BassNote { condition, .. }
             | Self::Note { condition, .. } => Some(condition),
+            Self::LeadNote { condition, .. } => Some(condition),
             Self::Tie { .. } => None,
         }
     }
@@ -1431,6 +1501,9 @@ impl StepEvent {
                 retrigger_count, ..
             }
             | Self::Note {
+                retrigger_count, ..
+            }
+            | Self::LeadNote {
                 retrigger_count, ..
             } => Some(*retrigger_count),
             Self::Tie { .. } => None,
@@ -1445,6 +1518,9 @@ impl StepEvent {
                 retrigger_count, ..
             }
             | Self::Note {
+                retrigger_count, ..
+            }
+            | Self::LeadNote {
                 retrigger_count, ..
             } => Some(retrigger_count),
             Self::Tie { .. } => None,
@@ -1703,7 +1779,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 16,
+            format_version: 17,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1768,6 +1844,7 @@ impl Project {
                         oscillator_mix: p(70),
                         pulse_width: p(50),
                         sub_oscillator: p(0),
+                        noise: p(0),
                         chorus: ChorusMode::I,
                         spread: ChordSpread::Off,
                         cutoff: p(55),
@@ -1786,6 +1863,10 @@ impl Project {
                         oscillator_mix: p(75),
                         pulse_width: p(50),
                         sub_oscillator: p(25),
+                        noise: p(0),
+                        sub_mode: LeadSubMode::TwoOctaveSquare,
+                        keyboard_tracking: p(50),
+                        portamento_time: p(50),
                         cutoff: p(50),
                         resonance: p(35),
                         filter_envelope: p(55),
@@ -1846,7 +1927,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 16 {
+        if self.format_version != 17 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -1955,7 +2036,8 @@ impl Project {
                                 StepEvent::Trigger { .. }
                             ) | (TrackKind::Bass, StepEvent::BassNote { .. })
                                 | (TrackKind::Bass, StepEvent::Tie { .. })
-                                | (TrackKind::Chord | TrackKind::Lead, StepEvent::Note { .. })
+                                | (TrackKind::Chord, StepEvent::Note { .. })
+                                | (TrackKind::Lead, StepEvent::LeadNote { .. })
                                 | (TrackKind::Chord | TrackKind::Lead, StepEvent::Tie { .. })
                         );
                         if !event_ok {
@@ -1984,6 +2066,7 @@ impl Project {
                             }
                         }
                         if let StepEvent::Note { degree, octave, .. }
+                        | StepEvent::LeadNote { degree, octave, .. }
                         | StepEvent::BassNote { degree, octave, .. } = event
                         {
                             if !(1..=8).contains(degree) || *octave > 7 {
@@ -2091,7 +2174,9 @@ pub fn tie_source(steps: &[Step], at: usize) -> Option<usize> {
     let mut i = (at + step_count - 1) % step_count;
     for _ in 0..step_count {
         match &steps[i] {
-            Some(StepEvent::Note { .. } | StepEvent::BassNote { .. }) => return Some(i),
+            Some(
+                StepEvent::Note { .. } | StepEvent::LeadNote { .. } | StepEvent::BassNote { .. },
+            ) => return Some(i),
             Some(StepEvent::Tie { .. }) => i = (i + step_count - 1) % step_count,
             _ => return None,
         }
@@ -2136,6 +2221,10 @@ pub enum ParameterId {
     OscillatorMix,
     PulseWidth,
     SubOscillator,
+    Noise,
+    LeadSubMode,
+    KeyboardTracking,
+    PortamentoTime,
     Chorus,
     Spread,
     Cutoff,
@@ -2158,10 +2247,11 @@ pub enum ParameterValue {
     Waveform(Waveform),
     Chorus(ChorusMode),
     Spread(ChordSpread),
+    LeadSubMode(LeadSubMode),
 }
 
 impl ParameterId {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 37] = [
         Self::Level,
         Self::Pan,
         Self::DelaySend,
@@ -2181,6 +2271,10 @@ impl ParameterId {
         Self::OscillatorMix,
         Self::PulseWidth,
         Self::SubOscillator,
+        Self::Noise,
+        Self::LeadSubMode,
+        Self::KeyboardTracking,
+        Self::PortamentoTime,
         Self::Chorus,
         Self::Spread,
         Self::Cutoff,
@@ -2237,8 +2331,11 @@ impl ParameterId {
             ),
             Self::Attack => matches!(kind, TrackKind::Kick | TrackKind::Chord | TrackKind::Lead),
             Self::Waveform => matches!(kind, TrackKind::Bass),
-            Self::OscillatorMix | Self::PulseWidth | Self::SubOscillator => {
+            Self::OscillatorMix | Self::PulseWidth | Self::SubOscillator | Self::Noise => {
                 matches!(kind, TrackKind::Chord | TrackKind::Lead)
+            }
+            Self::LeadSubMode | Self::KeyboardTracking | Self::PortamentoTime => {
+                matches!(kind, TrackKind::Lead)
             }
             Self::Chorus => matches!(kind, TrackKind::Chord),
             Self::Spread => matches!(kind, TrackKind::Chord),
@@ -2278,6 +2375,8 @@ impl ParameterId {
                         | Self::FlangerFeedback
                         | Self::FlangerMix
                         | Self::Waveform
+                        | Self::LeadSubMode
+                        | Self::PortamentoTime
                         | Self::Chorus
                         | Self::Spread
                 ))
@@ -2304,6 +2403,10 @@ impl ParameterId {
             Self::OscillatorMix => "oscillator_mix",
             Self::PulseWidth => "pulse_width",
             Self::SubOscillator => "sub_oscillator",
+            Self::Noise => "noise",
+            Self::LeadSubMode => "sub_mode",
+            Self::KeyboardTracking => "keyboard_tracking",
+            Self::PortamentoTime => "portamento_time",
             Self::Chorus => "chorus",
             Self::Spread => "spread",
             Self::Cutoff => "cutoff",
@@ -2411,6 +2514,23 @@ impl Track {
             ParameterId::SubOscillator => match self.instrument {
                 Instrument::Chord(p) => ParameterValue::Percent(p.sub_oscillator),
                 Instrument::Lead(p) => ParameterValue::Percent(p.sub_oscillator),
+                _ => return None,
+            },
+            ParameterId::Noise => match self.instrument {
+                Instrument::Chord(p) => ParameterValue::Percent(p.noise),
+                Instrument::Lead(p) => ParameterValue::Percent(p.noise),
+                _ => return None,
+            },
+            ParameterId::LeadSubMode => match self.instrument {
+                Instrument::Lead(p) => ParameterValue::LeadSubMode(p.sub_mode),
+                _ => return None,
+            },
+            ParameterId::KeyboardTracking => match self.instrument {
+                Instrument::Lead(p) => ParameterValue::Percent(p.keyboard_tracking),
+                _ => return None,
+            },
+            ParameterId::PortamentoTime => match self.instrument {
+                Instrument::Lead(p) => ParameterValue::Percent(p.portamento_time),
                 _ => return None,
             },
             ParameterId::Chorus => match self.instrument {
@@ -2578,6 +2698,28 @@ impl Track {
                     _ => return false,
                 }
             }
+            (ParameterId::Noise, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Chord(p) => p.noise = v,
+                Instrument::Lead(p) => p.noise = v,
+                _ => return false,
+            },
+            (ParameterId::LeadSubMode, ParameterValue::LeadSubMode(v)) => {
+                match &mut self.instrument {
+                    Instrument::Lead(p) => p.sub_mode = v,
+                    _ => return false,
+                }
+            }
+            (ParameterId::KeyboardTracking, ParameterValue::Percent(v)) => {
+                match &mut self.instrument {
+                    Instrument::Lead(p) => p.keyboard_tracking = v,
+                    _ => return false,
+                }
+            }
+            (ParameterId::PortamentoTime, ParameterValue::Percent(v)) => match &mut self.instrument
+            {
+                Instrument::Lead(p) => p.portamento_time = v,
+                _ => return false,
+            },
             (ParameterId::Chorus, ParameterValue::Chorus(v)) => match &mut self.instrument {
                 Instrument::Chord(p) => p.chorus = v,
                 _ => return false,
@@ -2827,7 +2969,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 16);
+        assert_eq!(project.format_version, 17);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
@@ -3008,6 +3150,8 @@ mod tests {
                 ParameterValue::Chorus(ChorusMode::Ii)
             } else if parameter == ParameterId::Spread {
                 ParameterValue::Spread(ChordSpread::Wide)
+            } else if parameter == ParameterId::LeadSubMode {
+                ParameterValue::LeadSubMode(LeadSubMode::TwoOctaveSquare)
             } else {
                 percent
             };

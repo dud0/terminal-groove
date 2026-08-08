@@ -89,6 +89,10 @@ The two voices should be redesigned together because they currently share the sa
 
 ## Completion criteria
 
+## Status (2026-08-08)
+
+Complete. The implementation uses format version 17 (version 16 is intentionally rejected without migration), persisted optional noise, selectable SH-101 sub modes, 0–100% keyboard tracking, and source-armed Lead portamento. `cargo fmt`, `cargo test`, Clippy with warnings denied, and the release build passed after the changes.
+
 - Chord and Lead no longer differ only by drive, resonance scaling, and ADSR ranges.
 - Their source mixers and filter types encode the intended instrument identities.
 - Existing projects have a documented and tested migration path.

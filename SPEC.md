@@ -93,7 +93,7 @@ Bass and Lead are monophonic. Chord interprets the stored degree as the root of 
 - A new Chord note restarts its own arpeggio sequence. An empty step releases the arpeggio; the next note starts a new cycle.
 - A following empty step closes the gate and begins release.
 - A following note closes/restarts the existing voice at the new pitch, with click-safe envelope handling.
-- Bass notes additionally store a Boolean slide. A slide remains armed through ties and glides to the next Bass note over a fixed 60 ms without retriggering its main envelope. An empty step clears it.
+- Bass and Lead notes additionally store a Boolean slide. Bass slides remain armed through ties and glide to the next Bass note over a fixed 60 ms. Lead slide is SH-101 AUTO portamento: it uses the source note's effective Portamento Time, glides in pitch without retriggering ADSR, remains armed through ties, and is cleared by an empty step.
 
 Pressing a degree key replaces any existing event on the selected step with that note and preserves compatible locks, articulations, and the Chord shape/arpeggio of an existing Chord note. New notes inherit the track's input accent default and new Bass notes have slide disabled; replacing a tie or creating a note on an empty step uses the current default, while replacing an existing compatible note preserves its accent. Pressing `Enter` on an empty pitched step inserts the track's last-entered degree and octave with the input accent default; empty Chord steps also use the track's last-entered Chord shape and arpeggio configuration. Pressing `Enter` on a note or tie clears it and its locks.
 
@@ -356,7 +356,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Track | `Shift+D` | Double the selected track by appending an exact copy, when its length is at most 32 |
 | Track | `Shift+Delete` | Clear all events and locks from the selected track in the active pattern |
 | Trigger, note, or empty step | `A` | Toggle event accent, or the track's input accent default on an empty step |
-| Bass note | `Shift+G` | Toggle slide |
+| Bass/Lead note | `Shift+G` | Toggle slide |
 | Trigger/note | `Shift+T` | Edit condition, cycle/chance values, and retrigger count |
 | Track | `Shift+S` | Edit 0–75% swing |
 | Track | `Shift+Q` | Edit 0–100% probability |
@@ -517,7 +517,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 16,
+  "format_version": 17,
   "globals": {},
   "tracks": [],
   "patterns": [],

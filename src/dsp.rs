@@ -774,6 +774,7 @@ pub struct PolyBlepOsc {
 pub enum SubOscillatorMode {
     OneOctave,
     TwoOctaves,
+    TwoOctavesNarrowPulse,
 }
 
 impl SubOscillatorMode {
@@ -781,6 +782,7 @@ impl SubOscillatorMode {
         match self {
             Self::OneOctave => 0.5,
             Self::TwoOctaves => 0.25,
+            Self::TwoOctavesNarrowPulse => 0.25,
         }
     }
 }
@@ -841,7 +843,12 @@ impl PolyBlepOsc {
     }
 
     pub fn next_sub(&mut self, hz: f32, mode: SubOscillatorMode, sr: f32) -> f32 {
-        self.next_square(hz * mode.ratio(), sr)
+        match mode {
+            SubOscillatorMode::TwoOctavesNarrowPulse => {
+                self.next_pulse(hz * mode.ratio(), 0.25, sr)
+            }
+            _ => self.next_square(hz * mode.ratio(), sr),
+        }
     }
     pub fn next_pulse(&mut self, hz: f32, width: f32, sr: f32) -> f32 {
         let dt = (hz / sr).clamp(0.0, 0.49);

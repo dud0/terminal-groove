@@ -1008,6 +1008,31 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
                     );
                     return Ok(true);
                 }
+                Ok(ParameterValue::LeadSubMode(mode)) => {
+                    use crate::model::LeadSubMode;
+                    let next = match (mode, k.code) {
+                        (LeadSubMode::OneOctaveSquare, KeyCode::Up) => LeadSubMode::TwoOctaveSquare,
+                        (LeadSubMode::TwoOctaveSquare, KeyCode::Up) => {
+                            LeadSubMode::TwoOctaveNarrowPulse
+                        }
+                        (LeadSubMode::TwoOctaveNarrowPulse, KeyCode::Down) => {
+                            LeadSubMode::TwoOctaveSquare
+                        }
+                        (LeadSubMode::TwoOctaveSquare, KeyCode::Down) => {
+                            LeadSubMode::OneOctaveSquare
+                        }
+                        _ => mode,
+                    };
+                    set_parameter(
+                        a,
+                        audio,
+                        parameter,
+                        ParameterValue::LeadSubMode(next),
+                        true,
+                        false,
+                    );
+                    return Ok(true);
+                }
                 Err(e) => {
                     a.status = e.to_string();
                     return Ok(true);
@@ -1814,6 +1839,7 @@ pub(super) fn set_parameter(
             ParameterValue::Waveform(_) => None,
             ParameterValue::Chorus(_) => None,
             ParameterValue::Spread(_) => None,
+            ParameterValue::LeadSubMode(_) => None,
         });
     let key = keep_editing.then_some(coalesce_key(track, step, parameter));
     match a

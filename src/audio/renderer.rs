@@ -17,10 +17,14 @@ const BASS_OUTPUT_GAIN: f32 = 1.8;
 /// The SH-101 filter is calibrated for 50% keyboard tracking around C3.  A
 /// reference-centered mapping keeps the existing cutoff control useful while
 /// making higher notes naturally brighter and lower notes darker.
-pub(super) fn sh101_keyboard_tracked_cutoff(base_cutoff: f32, frequency: f32) -> f32 {
+pub(super) fn sh101_keyboard_tracked_cutoff(
+    base_cutoff: f32,
+    frequency: f32,
+    tracking: f32,
+) -> f32 {
     let reference = 130.8128;
-    let key_ratio = (frequency.max(1.0) / reference).clamp(0.25, 4.0);
-    base_cutoff * key_ratio.sqrt()
+    let key_ratio = frequency.max(1.0) / reference;
+    base_cutoff * key_ratio.powf(tracking.clamp(0.0, 100.0) / 100.0)
 }
 
 impl Renderer {
@@ -329,7 +333,8 @@ impl Renderer {
                 * 2.0_f32.powf(env * filter_env * envelope_octaves + accent_filter))
             .min(maximum_cutoff);
             if kind == SynthVoiceKind::Sh101 {
-                cutoff = sh101_keyboard_tracked_cutoff(cutoff, frequency).min(maximum_cutoff);
+                cutoff = sh101_keyboard_tracked_cutoff(cutoff, frequency, v.keyboard_tracking)
+                    .min(maximum_cutoff);
             }
             match kind {
                 SynthVoiceKind::Juno => {
@@ -383,7 +388,8 @@ impl Renderer {
                 crate::dsp::SubOscillatorMode::OneOctave => {
                     v.sub_osc.next_sub(frequency, v.sub_mode, sr * 2.0)
                 }
-                crate::dsp::SubOscillatorMode::TwoOctaves => {
+                crate::dsp::SubOscillatorMode::TwoOctaves
+                | crate::dsp::SubOscillatorMode::TwoOctavesNarrowPulse => {
                     v.sub_osc_2.next_sub(frequency, v.sub_mode, sr * 2.0)
                 }
             };
@@ -798,9 +804,9 @@ mod tests {
     #[test]
     fn sh101_keyboard_tracking_is_centered_on_c3_and_moves_cutoff_by_half_octaves() {
         let base = 1_000.0;
-        let c3 = sh101_keyboard_tracked_cutoff(base, 130.8128);
-        let c4 = sh101_keyboard_tracked_cutoff(base, 261.6256);
-        let c2 = sh101_keyboard_tracked_cutoff(base, 65.4064);
+        let c3 = sh101_keyboard_tracked_cutoff(base, 130.8128, 50.0);
+        let c4 = sh101_keyboard_tracked_cutoff(base, 261.6256, 50.0);
+        let c2 = sh101_keyboard_tracked_cutoff(base, 65.4064, 50.0);
         assert!((c3 - base).abs() < 0.01);
         assert!((c4 / base - 2.0_f32.sqrt()).abs() < 0.01);
         assert!((c2 / base - 2.0_f32.sqrt().recip()).abs() < 0.01);
