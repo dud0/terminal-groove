@@ -245,6 +245,10 @@ impl Smoother {
         self.current
     }
 
+    pub fn target_value(&self) -> f32 {
+        self.target
+    }
+
     pub fn is_smoothing(&self) -> bool {
         self.remaining != 0
     }
@@ -1137,6 +1141,8 @@ impl BassFilterEnvelope {
 /// so consecutive accents retrigger deterministically and ties leave it alone.
 pub struct BassAccentEnvelope {
     value: f32,
+    target: f32,
+    attack_coefficient: f32,
     coefficient: f32,
 }
 
@@ -1144,12 +1150,14 @@ impl BassAccentEnvelope {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             value: 0.0,
+            target: 0.0,
+            attack_coefficient: 1.0 - (-6.907_755 / (0.003 * sample_rate.max(1.0))).exp(),
             coefficient: (-6.907_755 / (0.180 * sample_rate.max(1.0))).exp(),
         }
     }
 
     pub fn trigger(&mut self, accented: bool) {
-        self.value = if accented { 1.0 } else { 0.0 };
+        self.target = if accented { 1.0 } else { 0.0 };
     }
 
     pub fn value(&self) -> f32 {
@@ -1157,7 +1165,11 @@ impl BassAccentEnvelope {
     }
 
     pub fn next_sample(&mut self) -> f32 {
-        self.value *= self.coefficient;
+        if self.target > self.value {
+            self.value += (self.target - self.value) * self.attack_coefficient;
+        } else {
+            self.value *= self.coefficient;
+        }
         if self.value <= 0.0001 {
             self.value = 0.0;
         }
@@ -2765,6 +2777,20 @@ mod tests {
             vca.next_sample();
         }
         assert!(vca.is_idle());
+    }
+
+    #[test]
+    fn bass_accent_retrigger_is_click_safe() {
+        let mut accent = BassAccentEnvelope::new(8_000.0);
+        accent.trigger(true);
+        let first = accent.next_sample();
+        assert!(first > 0.0 && first < 1.0);
+        accent.trigger(false);
+        let after_release = accent.next_sample();
+        assert!(after_release > 0.0 && after_release < first);
+        accent.trigger(true);
+        let retriggered = accent.next_sample();
+        assert!(retriggered > after_release && retriggered < 1.0);
     }
 
     #[test]

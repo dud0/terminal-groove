@@ -210,7 +210,7 @@ impl Renderer {
                     voice.wave = locks.waveform.unwrap_or(p.waveform);
                     voice
                         .bass_decay_percent
-                        .set(locks.decay.unwrap_or(p.decay).get() as f32, 0);
+                        .set(locks.decay.unwrap_or(p.decay).get() as f32, smoothing);
                     (
                         p.cutoff,
                         p.resonance,
@@ -393,7 +393,7 @@ impl Renderer {
                 voice.bass_vca.gate_on();
                 voice
                     .bass_filter_envelope
-                    .trigger(voice.bass_decay_percent.value());
+                    .trigger(voice.bass_decay_percent.target_value());
             }
         } else if !legato_slide {
             voice.env.gate_on();
