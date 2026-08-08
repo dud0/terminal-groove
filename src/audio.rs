@@ -576,12 +576,11 @@ mod tests {
                 retrigger_count: 4,
                 locks: Default::default(),
             });
-            project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[step] = Some(StepEvent::Note {
+            project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[step] = Some(StepEvent::LeadNote {
                 degree: (step % 7 + 1) as u8,
                 octave: 4,
                 accent: step % 4 == 0,
-                chord_shape: None,
-                arpeggio: ArpeggioConfig::default(),
+                slide: step % 3 == 0,
                 condition: Default::default(),
                 retrigger_count: 4,
                 locks: Default::default(),
@@ -1674,6 +1673,60 @@ mod tests {
             renderer.synth[0].freq.next_value();
         }
         let final_frequency = renderer.synth[0].freq.next_value();
+        assert!((final_frequency - starting_frequency * 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn lead_slide_uses_portamento_without_retriggering_the_adsr() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[0] = Some(StepEvent::LeadNote {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            slide: true,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[1] = Some(StepEvent::LeadNote {
+            degree: 8,
+            octave: 3,
+            accent: false,
+            slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        let lead = LEAD_TRACK_INDEX - SYNTH_TRACK_START;
+
+        renderer.boundary(0);
+        for _ in 0..1_000 {
+            Renderer::render_synth(
+                &mut renderer.synth[lead],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+        }
+        assert_eq!(
+            renderer.synth[lead].env.stage,
+            crate::dsp::EnvStage::Sustain
+        );
+        let starting_frequency = renderer.synth[lead].freq.next_value();
+
+        renderer.boundary(0);
+        assert_eq!(
+            renderer.synth[lead].env.stage,
+            crate::dsp::EnvStage::Sustain
+        );
+        let first_frequency = renderer.synth[lead].freq.next_value();
+        assert!(first_frequency > starting_frequency);
+        assert!(first_frequency < starting_frequency * 2.0);
+        for _ in 0..600 {
+            renderer.synth[lead].freq.next_value();
+        }
+        let final_frequency = renderer.synth[lead].freq.next_value();
         assert!((final_frequency - starting_frequency * 2.0).abs() < 0.01);
     }
 

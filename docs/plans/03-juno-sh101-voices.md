@@ -15,7 +15,7 @@ The two voices should be redesigned together because they currently share the sa
 - Keep phase-aligned, band-limited oscillators and existing oversampling safety.
 - Represent source mixers as additive sources rather than an exclusive pulse/saw crossfade internally.
 - Use instrument-specific filter calibration and gain staging.
-- Preserve the existing sequencer, locks, LFO assignments, chord spread, arpeggiator, and undo/persistence behavior where possible.
+- Preserve the existing sequencer, locks, LFO assignments, chord spread, arpeggiator, and undo/persistence behavior where possible. The format-17 schema is an intentional breaking change; older project files remain unsupported rather than being migrated.
 - Avoid adding controls until the DSP behavior and model migration are explicitly designed.
 
 ## Work plan
@@ -31,9 +31,9 @@ The two voices should be redesigned together because they currently share the sa
 ### 2. Define parameter compatibility and migration
 
 - Decide whether the existing `oscillator_mix` control remains as a macro over additive pulse/saw levels or is replaced by independent controls.
-- Prefer a backward-compatible macro mapping unless a schema bump and TUI expansion are explicitly accepted.
+- Prefer a backward-compatible macro mapping unless a schema bump and TUI expansion are explicitly accepted. This implementation explicitly accepts the format-17 schema bump and does not migrate older projects.
 - Define how existing project values map to the new source levels so saved projects do not change unexpectedly.
-- Add model validation, reducer commands, persistence migration/versioning, TUI descriptors, locks, and LFO compatibility for any new parameter.
+- Add model validation, reducer commands, persistence versioning (with no migration), TUI descriptors, locks, and LFO compatibility for any new parameter.
 
 ### 3. Implement the Juno-60-inspired Chord path
 
@@ -87,15 +87,15 @@ The two voices should be redesigned together because they currently share the sa
 - All oscillator/filter extremes remain finite at supported sample rates.
 - Offline render determinism and callback allocation safety continue to pass.
 
-## Completion criteria
-
 ## Status (2026-08-08)
 
-Complete. The implementation uses format version 17 (version 16 is intentionally rejected without migration), persisted optional noise, selectable SH-101 sub modes, 0–100% keyboard tracking, and source-armed Lead portamento. `cargo fmt`, `cargo test`, Clippy with warnings denied, and the release build passed after the changes.
+Complete. The implementation uses format version 17; earlier formats are intentionally rejected without migration. It includes persisted optional noise, selectable SH-101 sub modes, 0–100% keyboard tracking, and source-armed Lead portamento. `cargo fmt`, `cargo test`, Clippy with warnings denied, and the release build passed after the changes.
+
+## Completion criteria
 
 - Chord and Lead no longer differ only by drive, resonance scaling, and ADSR ranges.
 - Their source mixers and filter types encode the intended instrument identities.
-- Existing projects have a documented and tested migration path.
+- The intentional format-17 breaking-change policy is documented in `README.md` and `SPEC.md`.
 - New controls, if any, follow the full model/reducer/audio/TUI/persistence path.
 - Manual checks cover dry, chorus, high-resonance, bass, pad, pluck, and lead patches.
 - `cargo fmt`, `cargo test`, `cargo clippy`, and `cargo build --release` pass.

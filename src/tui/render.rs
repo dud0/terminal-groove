@@ -86,7 +86,7 @@ NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/�
            g pattern generator · o audition selected step
            Shift+Delete clear selected track
 EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
-                 A accent/default · Shift+G Bass slide · Shift+T condition/retrigger · Shift+S swing · Shift+Q probability
+                 A accent/default · Shift+G Bass/Lead slide · Shift+T condition/retrigger · Shift+S swing · Shift+Q probability
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
 PARAMETERS  v level · n pan · y delay send · b reverb send
            Tab PARAMS/EFFECTS · EFFECTS: d drive · t tone · x distortion mix
@@ -200,7 +200,7 @@ pub(super) fn articulation_title(a: &App, track: usize) -> String {
                 if is_default { "default " } else { "" },
                 if accent { "on" } else { "off" }
             );
-            if let Some(StepEvent::BassNote { slide, .. }) =
+            if let Some(StepEvent::BassNote { slide, .. } | StepEvent::LeadNote { slide, .. }) =
                 a.editor.project.tracks[track].steps[a.step]
             {
                 text.push_str(&format!(" · Slide {}", if slide { "on" } else { "off" }));
@@ -1738,7 +1738,10 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 }
                 if matches!(
                     track.steps[step],
-                    Some(StepEvent::BassNote { slide: true, .. })
+                    Some(
+                        StepEvent::BassNote { slide: true, .. }
+                            | StepEvent::LeadNote { slide: true, .. }
+                    )
                 ) {
                     style = style.add_modifier(Modifier::UNDERLINED);
                 }

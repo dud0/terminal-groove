@@ -46,7 +46,7 @@ impl std::fmt::Display for EditError {
                 Self::InvalidLength => "track length must be between 1 and 64 steps",
                 Self::CannotDouble => "track is longer than 32 steps and cannot be doubled",
                 Self::NoAccent => "accent requires a trigger or note",
-                Self::NoSlide => "slide requires a Bass note",
+                Self::NoSlide => "slide requires a Bass or Lead note",
                 Self::NoChordShape => "chord shape requires a Chord note or empty Chord step",
                 Self::NoTriggerSettings => "trigger settings require a trigger or note",
             }
@@ -1123,7 +1123,7 @@ impl Editor {
                 .tracks
                 .get_mut(track)
                 .ok_or(EditError::InvalidTrack)?;
-            if t.kind != TrackKind::Bass {
+            if !matches!(t.kind, TrackKind::Bass | TrackKind::Lead) {
                 return Err(EditError::NoSlide);
             }
             let event = t
@@ -1385,7 +1385,7 @@ pub fn percentage_key(c: char) -> Option<Percent> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CHORD_TRACK_INDEX, SYNTH_TRACK_START, TRACK_COUNT};
+    use crate::model::{CHORD_TRACK_INDEX, LEAD_TRACK_INDEX, SYNTH_TRACK_START, TRACK_COUNT};
     #[test]
     fn undo_dirty_redo() {
         let mut e = Editor::new(Project::new());
@@ -1650,6 +1650,28 @@ mod tests {
             Err(EditError::NoSlide)
         );
         assert!(editor.undo());
+    }
+
+    #[test]
+    fn lead_notes_support_slide_and_other_tracks_reject_it() {
+        let mut editor = Editor::new(Project::new());
+        let lead = LEAD_TRACK_INDEX;
+        editor.set_note(lead, 0, 1).unwrap();
+
+        assert!(editor.toggle_slide(lead, 0).unwrap());
+        assert!(matches!(
+            editor.project.tracks[lead].steps[0],
+            Some(StepEvent::LeadNote { slide: true, .. })
+        ));
+        assert!(editor.undo());
+        assert!(matches!(
+            editor.project.tracks[lead].steps[0],
+            Some(StepEvent::LeadNote { slide: false, .. })
+        ));
+        assert_eq!(
+            editor.toggle_slide(CHORD_TRACK_INDEX, 0),
+            Err(EditError::NoSlide)
+        );
     }
 
     #[test]

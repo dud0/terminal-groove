@@ -20,9 +20,10 @@ use crate::{
     generator::{Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
         ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT,
-        DelayDivision, GlobalParameterId, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
-        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, STEP_ROW_SIZE,
-        SYNTH_TRACK_START, Scale, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
+        DelayDivision, GlobalParameterId, LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate,
+        LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE,
+        STEP_ROW_SIZE, SYNTH_TRACK_START, Scale, StepEvent, TRACK_COUNT, TrackKind,
+        TriggerCondition, Waveform,
     },
     persistence,
     reducer::{Editor, Scope},
@@ -757,6 +758,21 @@ mod tests {
             articulation_title(&app, SYNTH_TRACK_START),
             "Accent on from step 1"
         );
+    }
+
+    #[test]
+    fn lead_slide_has_the_same_visible_articulation_state_as_bass_slide() {
+        let mut app = App::new(Project::new(), None);
+        app.row = LEAD_TRACK_INDEX + 1;
+        app.editor.set_note(LEAD_TRACK_INDEX, 0, 1).unwrap();
+        app.editor.toggle_slide(LEAD_TRACK_INDEX, 0).unwrap();
+
+        assert_eq!(
+            articulation_title(&app, LEAD_TRACK_INDEX),
+            "Accent off · Slide on"
+        );
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("Slide on"));
     }
 
     #[test]
