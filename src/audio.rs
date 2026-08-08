@@ -788,13 +788,19 @@ mod tests {
 
     #[test]
     fn worst_case_fixture_reports_callback_cost_without_a_brittle_limit() {
+        const WARMUP_CALLBACKS: usize = 16;
+        const MEASURED_CALLBACKS: usize = 64;
         let project = performance_project();
         eprintln!(
-            "audio fixture: os={} arch={} rustc={} debug_assertions={}",
+            "audio fixture: os={} arch={} rustc={} profile={}",
             std::env::consts::OS,
             std::env::consts::ARCH,
             option_env!("RUSTC_VERSION").unwrap_or("unknown"),
-            cfg!(debug_assertions)
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
         );
         for sample_rate in [44_100, 48_000, 96_000] {
             for buffer_frames in [128, 256, 512] {
@@ -811,8 +817,7 @@ mod tests {
                 let (producer, mut commands) = RingBuffer::new(2);
                 drop(producer);
                 let mut output = vec![0.0_f32; buffer_frames * 2];
-                let start = Instant::now();
-                for _ in 0..8 {
+                for _ in 0..WARMUP_CALLBACKS {
                     render(
                         &mut output,
                         2,
@@ -823,13 +828,37 @@ mod tests {
                         |sample| sample,
                     );
                 }
-                let frames = (buffer_frames * 8) as u128;
-                let nanos = start.elapsed().as_nanos();
+                status.max_callback_duration_ns.store(0, Ordering::Relaxed);
+                status
+                    .max_callback_load_per_mille
+                    .store(0, Ordering::Relaxed);
+                status.callback_overruns.store(0, Ordering::Relaxed);
+                let mut durations = Vec::with_capacity(MEASURED_CALLBACKS);
+                for _ in 0..MEASURED_CALLBACKS {
+                    let start = Instant::now();
+                    render(
+                        &mut output,
+                        2,
+                        sample_rate,
+                        &status,
+                        &mut renderer,
+                        &mut commands,
+                        |sample| sample,
+                    );
+                    durations.push(start.elapsed().as_nanos());
+                }
+                durations.sort_unstable();
+                let median = durations[MEASURED_CALLBACKS / 2];
+                let p95 = durations[(MEASURED_CALLBACKS * 95 / 100).min(MEASURED_CALLBACKS - 1)];
+                let budget_ns =
+                    buffer_frames as u128 * 1_000_000_000_u128 / u128::from(sample_rate);
                 eprintln!(
-                    "audio fixture: sr={} buffer={} ns/frame={:.1} callback_load={}‰",
+                    "audio fixture: sr={} buffer={} median_ns/frame={:.1} median_load={}‰ p95_load={}‰ max_load={}‰",
                     sample_rate,
                     buffer_frames,
-                    nanos as f64 / frames as f64,
+                    median as f64 / buffer_frames as f64,
+                    median * 1_000 / budget_ns,
+                    p95 * 1_000 / budget_ns,
                     status.max_callback_load_per_mille.load(Ordering::Relaxed),
                 );
                 assert!(output.iter().all(|sample| sample.is_finite()));

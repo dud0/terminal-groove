@@ -171,23 +171,6 @@ impl Renderer {
         } else {
             (20.0, 20_000.0_f32.min(sr * 0.45), 6.0)
         };
-        let cutoff_percent = modulated_percent(cutoff_base, cutoff_offset);
-        let base_cutoff = if cutoff_offset == 0.0 {
-            if cutoff_base != v.cached_cutoff_percent
-                || v.cached_cutoff_bass != v.bass
-                || v.cached_cutoff_hz > maximum_cutoff
-            {
-                v.cached_cutoff_percent = cutoff_base;
-                v.cached_cutoff_bass = v.bass;
-                v.cached_cutoff_hz = exp_map_f32(cutoff_base, minimum_cutoff, maximum_cutoff);
-            }
-            v.cached_cutoff_hz
-        } else {
-            exp_map_f32(cutoff_percent, minimum_cutoff, maximum_cutoff)
-        };
-        let cutoff = (base_cutoff
-            * 2.0_f32.powf(env * (filter_env * envelope_octaves + accent_filter)))
-        .min(maximum_cutoff);
         let resonance_percent = modulated_percent(
             v.resonance_percent.next_value(),
             offsets[ParameterId::Resonance as usize],
@@ -197,16 +180,38 @@ impl Renderer {
         let reverb_send = v.reverb_send.next_value();
         let oversampled_rate = sr * 2.0;
         let bass_resonance = resonance_percent / 100.0;
-        if v.bass {
-            v.bass_filter
-                .set_parameters(cutoff, bass_resonance, oversampled_rate);
-        } else {
-            v.roland_filter.set_parameters(
-                cutoff,
-                bass_resonance * if v.chord { 0.95 } else { 1.0 },
-                oversampled_rate,
-            );
+        if v.filter_control_remaining == 0 {
+            let cutoff_percent = modulated_percent(cutoff_base, cutoff_offset);
+            let base_cutoff = if cutoff_offset == 0.0 {
+                if cutoff_base != v.cached_cutoff_percent
+                    || v.cached_cutoff_bass != v.bass
+                    || v.cached_cutoff_hz > maximum_cutoff
+                {
+                    v.cached_cutoff_percent = cutoff_base;
+                    v.cached_cutoff_bass = v.bass;
+                    v.cached_cutoff_hz = exp_map_f32(cutoff_base, minimum_cutoff, maximum_cutoff);
+                }
+                v.cached_cutoff_hz
+            } else {
+                exp_map_f32(cutoff_percent, minimum_cutoff, maximum_cutoff)
+            };
+            let cutoff = (base_cutoff
+                * 2.0_f32.powf(env * (filter_env * envelope_octaves + accent_filter)))
+            .min(maximum_cutoff);
+            if v.bass {
+                v.bass_filter
+                    .set_parameters_smoothed(cutoff, bass_resonance, oversampled_rate, 16);
+            } else {
+                v.roland_filter.set_parameters_smoothed(
+                    cutoff,
+                    bass_resonance * if v.chord { 0.95 } else { 1.0 },
+                    oversampled_rate,
+                    16,
+                );
+            }
+            v.filter_control_remaining = 8;
         }
+        v.filter_control_remaining -= 1;
         let (mix, width, sub) = if v.bass {
             (0.0, 0.5, 0.0)
         } else {
@@ -226,9 +231,7 @@ impl Renderer {
                 ) / 100.0,
             )
         };
-        let angle = mix * std::f32::consts::FRAC_PI_2;
-        let mix_cos = angle.cos();
-        let mix_sin = angle.sin();
+        let (mix_cos, mix_sin) = v.oscillator_mix_gains(mix);
         let mut filtered = 0.0;
         for _ in 0..2 {
             let osc = if v.bass {

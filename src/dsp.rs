@@ -540,11 +540,10 @@ impl TrackEffectChain {
             };
             let feedback =
                 (self.phaser_feedback_l + self.phaser_feedback_r) * 0.5 * phaser_feedback;
-            let effective_mix = if phaser_mix > 0.0 {
-                phaser_mix
-            } else {
-                self.phaser_tail_remaining as f32 / self.tail_length() as f32
-            };
+            // Once the user-facing mix ramp reaches zero, keep draining the
+            // feedback state silently. Re-expanding the tail to a derived wet
+            // mix here would create a near-100% wet discontinuity.
+            let effective_mix = phaser_mix;
             let left_input = distorted_l + feedback;
             let right_input = distorted_r - feedback;
             let left = Self::phaser_sample(
@@ -587,11 +586,7 @@ impl TrackEffectChain {
         } else {
             self.flanger_tail_remaining.saturating_sub(1)
         };
-        let effective_mix = if flanger_mix > 0.0 {
-            flanger_mix
-        } else {
-            self.flanger_tail_remaining as f32 / self.tail_length() as f32
-        };
+        let effective_mix = flanger_mix;
         self.flanger_sample(
             processed_l,
             processed_r,
@@ -850,6 +845,11 @@ pub struct Adsr {
     cached_attack_coefficient: f32,
     cached_decay_coefficient: f32,
     cached_release_coefficient: f32,
+    modulated_attack: f32,
+    modulated_attack_coefficient: f32,
+    modulated_decay_coefficient: f32,
+    modulated_release_coefficient: f32,
+    modulation_refresh_remaining: u8,
 }
 impl Adsr {
     pub fn new(sr: f32) -> Self {
@@ -871,6 +871,11 @@ impl Adsr {
             cached_attack_coefficient: 1.0,
             cached_decay_coefficient: 1.0,
             cached_release_coefficient: 1.0,
+            modulated_attack: 0.0,
+            modulated_attack_coefficient: 1.0,
+            modulated_decay_coefficient: 1.0,
+            modulated_release_coefficient: 1.0,
+            modulation_refresh_remaining: 0,
         }
     }
     pub fn set_profile(&mut self, profile: EnvelopeProfile) {
@@ -918,7 +923,7 @@ impl Adsr {
                     self.cached_decay_coefficient,
                     self.cached_release_coefficient,
                 )
-            } else {
+            } else if self.modulation_refresh_remaining == 0 {
                 let attack_percent = (attack_base + attack_offset).clamp(0.0, 100.0);
                 let decay_percent = (decay_base + decay_offset).clamp(0.0, 100.0);
                 let release_percent = (release_base + release_offset).clamp(0.0, 100.0);
@@ -931,17 +936,32 @@ impl Adsr {
                 };
                 let decay = exp_map_f32(decay_percent, decay_min, decay_max);
                 let release = exp_map_f32(release_percent, release_min, release_max);
+                self.modulated_attack = attack;
+                self.modulated_attack_coefficient = if attack == 0.0 {
+                    1.0
+                } else {
+                    1.0 - (-6.907_755 / (attack * self.sr).max(1.0)).exp()
+                };
+                self.modulated_decay_coefficient =
+                    1.0 - (-6.907_755 / (decay * self.sr).max(1.0)).exp();
+                self.modulated_release_coefficient =
+                    (-6.907_755 / (release * self.sr).max(1.0)).exp();
+                self.modulation_refresh_remaining = 8;
                 (
-                    attack,
-                    if attack == 0.0 {
-                        1.0
-                    } else {
-                        1.0 - (-6.907_755 / (attack * self.sr).max(1.0)).exp()
-                    },
-                    1.0 - (-6.907_755 / (decay * self.sr).max(1.0)).exp(),
-                    (-6.907_755 / (release * self.sr).max(1.0)).exp(),
+                    self.modulated_attack,
+                    self.modulated_attack_coefficient,
+                    self.modulated_decay_coefficient,
+                    self.modulated_release_coefficient,
+                )
+            } else {
+                (
+                    self.modulated_attack,
+                    self.modulated_attack_coefficient,
+                    self.modulated_decay_coefficient,
+                    self.modulated_release_coefficient,
                 )
             };
+        self.modulation_refresh_remaining = self.modulation_refresh_remaining.saturating_sub(1);
         match self.stage {
             EnvStage::Idle => {}
             EnvStage::Attack => {
@@ -1050,6 +1070,9 @@ pub struct LadderFilter {
     stages: [f32; 4],
     coefficient: f32,
     feedback: f32,
+    coefficient_step: f32,
+    feedback_step: f32,
+    parameter_smoothing_remaining: u8,
     cached_cutoff: f32,
     cached_resonance: f32,
     cached_sr: f32,
@@ -1061,6 +1084,9 @@ impl LadderFilter {
             stages: [0.0; 4],
             coefficient: 0.0,
             feedback: 0.0,
+            coefficient_step: 0.0,
+            feedback_step: 0.0,
+            parameter_smoothing_remaining: 0,
             cached_cutoff: f32::NAN,
             cached_resonance: f32::NAN,
             cached_sr: f32::NAN,
@@ -1073,20 +1099,39 @@ impl LadderFilter {
     }
 
     pub fn set_parameters(&mut self, cutoff: f32, resonance: f32, sr: f32) {
+        self.set_parameters_smoothed(cutoff, resonance, sr, 0);
+    }
+
+    pub fn set_parameters_smoothed(&mut self, cutoff: f32, resonance: f32, sr: f32, samples: u8) {
         if cutoff == self.cached_cutoff
             && resonance == self.cached_resonance
             && sr == self.cached_sr
         {
             return;
         }
+        let initialize = !self.cached_sr.is_finite() || samples == 0;
         self.cached_cutoff = cutoff;
         self.cached_resonance = resonance;
         self.cached_sr = sr;
-        self.coefficient = 1.0 - (-2.0 * PI * cutoff.clamp(20.0, sr * 0.45) / sr).exp();
-        self.feedback = resonance.clamp(0.0, 1.0) * 3.85;
+        let target_coefficient = 1.0 - (-2.0 * PI * cutoff.clamp(20.0, sr * 0.45) / sr).exp();
+        let target_feedback = resonance.clamp(0.0, 1.0) * 3.85;
+        if initialize {
+            self.coefficient = target_coefficient;
+            self.feedback = target_feedback;
+            self.parameter_smoothing_remaining = 0;
+        } else {
+            self.coefficient_step = (target_coefficient - self.coefficient) / f32::from(samples);
+            self.feedback_step = (target_feedback - self.feedback) / f32::from(samples);
+            self.parameter_smoothing_remaining = samples;
+        }
     }
 
     pub fn process(&mut self, input: f32) -> f32 {
+        if self.parameter_smoothing_remaining > 0 {
+            self.coefficient += self.coefficient_step;
+            self.feedback += self.feedback_step;
+            self.parameter_smoothing_remaining -= 1;
+        }
         let mut stage_input = (input - self.stages[3] * self.feedback).tanh();
         for stage in &mut self.stages {
             *stage += self.coefficient * (stage_input - stage.tanh());
@@ -2295,6 +2340,46 @@ mod tests {
             stereo |= (left - right).abs() > 0.000_001;
         }
         assert!(stereo);
+    }
+
+    #[test]
+    fn disabling_flanger_drains_feedback_without_restoring_wet_mix() {
+        let mut chain = TrackEffectChain::new(8_000);
+        let mut effects = TrackEffects::default();
+        effects.flanger.feedback = crate::model::Percent::new(90).unwrap();
+        effects.flanger.mix = crate::model::Percent::new(100).unwrap();
+        chain.configure(effects, ParameterLocks::default(), 0);
+        chain.flanger_l.fill(0.75);
+        chain.flanger_r.fill(-0.75);
+        chain.flanger_tail_remaining = chain.tail_length();
+
+        chain.configure(TrackEffects::default(), ParameterLocks::default(), 1);
+        let output = chain.process_stereo(0.0, 0.0);
+
+        assert_eq!(chain.flanger_mix.value(), 0.0);
+        assert!(chain.flanger_active, "feedback should drain internally");
+        assert_eq!(output, (0.0, 0.0), "zero mix must remain an exact bypass");
+    }
+
+    #[test]
+    fn disabling_phaser_drains_feedback_without_restoring_wet_mix() {
+        let mut chain = TrackEffectChain::new(8_000);
+        let mut effects = TrackEffects::default();
+        effects.phaser.feedback = crate::model::Percent::new(90).unwrap();
+        effects.phaser.mix = crate::model::Percent::new(100).unwrap();
+        chain.configure(effects, ParameterLocks::default(), 0);
+        chain.phaser_feedback_l = 0.75;
+        chain.phaser_feedback_r = -0.5;
+        chain.phaser_l[0].state = 0.5;
+        chain.phaser_r[0].state = -0.5;
+        chain.phaser_tail_remaining = chain.tail_length();
+
+        chain.configure(TrackEffects::default(), ParameterLocks::default(), 1);
+        let output = chain.process_stereo(0.0, 0.0);
+
+        assert_eq!(chain.phaser_mix.value(), 0.0);
+        assert!(chain.phaser_active, "feedback should drain internally");
+        assert_eq!(output, (0.0, 0.0), "zero mix must remain an exact bypass");
     }
 
     #[test]

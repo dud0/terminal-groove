@@ -18,6 +18,7 @@ pub(super) struct SynthVoice {
     pub(super) cached_cutoff_percent: f32,
     pub(super) cached_cutoff_hz: f32,
     pub(super) cached_cutoff_bass: bool,
+    pub(super) filter_control_remaining: u8,
     pub(super) resonance_percent: Smoother,
     pub(super) filter_env_percent: Smoother,
     pub(super) locks: ParameterLocks,
@@ -35,6 +36,15 @@ pub(super) struct SynthVoice {
     pan_cache: f32,
     pan_left: f32,
     pan_right: f32,
+    pan_left_step: f32,
+    pan_right_step: f32,
+    pan_control_remaining: u8,
+    oscillator_mix_cache: f32,
+    oscillator_mix_cos: f32,
+    oscillator_mix_sin: f32,
+    oscillator_mix_cos_step: f32,
+    oscillator_mix_sin_step: f32,
+    oscillator_mix_control_remaining: u8,
 }
 
 #[derive(Clone, Copy)]
@@ -336,6 +346,9 @@ pub(super) struct DrumVoice {
     pan_cache: f32,
     pan_left: f32,
     pan_right: f32,
+    pan_left_step: f32,
+    pan_right_step: f32,
+    pan_control_remaining: u8,
     pub(super) locks: ParameterLocks,
 }
 
@@ -372,6 +385,9 @@ impl DrumVoice {
             pan_cache: f32::NAN,
             pan_left: std::f32::consts::FRAC_1_SQRT_2,
             pan_right: std::f32::consts::FRAC_1_SQRT_2,
+            pan_left_step: 0.0,
+            pan_right_step: 0.0,
+            pan_control_remaining: 0,
             locks: ParameterLocks::default(),
         }
     }
@@ -385,11 +401,19 @@ impl DrumVoice {
     }
 
     pub(super) fn pan_gains(&mut self, pan: f32) -> (f32, f32) {
-        if pan != self.pan_cache {
+        if self.pan_control_remaining == 0 && pan != self.pan_cache {
             self.pan_cache = pan;
             let angle = pan.clamp(0.0, 100.0) * std::f32::consts::FRAC_PI_2 / 100.0;
-            self.pan_left = angle.cos();
-            self.pan_right = angle.sin();
+            let target_left = angle.cos();
+            let target_right = angle.sin();
+            self.pan_left_step = (target_left - self.pan_left) / 8.0;
+            self.pan_right_step = (target_right - self.pan_right) / 8.0;
+            self.pan_control_remaining = 8;
+        }
+        if self.pan_control_remaining > 0 {
+            self.pan_left += self.pan_left_step;
+            self.pan_right += self.pan_right_step;
+            self.pan_control_remaining -= 1;
         }
         (self.pan_left, self.pan_right)
     }
@@ -411,6 +435,7 @@ impl SynthVoice {
             cached_cutoff_percent: f32::NAN,
             cached_cutoff_hz: 0.0,
             cached_cutoff_bass: false,
+            filter_control_remaining: 0,
             resonance_percent: Smoother::new(10.0),
             filter_env_percent: Smoother::new(25.0),
             locks: ParameterLocks::default(),
@@ -428,16 +453,51 @@ impl SynthVoice {
             pan_cache: f32::NAN,
             pan_left: std::f32::consts::FRAC_1_SQRT_2,
             pan_right: std::f32::consts::FRAC_1_SQRT_2,
+            pan_left_step: 0.0,
+            pan_right_step: 0.0,
+            pan_control_remaining: 0,
+            oscillator_mix_cache: f32::NAN,
+            oscillator_mix_cos: 1.0,
+            oscillator_mix_sin: 0.0,
+            oscillator_mix_cos_step: 0.0,
+            oscillator_mix_sin_step: 0.0,
+            oscillator_mix_control_remaining: 0,
         }
     }
 
     pub(super) fn pan_gains(&mut self, pan: f32) -> (f32, f32) {
-        if pan != self.pan_cache {
+        if self.pan_control_remaining == 0 && pan != self.pan_cache {
             self.pan_cache = pan;
             let angle = pan.clamp(0.0, 100.0) * std::f32::consts::FRAC_PI_2 / 100.0;
-            self.pan_left = angle.cos();
-            self.pan_right = angle.sin();
+            let target_left = angle.cos();
+            let target_right = angle.sin();
+            self.pan_left_step = (target_left - self.pan_left) / 8.0;
+            self.pan_right_step = (target_right - self.pan_right) / 8.0;
+            self.pan_control_remaining = 8;
+        }
+        if self.pan_control_remaining > 0 {
+            self.pan_left += self.pan_left_step;
+            self.pan_right += self.pan_right_step;
+            self.pan_control_remaining -= 1;
         }
         (self.pan_left, self.pan_right)
+    }
+
+    pub(super) fn oscillator_mix_gains(&mut self, mix: f32) -> (f32, f32) {
+        if self.oscillator_mix_control_remaining == 0 && mix != self.oscillator_mix_cache {
+            self.oscillator_mix_cache = mix;
+            let angle = mix * std::f32::consts::FRAC_PI_2;
+            let target_cos = angle.cos();
+            let target_sin = angle.sin();
+            self.oscillator_mix_cos_step = (target_cos - self.oscillator_mix_cos) / 8.0;
+            self.oscillator_mix_sin_step = (target_sin - self.oscillator_mix_sin) / 8.0;
+            self.oscillator_mix_control_remaining = 8;
+        }
+        if self.oscillator_mix_control_remaining > 0 {
+            self.oscillator_mix_cos += self.oscillator_mix_cos_step;
+            self.oscillator_mix_sin += self.oscillator_mix_sin_step;
+            self.oscillator_mix_control_remaining -= 1;
+        }
+        (self.oscillator_mix_cos, self.oscillator_mix_sin)
     }
 }
