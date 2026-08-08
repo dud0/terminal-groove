@@ -77,6 +77,7 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
             }
             renderer.chord.active = false;
             renderer.preview_chord.active = false;
+            renderer.preview_activity = [false; TRACK_COUNT];
             renderer.chord.arpeggio = ArpeggioState::default();
             renderer.preview_chord.arpeggio = ArpeggioState::default();
             renderer.chord.chorus.clear();

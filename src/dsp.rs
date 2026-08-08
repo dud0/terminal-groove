@@ -24,9 +24,10 @@ pub fn equal_power_pan(pan: f32) -> (f32, f32) {
 pub struct SidechainCompressor {
     sample_rate: f32,
     depth_db: f32,
-    attack_seconds: f32,
-    release_seconds: f32,
+    attack_coefficient: f32,
+    release_coefficient: f32,
     envelope: f32,
+    gain: f32,
 }
 
 impl SidechainCompressor {
@@ -34,9 +35,10 @@ impl SidechainCompressor {
         let mut compressor = Self {
             sample_rate: sample_rate as f32,
             depth_db: 0.0,
-            attack_seconds: 0.001,
-            release_seconds: 0.1,
+            attack_coefficient: 1.0,
+            release_coefficient: 1.0,
             envelope: 0.0,
+            gain: 1.0,
         };
         compressor.configure(SidechainParameters::default());
         compressor
@@ -44,12 +46,16 @@ impl SidechainCompressor {
 
     pub fn configure(&mut self, parameters: SidechainParameters) {
         self.depth_db = parameters.depth_db().clamp(0.0, 18.0);
-        self.attack_seconds = (parameters.attack_ms() * 0.001).clamp(0.0005, 0.030);
-        self.release_seconds = (parameters.release_ms() * 0.001).clamp(0.040, 1.0);
+        let attack = (parameters.attack_ms() * 0.001).clamp(0.0005, 0.030);
+        let release = (parameters.release_ms() * 0.001).clamp(0.040, 1.0);
+        self.attack_coefficient = one_pole_coefficient(self.sample_rate, attack);
+        self.release_coefficient = one_pole_coefficient(self.sample_rate, release);
+        self.update_gain();
     }
 
     pub fn reset(&mut self) {
         self.envelope = 0.0;
+        self.gain = 1.0;
     }
 
     pub fn envelope(&self) -> f32 {
@@ -57,30 +63,39 @@ impl SidechainCompressor {
     }
 
     pub fn current_gain(&self) -> f32 {
-        let gain = 10.0_f32.powf(-(self.depth_db * self.envelope) / 20.0);
-        if gain.is_finite() {
-            gain.clamp(0.0, 1.0)
-        } else {
-            1.0
-        }
+        self.gain
     }
 
     pub fn process_stereo(&mut self, input_l: f32, input_r: f32) -> f32 {
         let peak = input_l.abs().max(input_r.abs());
         if !peak.is_finite() {
             self.envelope = 0.0;
+            self.gain = 1.0;
             return self.current_gain();
         }
         let peak = peak.clamp(0.0, 1.0);
-        let time = if peak > self.envelope {
-            self.attack_seconds
+        let coefficient = if peak > self.envelope {
+            self.attack_coefficient
         } else {
-            self.release_seconds
+            self.release_coefficient
         };
-        let coefficient = 1.0 - (-1.0 / (self.sample_rate.max(1.0) * time)).exp();
         self.envelope = (self.envelope + (peak - self.envelope) * coefficient).clamp(0.0, 1.0);
-        self.current_gain()
+        self.update_gain();
+        self.gain
     }
+
+    fn update_gain(&mut self) {
+        let gain = 10.0_f32.powf(-(self.depth_db * self.envelope) / 20.0);
+        self.gain = if gain.is_finite() {
+            gain.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+    }
+}
+
+fn one_pole_coefficient(sample_rate: f32, seconds: f32) -> f32 {
+    1.0 - (-1.0 / (sample_rate.max(1.0) * seconds)).exp()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -91,6 +106,11 @@ pub struct Lfo {
     rng: u32,
     seed: u32,
     active: bool,
+    cached_config: Option<LfoConfig>,
+    cached_tempo_bpm: u16,
+    cached_sample_rate: f32,
+    increment: f32,
+    smoothing_coefficient: f32,
 }
 
 impl Lfo {
@@ -103,6 +123,11 @@ impl Lfo {
             rng: seed,
             seed,
             active: false,
+            cached_config: None,
+            cached_tempo_bpm: 0,
+            cached_sample_rate: 0.0,
+            increment: 0.0,
+            smoothing_coefficient: 0.0,
         }
     }
 
@@ -135,6 +160,16 @@ impl Lfo {
             self.held = self.random_bipolar();
             self.active = true;
         }
+        if self.cached_config != Some(config)
+            || self.cached_tempo_bpm != tempo_bpm
+            || self.cached_sample_rate != sample_rate
+        {
+            self.cached_config = Some(config);
+            self.cached_tempo_bpm = tempo_bpm;
+            self.cached_sample_rate = sample_rate;
+            self.increment = config.rate.hz(tempo_bpm) / sample_rate;
+            self.smoothing_coefficient = 1.0 - (-1.0 / (sample_rate * 0.005).max(1.0)).exp();
+        }
         let raw = match config.waveform {
             LfoWaveform::Sine => (std::f32::consts::TAU * self.phase).sin(),
             LfoWaveform::Triangle => (2.0 / PI) * (std::f32::consts::TAU * self.phase).sin().asin(),
@@ -148,10 +183,8 @@ impl Lfo {
             LfoWaveform::Saw => self.phase * 2.0 - 1.0,
             LfoWaveform::SampleAndHold => self.held,
         };
-        let smoothing = 1.0 - (-1.0 / (sample_rate * 0.005).max(1.0)).exp();
-        self.smoothed += (raw - self.smoothed) * smoothing;
-        let increment = config.rate.hz(tempo_bpm) / sample_rate;
-        self.phase += increment.max(0.0);
+        self.smoothed += (raw - self.smoothed) * self.smoothing_coefficient;
+        self.phase += self.increment.max(0.0);
         if self.phase >= 1.0 {
             self.phase = self.phase.fract();
             if config.waveform == LfoWaveform::SampleAndHold {
@@ -207,6 +240,14 @@ impl Smoother {
         }
         self.current
     }
+
+    pub fn value(&self) -> f32 {
+        self.current
+    }
+
+    pub fn is_smoothing(&self) -> bool {
+        self.remaining != 0
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -240,8 +281,6 @@ const FLANGER_BUFFER_SIZE: usize = 8_192;
 #[derive(Clone, Copy, Debug)]
 struct FlangerControls {
     rate: f32,
-    delay: f32,
-    depth: f32,
     feedback: f32,
     mix: f32,
 }
@@ -249,11 +288,21 @@ struct FlangerControls {
 #[derive(Debug)]
 pub struct TrackEffectChain {
     processing: bool,
+    distortion_active: bool,
+    phaser_active: bool,
+    flanger_active: bool,
+    distortion_tail_remaining: u32,
+    phaser_tail_remaining: u32,
+    flanger_tail_remaining: u32,
     distortion_drive: Smoother,
     distortion_tone: Smoother,
     distortion_mix: Smoother,
     distortion_state_l: f32,
     distortion_state_r: f32,
+    distortion_gain: f32,
+    distortion_coefficient: f32,
+    cached_distortion_drive: f32,
+    cached_distortion_tone: f32,
     phaser_rate: Smoother,
     phaser_depth: Smoother,
     phaser_feedback: Smoother,
@@ -263,6 +312,10 @@ pub struct TrackEffectChain {
     phaser_feedback_r: f32,
     phaser_l: [EffectAllpass; 4],
     phaser_r: [EffectAllpass; 4],
+    phaser_sweep: f32,
+    phaser_rate_hz: f32,
+    cached_phaser_depth: f32,
+    cached_phaser_rate: f32,
     flanger_rate: Smoother,
     flanger_delay: Smoother,
     flanger_depth: Smoother,
@@ -273,6 +326,12 @@ pub struct TrackEffectChain {
     flanger_l: Box<[f32]>,
     flanger_r: Box<[f32]>,
     sample_rate: f32,
+    flanger_rate_hz: f32,
+    flanger_center_samples: f32,
+    flanger_depth_samples: f32,
+    cached_flanger_rate: f32,
+    cached_flanger_delay: f32,
+    cached_flanger_depth: f32,
 }
 
 impl TrackEffectChain {
@@ -281,11 +340,21 @@ impl TrackEffectChain {
         let flanger_r = vec![0.0; FLANGER_BUFFER_SIZE].into_boxed_slice();
         Self {
             processing: false,
+            distortion_active: false,
+            phaser_active: false,
+            flanger_active: false,
+            distortion_tail_remaining: 0,
+            phaser_tail_remaining: 0,
+            flanger_tail_remaining: 0,
             distortion_drive: Smoother::new(0.0),
             distortion_tone: Smoother::new(50.0),
             distortion_mix: Smoother::new(0.0),
             distortion_state_l: 0.0,
             distortion_state_r: 0.0,
+            distortion_gain: 1.0,
+            distortion_coefficient: 1.0,
+            cached_distortion_drive: f32::NAN,
+            cached_distortion_tone: f32::NAN,
             phaser_rate: Smoother::new(25.0),
             phaser_depth: Smoother::new(50.0),
             phaser_feedback: Smoother::new(20.0),
@@ -295,6 +364,10 @@ impl TrackEffectChain {
             phaser_feedback_r: 0.0,
             phaser_l: [EffectAllpass::new(); 4],
             phaser_r: [EffectAllpass::new(); 4],
+            phaser_sweep: 0.0,
+            phaser_rate_hz: 0.05,
+            cached_phaser_depth: f32::NAN,
+            cached_phaser_rate: f32::NAN,
             flanger_rate: Smoother::new(25.0),
             flanger_delay: Smoother::new(18.0),
             flanger_depth: Smoother::new(50.0),
@@ -305,6 +378,12 @@ impl TrackEffectChain {
             flanger_l,
             flanger_r,
             sample_rate: sample_rate as f32,
+            flanger_rate_hz: 0.05,
+            flanger_center_samples: sample_rate as f32 * 0.0002,
+            flanger_depth_samples: 0.0,
+            cached_flanger_rate: f32::NAN,
+            cached_flanger_delay: f32::NAN,
+            cached_flanger_depth: f32::NAN,
         }
     }
 
@@ -387,85 +466,139 @@ impl TrackEffectChain {
         if !self.processing {
             return (input_l, input_r);
         }
-        let drive = self.distortion_drive.next_value();
-        let tone = self.distortion_tone.next_value();
         let distortion_mix = self.distortion_mix.next_value() / 100.0;
-        let phaser_rate = self.phaser_rate.next_value();
-        let phaser_depth = self.phaser_depth.next_value();
-        let phaser_feedback = (self.phaser_feedback.next_value() / 100.0).clamp(0.0, 0.9);
         let phaser_mix = self.phaser_mix.next_value() / 100.0;
-        let flanger_rate = self.flanger_rate.next_value();
-        let flanger_delay = self.flanger_delay.next_value();
-        let flanger_depth = self.flanger_depth.next_value();
-        let flanger_feedback = (self.flanger_feedback.next_value() / 100.0).clamp(0.0, 0.9);
         let flanger_mix = self.flanger_mix.next_value() / 100.0;
-        if distortion_mix <= 0.0 && phaser_mix <= 0.0 && flanger_mix <= 0.0 {
-            self.processing = false;
+        let input_peak = finite_or_zero(input_l)
+            .abs()
+            .max(finite_or_zero(input_r).abs());
+        let input_active = input_peak > SILENCE_THRESHOLD;
+        let distortion_active =
+            distortion_mix > 0.0 && (input_active || self.distortion_tail_remaining > 0);
+        let phaser_active = if phaser_mix > 0.0 {
+            input_active || self.phaser_tail_remaining > 0
+        } else {
+            !input_active && self.phaser_tail_remaining > 0
+        };
+        let flanger_active = if flanger_mix > 0.0 {
+            input_active || self.flanger_tail_remaining > 0
+        } else {
+            !input_active && self.flanger_tail_remaining > 0
+        };
+        if !distortion_active && !phaser_active && !flanger_active {
+            self.distortion_active = false;
+            self.phaser_active = false;
+            self.flanger_active = false;
+            self.processing = self.has_pending_parameters();
             return (input_l, input_r);
         }
 
-        let gain = exp_map_f32(drive, 1.0, 31.622_776);
-        let cutoff = exp_map_f32(tone, 700.0, (18_000.0_f32).min(self.sample_rate * 0.45));
-        let coefficient = 1.0 - (-std::f32::consts::TAU * cutoff / self.sample_rate).exp();
-        let distorted_l = Self::distort_sample(
-            input_l,
-            gain,
-            coefficient,
-            distortion_mix,
-            &mut self.distortion_state_l,
-        );
-        let distorted_r = Self::distort_sample(
-            input_r,
-            gain,
-            coefficient,
-            distortion_mix,
-            &mut self.distortion_state_r,
-        );
+        self.distortion_active = distortion_active;
+        self.phaser_active = phaser_active;
+        self.flanger_active = flanger_active;
 
-        let (processed_l, processed_r) = if phaser_mix <= 0.0 {
-            (distorted_l, distorted_r)
+        let distorted_l = if distortion_active {
+            let drive = self.distortion_drive.next_value();
+            let tone = self.distortion_tone.next_value();
+            self.update_distortion_cache(drive, tone);
+            self.distortion_tail_remaining = if input_active {
+                self.tail_length()
+            } else {
+                self.distortion_tail_remaining.saturating_sub(1)
+            };
+            Self::distort_sample(
+                input_l,
+                self.distortion_gain,
+                self.distortion_coefficient,
+                distortion_mix,
+                &mut self.distortion_state_l,
+            )
         } else {
-            let sweep = (8_000.0_f32 / 300.0).ln() * phaser_depth / 100.0;
-            let rate = exp_map_f32(phaser_rate, 0.05, 8.0);
+            input_l
+        };
+        let distorted_r = if distortion_active {
+            Self::distort_sample(
+                input_r,
+                self.distortion_gain,
+                self.distortion_coefficient,
+                distortion_mix,
+                &mut self.distortion_state_r,
+            )
+        } else {
+            input_r
+        };
+
+        let (processed_l, processed_r) = if phaser_active {
+            let phaser_rate = self.phaser_rate.next_value();
+            let phaser_depth = self.phaser_depth.next_value();
+            let phaser_feedback = (self.phaser_feedback.next_value() / 100.0).clamp(0.0, 0.9);
+            self.update_phaser_cache(phaser_rate, phaser_depth);
+            self.phaser_tail_remaining = if input_active {
+                self.tail_length()
+            } else {
+                self.phaser_tail_remaining.saturating_sub(1)
+            };
             let feedback =
                 (self.phaser_feedback_l + self.phaser_feedback_r) * 0.5 * phaser_feedback;
+            let effective_mix = if phaser_mix > 0.0 {
+                phaser_mix
+            } else {
+                self.phaser_tail_remaining as f32 / self.tail_length() as f32
+            };
             let left_input = distorted_l + feedback;
             let right_input = distorted_r - feedback;
             let left = Self::phaser_sample(
                 &mut self.phaser_l,
                 left_input,
                 self.phaser_phase,
-                sweep,
+                self.phaser_sweep,
                 self.sample_rate,
             );
             let right = Self::phaser_sample(
                 &mut self.phaser_r,
                 right_input,
                 (self.phaser_phase + 0.5).fract(),
-                sweep,
+                self.phaser_sweep,
                 self.sample_rate,
             );
             self.phaser_feedback_l = left;
             self.phaser_feedback_r = right;
-            self.phaser_phase = (self.phaser_phase + rate / self.sample_rate).fract();
+            self.phaser_phase =
+                (self.phaser_phase + self.phaser_rate_hz / self.sample_rate).fract();
             (
-                distorted_l * (1.0 - phaser_mix) + left * phaser_mix,
-                distorted_r * (1.0 - phaser_mix) + right * phaser_mix,
+                distorted_l * (1.0 - effective_mix) + left * effective_mix,
+                distorted_r * (1.0 - effective_mix) + right * effective_mix,
             )
+        } else {
+            (distorted_l, distorted_r)
         };
 
-        if flanger_mix <= 0.0 {
+        if !flanger_active {
+            self.processing = self.has_pending_parameters();
             return (processed_l, processed_r);
         }
+        let flanger_rate = self.flanger_rate.next_value();
+        let flanger_delay = self.flanger_delay.next_value();
+        let flanger_depth = self.flanger_depth.next_value();
+        let flanger_feedback = (self.flanger_feedback.next_value() / 100.0).clamp(0.0, 0.9);
+        self.update_flanger_cache(flanger_rate, flanger_delay, flanger_depth);
+        self.flanger_tail_remaining = if input_active {
+            self.tail_length()
+        } else {
+            self.flanger_tail_remaining.saturating_sub(1)
+        };
+        let effective_mix = if flanger_mix > 0.0 {
+            flanger_mix
+        } else {
+            self.flanger_tail_remaining as f32 / self.tail_length() as f32
+        };
         self.flanger_sample(
             processed_l,
             processed_r,
             FlangerControls {
-                rate: flanger_rate,
-                delay: flanger_delay,
-                depth: flanger_depth,
+                rate: self.flanger_rate_hz,
                 feedback: flanger_feedback,
-                mix: flanger_mix,
+                mix: effective_mix,
             },
         )
     }
@@ -500,12 +633,8 @@ impl TrackEffectChain {
         input_r: f32,
         controls: FlangerControls,
     ) -> (f32, f32) {
-        let center_ms = 0.2 + controls.delay.clamp(0.0, 100.0) * 0.098;
-        let depth_ms = controls.depth.clamp(0.0, 100.0) * 0.05;
-        let rate = exp_map_f32(controls.rate.clamp(0.0, 100.0), 0.05, 8.0);
-        let left_delay = self.flanger_delay_samples(center_ms, depth_ms, self.flanger_phase);
-        let right_delay =
-            self.flanger_delay_samples(center_ms, depth_ms, (self.flanger_phase + 0.5).fract());
+        let left_delay = self.flanger_delay_samples_cached(self.flanger_phase);
+        let right_delay = self.flanger_delay_samples_cached((self.flanger_phase + 0.5).fract());
         let delayed_l = Self::read_delay(&self.flanger_l, self.flanger_write, left_delay);
         let delayed_r = Self::read_delay(&self.flanger_r, self.flanger_write, right_delay);
         self.flanger_l[self.flanger_write] =
@@ -513,17 +642,82 @@ impl TrackEffectChain {
         self.flanger_r[self.flanger_write] =
             finite_or_zero(input_r + delayed_r * controls.feedback);
         self.flanger_write = (self.flanger_write + 1) % FLANGER_BUFFER_SIZE;
-        self.flanger_phase = (self.flanger_phase + rate / self.sample_rate).fract();
+        self.flanger_phase = (self.flanger_phase + controls.rate / self.sample_rate).fract();
         (
             finite_or_zero(input_l * (1.0 - controls.mix) + delayed_l * controls.mix),
             finite_or_zero(input_r * (1.0 - controls.mix) + delayed_r * controls.mix),
         )
     }
 
+    #[cfg(test)]
     fn flanger_delay_samples(&self, center_ms: f32, depth_ms: f32, phase: f32) -> f32 {
         let delay_ms = center_ms + (std::f32::consts::TAU * phase).sin() * depth_ms;
         (delay_ms.max(0.1) * self.sample_rate / 1_000.0)
             .clamp(1.0, (self.flanger_l.len() - 2) as f32)
+    }
+
+    fn flanger_delay_samples_cached(&self, phase: f32) -> f32 {
+        (self.flanger_center_samples
+            + self.flanger_depth_samples * (std::f32::consts::TAU * phase).sin())
+        .max(1.0)
+        .clamp(1.0, (self.flanger_l.len() - 2) as f32)
+    }
+
+    fn tail_length(&self) -> u32 {
+        (self.sample_rate * 0.25).round().max(1.0) as u32
+    }
+
+    fn has_pending_parameters(&self) -> bool {
+        self.distortion_mix.is_smoothing()
+            || self.phaser_mix.is_smoothing()
+            || self.flanger_mix.is_smoothing()
+            || self.distortion_mix.target > 0.0
+            || self.phaser_mix.target > 0.0
+            || self.flanger_mix.target > 0.0
+            || self.distortion_active
+            || self.phaser_active
+            || self.flanger_active
+    }
+
+    fn update_distortion_cache(&mut self, drive: f32, tone: f32) {
+        if drive == self.cached_distortion_drive && tone == self.cached_distortion_tone {
+            return;
+        }
+        self.cached_distortion_drive = drive;
+        self.cached_distortion_tone = tone;
+        self.distortion_gain = exp_map_f32(drive, 1.0, 31.622_776);
+        let cutoff = exp_map_f32(tone, 700.0, (18_000.0_f32).min(self.sample_rate * 0.45));
+        self.distortion_coefficient =
+            1.0 - (-std::f32::consts::TAU * cutoff / self.sample_rate).exp();
+    }
+
+    fn update_phaser_cache(&mut self, rate: f32, depth: f32) {
+        if rate != self.cached_phaser_rate || depth != self.cached_phaser_depth {
+            self.cached_phaser_rate = rate;
+            self.cached_phaser_depth = depth;
+            self.phaser_sweep = (8_000.0_f32 / 300.0).ln() * depth / 100.0;
+            self.phaser_rate_hz = exp_map_f32(rate, 0.05, 8.0);
+        }
+    }
+
+    fn update_flanger_cache(&mut self, rate: f32, delay: f32, depth: f32) {
+        if rate != self.cached_flanger_rate
+            || delay != self.cached_flanger_delay
+            || depth != self.cached_flanger_depth
+        {
+            self.cached_flanger_rate = rate;
+            self.cached_flanger_delay = delay;
+            self.cached_flanger_depth = depth;
+            self.flanger_rate_hz = exp_map_f32(rate, 0.05, 8.0);
+            self.flanger_center_samples =
+                (0.2 + delay.clamp(0.0, 100.0) * 0.098) * self.sample_rate / 1_000.0;
+            self.flanger_depth_samples =
+                depth.clamp(0.0, 100.0) * 0.05 * self.sample_rate / 1_000.0;
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.distortion_active || self.phaser_active || self.flanger_active
     }
 
     fn read_delay(buffer: &[f32], write: usize, delay: f32) -> f32 {
@@ -540,6 +734,12 @@ impl TrackEffectChain {
     pub fn clear(&mut self) {
         self.distortion_state_l = 0.0;
         self.distortion_state_r = 0.0;
+        self.distortion_active = false;
+        self.phaser_active = false;
+        self.flanger_active = false;
+        self.distortion_tail_remaining = 0;
+        self.phaser_tail_remaining = 0;
+        self.flanger_tail_remaining = 0;
         self.phaser_phase = 0.0;
         self.phaser_feedback_l = 0.0;
         self.phaser_feedback_r = 0.0;
@@ -641,6 +841,15 @@ pub struct Adsr {
     release_percent: Smoother,
     sr: f32,
     profile: EnvelopeProfile,
+    cached_attack_percent: f32,
+    cached_decay_percent: f32,
+    cached_release_percent: f32,
+    cached_attack: f32,
+    cached_decay: f32,
+    cached_release: f32,
+    cached_attack_coefficient: f32,
+    cached_decay_coefficient: f32,
+    cached_release_coefficient: f32,
 }
 impl Adsr {
     pub fn new(sr: f32) -> Self {
@@ -653,10 +862,22 @@ impl Adsr {
             release_percent: Smoother::new(15.0),
             sr,
             profile: EnvelopeProfile::Generic,
+            cached_attack_percent: f32::NAN,
+            cached_decay_percent: f32::NAN,
+            cached_release_percent: f32::NAN,
+            cached_attack: 0.0,
+            cached_decay: 0.005,
+            cached_release: 0.005,
+            cached_attack_coefficient: 1.0,
+            cached_decay_coefficient: 1.0,
+            cached_release_coefficient: 1.0,
         }
     }
     pub fn set_profile(&mut self, profile: EnvelopeProfile) {
-        self.profile = profile;
+        if self.profile != profile {
+            self.profile = profile;
+            self.cached_attack_percent = f32::NAN;
+        }
     }
     pub fn configure_percent(&mut self, a: u8, d: u8, s: u8, r: u8, samples: u32) {
         self.attack_percent.set(a as f32, samples);
@@ -683,25 +904,44 @@ impl Adsr {
         sustain_offset: f32,
         release_offset: f32,
     ) -> f32 {
-        let attack_percent = (self.attack_percent.next_value() + attack_offset).clamp(0.0, 100.0);
-        let decay_percent = (self.decay_percent.next_value() + decay_offset).clamp(0.0, 100.0);
+        let attack_base = self.attack_percent.next_value();
+        let decay_base = self.decay_percent.next_value();
         let sustain =
             (self.sustain_percent.next_value() + sustain_offset).clamp(0.0, 100.0) / 100.0;
-        let release_percent =
-            (self.release_percent.next_value() + release_offset).clamp(0.0, 100.0);
-        let (attack_min, attack_max, decay_min, decay_max, release_min, release_max) =
-            match self.profile {
-                EnvelopeProfile::Generic => (0.001, 2.0, 0.005, 3.0, 0.005, 5.0),
-                EnvelopeProfile::Juno => (0.001, 3.0, 0.002, 12.0, 0.002, 12.0),
-                EnvelopeProfile::Sh101 => (0.0015, 4.0, 0.002, 10.0, 0.002, 10.0),
+        let release_base = self.release_percent.next_value();
+        let (attack, attack_coefficient, decay_coefficient, release_coefficient) =
+            if attack_offset == 0.0 && decay_offset == 0.0 && release_offset == 0.0 {
+                self.refresh_cached_times(attack_base, decay_base, release_base);
+                (
+                    self.cached_attack,
+                    self.cached_attack_coefficient,
+                    self.cached_decay_coefficient,
+                    self.cached_release_coefficient,
+                )
+            } else {
+                let attack_percent = (attack_base + attack_offset).clamp(0.0, 100.0);
+                let decay_percent = (decay_base + decay_offset).clamp(0.0, 100.0);
+                let release_percent = (release_base + release_offset).clamp(0.0, 100.0);
+                let (attack_min, attack_max, decay_min, decay_max, release_min, release_max) =
+                    self.profile_ranges();
+                let attack = if attack_percent == 0.0 {
+                    0.0
+                } else {
+                    exp_map_f32(attack_percent, attack_min, attack_max)
+                };
+                let decay = exp_map_f32(decay_percent, decay_min, decay_max);
+                let release = exp_map_f32(release_percent, release_min, release_max);
+                (
+                    attack,
+                    if attack == 0.0 {
+                        1.0
+                    } else {
+                        1.0 - (-6.907_755 / (attack * self.sr).max(1.0)).exp()
+                    },
+                    1.0 - (-6.907_755 / (decay * self.sr).max(1.0)).exp(),
+                    (-6.907_755 / (release * self.sr).max(1.0)).exp(),
+                )
             };
-        let attack = if attack_percent == 0.0 {
-            0.0
-        } else {
-            exp_map_f32(attack_percent, attack_min, attack_max)
-        };
-        let decay = exp_map_f32(decay_percent, decay_min, decay_max);
-        let release = exp_map_f32(release_percent, release_min, release_max);
         match self.stage {
             EnvStage::Idle => {}
             EnvStage::Attack => {
@@ -709,8 +949,7 @@ impl Adsr {
                     self.value = 1.0;
                     self.stage = EnvStage::Decay
                 } else {
-                    let coefficient = 1.0 - (-6.907_755 / (attack * self.sr).max(1.0)).exp();
-                    self.value += (1.0 - self.value) * coefficient;
+                    self.value += (1.0 - self.value) * attack_coefficient;
                     if self.value >= 0.999 {
                         self.value = 1.0;
                         self.stage = EnvStage::Decay
@@ -718,8 +957,7 @@ impl Adsr {
                 }
             }
             EnvStage::Decay => {
-                let coefficient = 1.0 - (-6.907_755 / (decay * self.sr).max(1.0)).exp();
-                self.value += (sustain - self.value) * coefficient;
+                self.value += (sustain - self.value) * decay_coefficient;
                 if (self.value - sustain).abs() <= 0.001 {
                     self.value = sustain;
                     self.stage = EnvStage::Sustain
@@ -727,8 +965,7 @@ impl Adsr {
             }
             EnvStage::Sustain => self.value = sustain,
             EnvStage::Release => {
-                let coefficient = (-6.907_755 / (release * self.sr).max(1.0)).exp();
-                self.value *= coefficient;
+                self.value *= release_coefficient;
                 if self.value <= 0.0001 {
                     self.value = 0.0;
                     self.stage = EnvStage::Idle
@@ -736,6 +973,44 @@ impl Adsr {
             }
         }
         self.value
+    }
+
+    fn profile_ranges(&self) -> (f32, f32, f32, f32, f32, f32) {
+        match self.profile {
+            EnvelopeProfile::Generic => (0.001, 2.0, 0.005, 3.0, 0.005, 5.0),
+            EnvelopeProfile::Juno => (0.001, 3.0, 0.002, 12.0, 0.002, 12.0),
+            EnvelopeProfile::Sh101 => (0.0015, 4.0, 0.002, 10.0, 0.002, 10.0),
+        }
+    }
+
+    fn refresh_cached_times(&mut self, attack: f32, decay: f32, release: f32) {
+        if attack == self.cached_attack_percent
+            && decay == self.cached_decay_percent
+            && release == self.cached_release_percent
+        {
+            return;
+        }
+        self.cached_attack_percent = attack;
+        self.cached_decay_percent = decay;
+        self.cached_release_percent = release;
+        let (attack_min, attack_max, decay_min, decay_max, release_min, release_max) =
+            self.profile_ranges();
+        self.cached_attack = if attack == 0.0 {
+            0.0
+        } else {
+            exp_map_f32(attack, attack_min, attack_max)
+        };
+        self.cached_decay = exp_map_f32(decay, decay_min, decay_max);
+        self.cached_release = exp_map_f32(release, release_min, release_max);
+        self.cached_attack_coefficient = if self.cached_attack == 0.0 {
+            1.0
+        } else {
+            1.0 - (-6.907_755 / (self.cached_attack * self.sr).max(1.0)).exp()
+        };
+        self.cached_decay_coefficient =
+            1.0 - (-6.907_755 / (self.cached_decay * self.sr).max(1.0)).exp();
+        self.cached_release_coefficient =
+            (-6.907_755 / (self.cached_release * self.sr).max(1.0)).exp();
     }
 }
 
@@ -773,19 +1048,48 @@ impl Default for Svf {
 /// A compact nonlinear four-stage ladder used by the Bass voice.
 pub struct LadderFilter {
     stages: [f32; 4],
+    coefficient: f32,
+    feedback: f32,
+    cached_cutoff: f32,
+    cached_resonance: f32,
+    cached_sr: f32,
 }
 
 impl LadderFilter {
     pub fn new() -> Self {
-        Self { stages: [0.0; 4] }
+        Self {
+            stages: [0.0; 4],
+            coefficient: 0.0,
+            feedback: 0.0,
+            cached_cutoff: f32::NAN,
+            cached_resonance: f32::NAN,
+            cached_sr: f32::NAN,
+        }
     }
 
     pub fn lowpass(&mut self, input: f32, cutoff: f32, resonance: f32, sr: f32) -> f32 {
-        let coefficient = 1.0 - (-2.0 * PI * cutoff.clamp(20.0, sr * 0.45) / sr).exp();
-        let feedback = resonance.clamp(0.0, 1.0) * 3.85;
-        let mut stage_input = (input - self.stages[3] * feedback).tanh();
+        self.set_parameters(cutoff, resonance, sr);
+        self.process(input)
+    }
+
+    pub fn set_parameters(&mut self, cutoff: f32, resonance: f32, sr: f32) {
+        if cutoff == self.cached_cutoff
+            && resonance == self.cached_resonance
+            && sr == self.cached_sr
+        {
+            return;
+        }
+        self.cached_cutoff = cutoff;
+        self.cached_resonance = resonance;
+        self.cached_sr = sr;
+        self.coefficient = 1.0 - (-2.0 * PI * cutoff.clamp(20.0, sr * 0.45) / sr).exp();
+        self.feedback = resonance.clamp(0.0, 1.0) * 3.85;
+    }
+
+    pub fn process(&mut self, input: f32) -> f32 {
+        let mut stage_input = (input - self.stages[3] * self.feedback).tanh();
         for stage in &mut self.stages {
-            *stage += coefficient * (stage_input - stage.tanh());
+            *stage += self.coefficient * (stage_input - stage.tanh());
             stage_input = stage.tanh();
         }
         let output = self.stages[3];
@@ -1000,6 +1304,10 @@ impl StereoChorus {
         self.fade_remaining = 0;
         self.active = false;
         self.tail_remaining = 0;
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active || self.fade_remaining != 0
     }
 }
 

@@ -5,14 +5,42 @@ use super::{
     SynthVoice, TRACK_COUNT, TrackEffectChain,
 };
 use crate::dsp::{
-    Delay, EnvStage, Lfo, MasterLimiter, Reverb, SidechainCompressor, Smoother, equal_power_pan,
-    exp_map_f32,
+    Delay, EnvStage, Lfo, MasterLimiter, Reverb, SidechainCompressor, Smoother, exp_map_f32,
 };
 use crate::model::{MAX_STEP_COUNT, Waveform};
 use rtrb::{Producer, RingBuffer};
 use std::f32::consts::TAU;
 use std::sync::{Arc, atomic::Ordering};
 impl Renderer {
+    fn refresh_preview_activity(&mut self) {
+        self.preview_activity = std::array::from_fn(|track| self.preview_track_active(track));
+    }
+
+    fn preview_track_active(&self, track: usize) -> bool {
+        let voice_active = if track < super::DRUM_TRACK_COUNT {
+            !self.preview_drums[track].envelope.is_idle()
+        } else if track == super::CHORD_TRACK_INDEX {
+            self.preview_chord.active
+                || self.preview_chord.arpeggiated
+                || self.preview_chord.preview_remaining != 0
+                || self
+                    .preview_chord
+                    .voices
+                    .iter()
+                    .any(|voice| voice.env.stage != EnvStage::Idle)
+                || self.preview_chord.chorus.is_active()
+        } else {
+            self.preview[track - super::SYNTH_TRACK_START].env.stage != EnvStage::Idle
+        };
+        voice_active
+            || self.preview_effects[track].is_active()
+            || self
+                .preview_scheduled
+                .iter()
+                .flatten()
+                .any(|action| action.track as usize == track)
+    }
+
     pub(super) fn new(project: AudioProject, sr: u32, status: Arc<AudioStatus>) -> Self {
         let (retire, _discarded) = RingBuffer::new(32);
         Self::new_with_retirement(Box::new(project), sr, status, retire)
@@ -85,6 +113,9 @@ impl Renderer {
             }),
             lfo_offsets: [[0.0; ParameterId::ALL.len()]; TRACK_COUNT],
             preview_lfo_offsets: [[0.0; ParameterId::ALL.len()]; TRACK_COUNT],
+            lfo_destinations: [[ParameterId::Level; ParameterId::ALL.len()]; TRACK_COUNT],
+            lfo_destination_count: [0; TRACK_COUNT],
+            preview_activity: [false; TRACK_COUNT],
             scheduled: [None; 32],
             cycle_counts: [[0; MAX_STEP_COUNT]; TRACK_COUNT],
             condition_rng: std::array::from_fn(|i| {
@@ -95,6 +126,7 @@ impl Renderer {
             }),
             preview_scheduled: [None; 24],
         };
+        r.rebuild_lfo_destinations();
         r.configure_effects(0);
         r
     }
@@ -127,10 +159,8 @@ impl Renderer {
             offsets[ParameterId::Sustain as usize],
             offsets[ParameterId::Release as usize],
         );
-        let cutoff_percent = modulated_percent(
-            v.cutoff_percent.next_value(),
-            offsets[ParameterId::Cutoff as usize],
-        );
+        let cutoff_base = v.cutoff_percent.next_value();
+        let cutoff_offset = offsets[ParameterId::Cutoff as usize];
         let filter_env = modulated_percent(
             v.filter_env_percent.next_value(),
             offsets[ParameterId::FilterEnvelope as usize],
@@ -141,7 +171,21 @@ impl Renderer {
         } else {
             (20.0, 20_000.0_f32.min(sr * 0.45), 6.0)
         };
-        let cutoff = (exp_map_f32(cutoff_percent, minimum_cutoff, maximum_cutoff)
+        let cutoff_percent = modulated_percent(cutoff_base, cutoff_offset);
+        let base_cutoff = if cutoff_offset == 0.0 {
+            if cutoff_base != v.cached_cutoff_percent
+                || v.cached_cutoff_bass != v.bass
+                || v.cached_cutoff_hz > maximum_cutoff
+            {
+                v.cached_cutoff_percent = cutoff_base;
+                v.cached_cutoff_bass = v.bass;
+                v.cached_cutoff_hz = exp_map_f32(cutoff_base, minimum_cutoff, maximum_cutoff);
+            }
+            v.cached_cutoff_hz
+        } else {
+            exp_map_f32(cutoff_percent, minimum_cutoff, maximum_cutoff)
+        };
+        let cutoff = (base_cutoff
             * 2.0_f32.powf(env * (filter_env * envelope_octaves + accent_filter)))
         .min(maximum_cutoff);
         let resonance_percent = modulated_percent(
@@ -152,6 +196,39 @@ impl Renderer {
         let delay_send = v.delay_send.next_value();
         let reverb_send = v.reverb_send.next_value();
         let oversampled_rate = sr * 2.0;
+        let bass_resonance = resonance_percent / 100.0;
+        if v.bass {
+            v.bass_filter
+                .set_parameters(cutoff, bass_resonance, oversampled_rate);
+        } else {
+            v.roland_filter.set_parameters(
+                cutoff,
+                bass_resonance * if v.chord { 0.95 } else { 1.0 },
+                oversampled_rate,
+            );
+        }
+        let (mix, width, sub) = if v.bass {
+            (0.0, 0.5, 0.0)
+        } else {
+            (
+                modulated_percent(
+                    v.oscillator_mix.next_value(),
+                    offsets[ParameterId::OscillatorMix as usize],
+                ) / 100.0,
+                0.05 + modulated_percent(
+                    v.pulse_width.next_value(),
+                    offsets[ParameterId::PulseWidth as usize],
+                ) / 100.0
+                    * 0.90,
+                modulated_percent(
+                    v.sub_oscillator.next_value(),
+                    offsets[ParameterId::SubOscillator as usize],
+                ) / 100.0,
+            )
+        };
+        let angle = mix * std::f32::consts::FRAC_PI_2;
+        let mix_cos = angle.cos();
+        let mix_sin = angle.sin();
         let mut filtered = 0.0;
         for _ in 0..2 {
             let osc = if v.bass {
@@ -160,38 +237,17 @@ impl Renderer {
                     Waveform::Square => v.osc.next_square(frequency, oversampled_rate),
                 }
             } else {
-                let mix = modulated_percent(
-                    v.oscillator_mix.next_value(),
-                    offsets[ParameterId::OscillatorMix as usize],
-                ) / 100.0;
-                let width = 0.05
-                    + modulated_percent(
-                        v.pulse_width.next_value(),
-                        offsets[ParameterId::PulseWidth as usize],
-                    ) / 100.0
-                        * 0.90;
-                let sub = modulated_percent(
-                    v.sub_oscillator.next_value(),
-                    offsets[ParameterId::SubOscillator as usize],
-                ) / 100.0;
                 let (saw, pulse) = v.osc.next_saw_pulse(frequency, width, oversampled_rate);
-                let angle = mix * std::f32::consts::FRAC_PI_2;
-                pulse * angle.cos()
-                    + saw * angle.sin()
+                pulse * mix_cos
+                    + saw * mix_sin
                     + v.sub_osc.next_square(frequency * 0.5, oversampled_rate) * sub
             };
             filtered += if v.bass {
                 let driven = (osc * 1.35).tanh();
-                v.bass_filter
-                    .lowpass(driven, cutoff, resonance_percent / 100.0, oversampled_rate)
+                v.bass_filter.process(driven)
             } else {
                 let driven = (osc * if v.chord { 1.10 } else { 1.35 }).tanh();
-                v.roland_filter.lowpass(
-                    driven,
-                    cutoff,
-                    (resonance_percent / 100.0) * if v.chord { 0.95 } else { 1.0 },
-                    oversampled_rate,
-                )
+                v.roland_filter.process(driven)
             };
         }
         filtered *= 0.5 / (1.0 + resonance_percent * 0.0035);
@@ -314,6 +370,7 @@ impl Renderer {
         (sample * level.powi(2), delay_send, reverb_send, pan)
     }
     pub(super) fn next(&mut self) -> (f32, f32) {
+        self.refresh_preview_activity();
         if self.playing {
             self.advance_lfos();
         }
@@ -343,7 +400,7 @@ impl Renderer {
                 self.lfo_offsets[i][ParameterId::Pan as usize],
             );
             let (effect_l, effect_r) = self.effects[i].process(x);
-            let (pl, pr) = equal_power_pan(pan);
+            let (pl, pr) = self.drums[i].pan_gains(pan);
             let level = modulated_percent(
                 self.drums[i].level.next_value(),
                 self.lfo_offsets[i][ParameterId::Level as usize],
@@ -360,7 +417,11 @@ impl Renderer {
             reverb_l += effect_l * pl * reverb_send * gain;
             reverb_r += effect_r * pr * reverb_send * gain;
         }
+        let duck_gain = self.sidechain.current_gain();
         for i in 0..super::DRUM_TRACK_COUNT {
+            if !self.preview_activity[i] {
+                continue;
+            }
             let (x, delay_send, reverb_send, pan) = Self::render_drum_input(
                 &mut self.preview_drums[i],
                 i,
@@ -369,7 +430,7 @@ impl Renderer {
                 self.preview_lfo_offsets[i][ParameterId::Pan as usize],
             );
             let (effect_l, effect_r) = self.preview_effects[i].process(x);
-            let (pl, pr) = equal_power_pan(pan);
+            let (pl, pr) = self.preview_drums[i].pan_gains(pan);
             let level = modulated_percent(
                 self.preview_drums[i].level.next_value(),
                 self.preview_lfo_offsets[i][ParameterId::Level as usize],
@@ -387,11 +448,11 @@ impl Renderer {
             let (x, ds, rs) =
                 Self::render_synth(&mut self.synth[i], self.sr, &self.lfo_offsets[track]);
             let (effect_l, effect_r) = self.effects[track].process(x);
-            let duck_gain = self.sidechain.current_gain();
-            let (pl, pr) = equal_power_pan(modulated_percent(
+            let pan = modulated_percent(
                 self.synth[i].pan.next_value(),
                 self.lfo_offsets[track][ParameterId::Pan as usize],
-            ));
+            );
+            let (pl, pr) = self.synth[i].pan_gains(pan);
             let level = modulated_percent(
                 self.synth[i].level.next_value(),
                 self.lfo_offsets[track][ParameterId::Level as usize],
@@ -403,16 +464,20 @@ impl Renderer {
             delay_r += effect_r * duck_gain * pr * ds * gain;
             reverb_l += effect_l * duck_gain * pl * rs * gain;
             reverb_r += effect_r * duck_gain * pr * rs * gain;
+            if !self.preview_activity[track] {
+                continue;
+            }
             let (x, ds, rs) = Self::render_synth(
                 &mut self.preview[i],
                 self.sr,
                 &self.preview_lfo_offsets[track],
             );
             let (effect_l, effect_r) = self.preview_effects[track].process(x);
-            let (pl, pr) = equal_power_pan(modulated_percent(
+            let pan = modulated_percent(
                 self.preview[i].pan.next_value(),
                 self.preview_lfo_offsets[track][ParameterId::Pan as usize],
-            ));
+            );
+            let (pl, pr) = self.preview[i].pan_gains(pan);
             let level = modulated_percent(
                 self.preview[i].level.next_value(),
                 self.preview_lfo_offsets[track][ParameterId::Level as usize],
@@ -438,10 +503,11 @@ impl Renderer {
         for (index, voice) in self.chord.voices.iter_mut().enumerate() {
             let (x, ds, rs) =
                 Self::render_synth(voice, self.sr, &self.lfo_offsets[super::CHORD_TRACK_INDEX]);
-            let (pl, pr) = equal_power_pan(modulated_percent(
+            let pan = modulated_percent(
                 voice.pan.next_value(),
                 self.lfo_offsets[super::CHORD_TRACK_INDEX][ParameterId::Pan as usize],
-            ));
+            );
+            let (pl, pr) = voice.pan_gains(pan);
             chord_left += x * pl;
             chord_right += x * pr;
             if voice.env.stage != EnvStage::Idle {
@@ -466,7 +532,7 @@ impl Renderer {
         let (chord_l, chord_r) = self.chord.chorus.process_stereo(chord_left, chord_right);
         let (chord_effect_l, chord_effect_r) =
             self.effects[super::CHORD_TRACK_INDEX].process_stereo(chord_l, chord_r);
-        let chord_duck_gain = self.sidechain.current_gain();
+        let chord_duck_gain = duck_gain;
         let chord_gain = self.mute[super::CHORD_TRACK_INDEX].next_value()
             * selected_chord_level(chord_active_level, chord_tail_level);
         dry_l += chord_effect_l * chord_duck_gain * chord_gain;
@@ -486,50 +552,56 @@ impl Renderer {
         let mut preview_tail_send = None;
         let mut preview_active_level = None;
         let mut preview_tail_level = None;
-        for (index, voice) in self.preview_chord.voices.iter_mut().enumerate() {
-            let (x, ds, rs) = Self::render_synth(
-                voice,
-                self.sr,
-                &self.preview_lfo_offsets[super::CHORD_TRACK_INDEX],
-            );
-            let (pl, pr) = equal_power_pan(modulated_percent(
-                voice.pan.next_value(),
-                self.preview_lfo_offsets[super::CHORD_TRACK_INDEX][ParameterId::Pan as usize],
-            ));
-            preview_left += x * pl;
-            preview_right += x * pr;
-            if voice.env.stage != EnvStage::Idle {
-                let level = modulated_percent(
-                    voice.level.next_value(),
-                    self.preview_lfo_offsets[super::CHORD_TRACK_INDEX][ParameterId::Level as usize],
-                ) / 100.0;
-                if self.preview_chord.active && (preview_start..preview_end).contains(&index) {
-                    preview_active_level.get_or_insert(level.powi(2));
-                    preview_ds = ds;
-                    preview_rs = rs;
-                    preview_has_active_send = true;
-                } else if preview_tail_send.is_none() {
-                    preview_tail_level = Some(level.powi(2));
-                    preview_tail_send = Some((ds, rs));
+        if self.preview_activity[super::CHORD_TRACK_INDEX] {
+            for (index, voice) in self.preview_chord.voices.iter_mut().enumerate() {
+                let (x, ds, rs) = Self::render_synth(
+                    voice,
+                    self.sr,
+                    &self.preview_lfo_offsets[super::CHORD_TRACK_INDEX],
+                );
+                let pan = modulated_percent(
+                    voice.pan.next_value(),
+                    self.preview_lfo_offsets[super::CHORD_TRACK_INDEX][ParameterId::Pan as usize],
+                );
+                let (pl, pr) = voice.pan_gains(pan);
+                preview_left += x * pl;
+                preview_right += x * pr;
+                if voice.env.stage != EnvStage::Idle {
+                    let level = modulated_percent(
+                        voice.level.next_value(),
+                        self.preview_lfo_offsets[super::CHORD_TRACK_INDEX]
+                            [ParameterId::Level as usize],
+                    ) / 100.0;
+                    if self.preview_chord.active && (preview_start..preview_end).contains(&index) {
+                        preview_active_level.get_or_insert(level.powi(2));
+                        preview_ds = ds;
+                        preview_rs = rs;
+                        preview_has_active_send = true;
+                    } else if preview_tail_send.is_none() {
+                        preview_tail_level = Some(level.powi(2));
+                        preview_tail_send = Some((ds, rs));
+                    }
                 }
             }
         }
         if !preview_has_active_send {
             (preview_ds, preview_rs) = preview_tail_send.unwrap_or((0.0, 0.0));
         }
-        let (preview_l, preview_r) = self
-            .preview_chord
-            .chorus
-            .process_stereo(preview_left, preview_right);
-        let (preview_effect_l, preview_effect_r) =
-            self.preview_effects[super::CHORD_TRACK_INDEX].process_stereo(preview_l, preview_r);
-        let preview_gain = selected_chord_level(preview_active_level, preview_tail_level);
-        dry_l += preview_effect_l * preview_gain;
-        dry_r += preview_effect_r * preview_gain;
-        delay_l += preview_effect_l * preview_ds * preview_gain;
-        delay_r += preview_effect_r * preview_ds * preview_gain;
-        reverb_l += preview_effect_l * preview_rs * preview_gain;
-        reverb_r += preview_effect_r * preview_rs * preview_gain;
+        if self.preview_activity[super::CHORD_TRACK_INDEX] {
+            let (preview_l, preview_r) = self
+                .preview_chord
+                .chorus
+                .process_stereo(preview_left, preview_right);
+            let (preview_effect_l, preview_effect_r) =
+                self.preview_effects[super::CHORD_TRACK_INDEX].process_stereo(preview_l, preview_r);
+            let preview_gain = selected_chord_level(preview_active_level, preview_tail_level);
+            dry_l += preview_effect_l * preview_gain;
+            dry_r += preview_effect_r * preview_gain;
+            delay_l += preview_effect_l * preview_ds * preview_gain;
+            delay_r += preview_effect_r * preview_ds * preview_gain;
+            reverb_l += preview_effect_l * preview_rs * preview_gain;
+            reverb_r += preview_effect_r * preview_rs * preview_gain;
+        }
 
         let (dl, dr) = self.delay.process(delay_l, delay_r);
         let (rl, rr) = self.reverb.process(reverb_l, reverb_r);

@@ -144,6 +144,9 @@ struct Renderer {
     preview_lfos: [[Lfo; ParameterId::ALL.len()]; TRACK_COUNT],
     lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
     preview_lfo_offsets: [[f32; ParameterId::ALL.len()]; TRACK_COUNT],
+    lfo_destinations: [[ParameterId; ParameterId::ALL.len()]; TRACK_COUNT],
+    lfo_destination_count: [u8; TRACK_COUNT],
+    preview_activity: [bool; TRACK_COUNT],
     scheduled: [Option<ScheduledTrackAction>; 32],
     cycle_counts: [[u32; MAX_STEP_COUNT]; TRACK_COUNT],
     condition_rng: [u32; TRACK_COUNT],
@@ -178,7 +181,7 @@ mod voices;
 #[cfg(test)]
 use crate::dsp::exp_map_f32;
 #[cfg(test)]
-use crate::model::{ArpeggioRate, ArpeggioType, ParameterLocks};
+use crate::model::ParameterLocks;
 pub use command::AudioCommand;
 use effects::render;
 #[cfg(test)]
@@ -494,8 +497,102 @@ pub fn render_offline(project: &Project, sample_rate: u32, frames: usize) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::LEAD_TRACK_INDEX;
-    use std::fs;
+    use crate::model::{
+        ArpeggioRate, ArpeggioType, ChordShape, DistortionParameters, FlangerParameters,
+        LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate, LfoWaveform, PhaserParameters,
+        TrackEffects,
+    };
+    use std::{fs, time::Instant};
+
+    fn performance_project() -> Project {
+        let mut project = Project::new();
+        let saturated_effects = TrackEffects {
+            distortion: DistortionParameters {
+                drive: Percent::new(85).unwrap(),
+                tone: Percent::new(65).unwrap(),
+                mix: Percent::new(75).unwrap(),
+            },
+            phaser: PhaserParameters {
+                rate: Percent::new(60).unwrap(),
+                depth: Percent::new(80).unwrap(),
+                feedback: Percent::new(70).unwrap(),
+                mix: Percent::new(65).unwrap(),
+            },
+            flanger: FlangerParameters {
+                rate: Percent::new(55).unwrap(),
+                delay: Percent::new(70).unwrap(),
+                depth: Percent::new(80).unwrap(),
+                feedback: Percent::new(65).unwrap(),
+                mix: Percent::new(60).unwrap(),
+            },
+        };
+        let lfo = Some(LfoConfig {
+            enabled: true,
+            waveform: LfoWaveform::Sine,
+            rate: LfoRate::Synced {
+                division: LfoDivision::Sixteenth,
+            },
+            depth: Percent::new(35).unwrap(),
+        });
+        for track in &mut project.tracks {
+            track.delay_send = Percent::new(100).unwrap();
+            track.reverb_send = Percent::new(100).unwrap();
+            track.effects = saturated_effects;
+            track.lfos.level = lfo;
+            track.lfos.pan = lfo;
+        }
+        project.globals.delay_feedback = Percent::new(85).unwrap();
+        project.globals.reverb_return = Percent::new(75).unwrap();
+        project.globals.reverb_time_seconds = 10.0;
+        for step in 0..16 {
+            for track in 0..DRUM_TRACK_COUNT {
+                project.patterns[0].tracks[track].steps[step] = Some(StepEvent::Trigger {
+                    accent: step % 4 == 0,
+                    condition: Default::default(),
+                    retrigger_count: 4,
+                    locks: Default::default(),
+                });
+            }
+            project.patterns[0].tracks[SYNTH_TRACK_START].steps[step] = Some(StepEvent::BassNote {
+                degree: (step % 7 + 1) as u8,
+                octave: 2,
+                accent: step % 4 == 0,
+                slide: step % 3 == 0,
+                condition: Default::default(),
+                retrigger_count: 4,
+                locks: Default::default(),
+            });
+            project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[step] = Some(StepEvent::Note {
+                degree: (step % 7 + 1) as u8,
+                octave: 3,
+                accent: step % 4 == 0,
+                chord_shape: Some(ChordShape::SeventhRoot),
+                arpeggio: ArpeggioConfig {
+                    enabled: step % 2 == 0,
+                    r#type: ArpeggioType::UpDown,
+                    rate: ArpeggioRate::ThirtySecond,
+                },
+                condition: Default::default(),
+                retrigger_count: 4,
+                locks: Default::default(),
+            });
+            project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[step] = Some(StepEvent::Note {
+                degree: (step % 7 + 1) as u8,
+                octave: 4,
+                accent: step % 4 == 0,
+                chord_shape: None,
+                arpeggio: ArpeggioConfig::default(),
+                condition: Default::default(),
+                retrigger_count: 4,
+                locks: Default::default(),
+            });
+        }
+        project
+    }
+
+    fn allocator_counts() -> (usize, usize) {
+        crate::test_allocator::counts()
+    }
 
     #[test]
     fn stream_failure_marks_audio_stopped_and_queues_error() {
@@ -585,6 +682,159 @@ mod tests {
     #[test]
     fn zero_audio_buffer_is_rejected() {
         assert!(select_buffer_size(&SupportedBufferSize::Unknown, Some(0)).is_err());
+    }
+
+    #[test]
+    fn callback_paths_do_not_allocate_or_deallocate() {
+        let project = performance_project();
+        let status = Arc::new(AudioStatus::default());
+        let (retire, _retired) = RingBuffer::new(32);
+        let mut renderer = Renderer::new_with_retirement(
+            Box::new(AudioProject::from_project(&project)),
+            48_000,
+            status.clone(),
+            retire,
+        );
+        let (mut producer, mut commands) = RingBuffer::new(16);
+        producer.push(AudioCommand::PlayPause).unwrap();
+        producer
+            .push(AudioCommand::Audition { track: 6, step: 0 })
+            .unwrap();
+        producer.push(AudioCommand::Stop).unwrap();
+        producer.push(Audio::snapshot(&project)).unwrap();
+        let mut output = vec![0.0_f32; 256 * 2];
+
+        crate::test_allocator::reset();
+        let before = allocator_counts();
+        render(
+            &mut output,
+            2,
+            48_000,
+            &status,
+            &mut renderer,
+            &mut commands,
+            |sample| sample,
+        );
+        assert_eq!(allocator_counts(), before);
+    }
+
+    #[test]
+    fn pending_snapshot_path_is_allocation_free_when_retirement_is_full() {
+        let project = performance_project();
+        let status = Arc::new(AudioStatus::default());
+        let (mut retire, _retired) = RingBuffer::new(1);
+        retire
+            .push(Box::new(AudioProject::from_project(&project)))
+            .unwrap();
+        let mut renderer = Renderer::new_with_retirement(
+            Box::new(AudioProject::from_project(&project)),
+            48_000,
+            status.clone(),
+            retire,
+        );
+        let (mut producer, mut commands) = RingBuffer::new(2);
+        producer.push(Audio::snapshot(&project)).unwrap();
+        let mut output = vec![0.0_f32; 128 * 2];
+
+        crate::test_allocator::reset();
+        let before = allocator_counts();
+        render(
+            &mut output,
+            2,
+            48_000,
+            &status,
+            &mut renderer,
+            &mut commands,
+            |sample| sample,
+        );
+        assert_eq!(allocator_counts(), before);
+    }
+
+    #[test]
+    fn idle_preview_does_not_advance_unselected_lfos_or_effects() {
+        let project = performance_project();
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
+        for _ in 0..1_000 {
+            renderer.next();
+        }
+        assert!(!renderer.preview_activity.iter().any(|active| *active));
+        assert!(
+            renderer
+                .preview_lfo_offsets
+                .iter()
+                .flatten()
+                .all(|offset| *offset == 0.0)
+        );
+        assert!(
+            !renderer
+                .preview_effects
+                .iter()
+                .any(TrackEffectChain::is_active)
+        );
+
+        renderer.command(AudioCommand::Audition { track: 0, step: 0 });
+        renderer.next();
+        renderer.next();
+        assert!(renderer.preview_activity[0]);
+        assert!(!renderer.preview_activity[1]);
+        assert!(renderer.preview_lfo_offsets[0][ParameterId::Level as usize] != 0.0);
+        assert!(
+            renderer.preview_lfo_offsets[1]
+                .iter()
+                .all(|offset| *offset == 0.0)
+        );
+    }
+
+    #[test]
+    fn worst_case_fixture_reports_callback_cost_without_a_brittle_limit() {
+        let project = performance_project();
+        eprintln!(
+            "audio fixture: os={} arch={} rustc={} debug_assertions={}",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            option_env!("RUSTC_VERSION").unwrap_or("unknown"),
+            cfg!(debug_assertions)
+        );
+        for sample_rate in [44_100, 48_000, 96_000] {
+            for buffer_frames in [128, 256, 512] {
+                let status = Arc::new(AudioStatus::default());
+                let (retire, _retired) = RingBuffer::new(32);
+                let mut renderer = Renderer::new_with_retirement(
+                    Box::new(AudioProject::from_project(&project)),
+                    sample_rate,
+                    status.clone(),
+                    retire,
+                );
+                renderer.command(AudioCommand::PlayPause);
+                renderer.boundary(0);
+                let (producer, mut commands) = RingBuffer::new(2);
+                drop(producer);
+                let mut output = vec![0.0_f32; buffer_frames * 2];
+                let start = Instant::now();
+                for _ in 0..8 {
+                    render(
+                        &mut output,
+                        2,
+                        sample_rate,
+                        &status,
+                        &mut renderer,
+                        &mut commands,
+                        |sample| sample,
+                    );
+                }
+                let frames = (buffer_frames * 8) as u128;
+                let nanos = start.elapsed().as_nanos();
+                eprintln!(
+                    "audio fixture: sr={} buffer={} ns/frame={:.1} callback_load={}‰",
+                    sample_rate,
+                    buffer_frames,
+                    nanos as f64 / frames as f64,
+                    status.max_callback_load_per_mille.load(Ordering::Relaxed),
+                );
+                assert!(output.iter().all(|sample| sample.is_finite()));
+            }
+        }
     }
 
     #[test]

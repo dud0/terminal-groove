@@ -159,10 +159,16 @@ impl Renderer {
             active_pattern,
         );
         let old = std::mem::replace(&mut self.project, project);
-        debug_assert!(self.retire.push(old).is_ok());
+        match self.retire.push(old) {
+            Ok(()) => {}
+            // `slots()` was checked above and this producer is callback-local;
+            // a full queue here indicates an internal invariant violation.
+            Err(_) => unreachable!(),
+        }
         self.active_pattern = active_pattern;
         self.queued_pattern = queued_pattern;
         self.prune_scheduled_actions();
+        self.rebuild_lfo_destinations();
         self.status
             .active_pattern
             .store(active_pattern as u8, Ordering::Release);
@@ -242,14 +248,33 @@ impl Renderer {
         }
     }
 
+    pub(super) fn rebuild_lfo_destinations(&mut self) {
+        for track in 0..TRACK_COUNT {
+            let mut count = 0;
+            for parameter in ParameterId::ALL {
+                if self.project.tracks[track]
+                    .lfos
+                    .get(parameter)
+                    .is_some_and(|config| config.enabled)
+                {
+                    self.lfo_destinations[track][count] = parameter;
+                    count += 1;
+                }
+            }
+            self.lfo_destination_count[track] = count as u8;
+        }
+    }
+
     pub(super) fn advance_lfo_bank(
         states: &mut [Lfo; ParameterId::ALL.len()],
         offsets: &mut [f32; ParameterId::ALL.len()],
+        destinations: &[ParameterId; ParameterId::ALL.len()],
+        destination_count: u8,
         track: AudioTrack,
         tempo_bpm: u16,
         sample_rate: f32,
     ) {
-        for parameter in ParameterId::ALL {
+        for &parameter in destinations.iter().take(destination_count as usize) {
             let config = track.lfos.get(parameter);
             let value = states[parameter as usize].next(config, tempo_bpm, sample_rate);
             offsets[parameter as usize] =
@@ -263,6 +288,8 @@ impl Renderer {
             Self::advance_lfo_bank(
                 &mut self.lfos[track],
                 &mut self.lfo_offsets[track],
+                &self.lfo_destinations[track],
+                self.lfo_destination_count[track],
                 self.project.tracks[track],
                 tempo,
                 self.sr,
@@ -273,9 +300,14 @@ impl Renderer {
     pub(super) fn advance_preview_lfos(&mut self) {
         let tempo = self.project.globals.tempo_bpm;
         for track in 0..TRACK_COUNT {
+            if !self.preview_activity[track] {
+                continue;
+            }
             Self::advance_lfo_bank(
                 &mut self.preview_lfos[track],
                 &mut self.preview_lfo_offsets[track],
+                &self.lfo_destinations[track],
+                self.lfo_destination_count[track],
                 self.project.tracks[track],
                 tempo,
                 self.sr,
@@ -290,6 +322,8 @@ impl Renderer {
         Self::advance_lfo_bank(
             &mut self.preview_lfos[track],
             &mut self.preview_lfo_offsets[track],
+            &self.lfo_destinations[track],
+            self.lfo_destination_count[track],
             self.project.tracks[track],
             self.project.globals.tempo_bpm,
             self.sr,

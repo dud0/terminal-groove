@@ -15,6 +15,9 @@ pub(super) struct SynthVoice {
     pub(super) pulse_width: Smoother,
     pub(super) sub_oscillator: Smoother,
     pub(super) cutoff_percent: Smoother,
+    pub(super) cached_cutoff_percent: f32,
+    pub(super) cached_cutoff_hz: f32,
+    pub(super) cached_cutoff_bass: bool,
     pub(super) resonance_percent: Smoother,
     pub(super) filter_env_percent: Smoother,
     pub(super) locks: ParameterLocks,
@@ -29,6 +32,9 @@ pub(super) struct SynthVoice {
     pub(super) delay_send: Smoother,
     pub(super) reverb_send: Smoother,
     pub(super) pan: Smoother,
+    pan_cache: f32,
+    pan_left: f32,
+    pan_right: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -327,6 +333,9 @@ pub(super) struct DrumVoice {
     pub(super) delay_send: Smoother,
     pub(super) reverb_send: Smoother,
     pub(super) pan: Smoother,
+    pan_cache: f32,
+    pan_left: f32,
+    pan_right: f32,
     pub(super) locks: ParameterLocks,
 }
 
@@ -360,6 +369,9 @@ impl DrumVoice {
             delay_send: Smoother::new(0.0),
             reverb_send: Smoother::new(0.0),
             pan: Smoother::new(50.0),
+            pan_cache: f32::NAN,
+            pan_left: std::f32::consts::FRAC_1_SQRT_2,
+            pan_right: std::f32::consts::FRAC_1_SQRT_2,
             locks: ParameterLocks::default(),
         }
     }
@@ -370,6 +382,16 @@ impl DrumVoice {
         x ^= x << 5;
         self.noise = x;
         x as i32 as f32 / i32::MAX as f32
+    }
+
+    pub(super) fn pan_gains(&mut self, pan: f32) -> (f32, f32) {
+        if pan != self.pan_cache {
+            self.pan_cache = pan;
+            let angle = pan.clamp(0.0, 100.0) * std::f32::consts::FRAC_PI_2 / 100.0;
+            self.pan_left = angle.cos();
+            self.pan_right = angle.sin();
+        }
+        (self.pan_left, self.pan_right)
     }
 }
 impl SynthVoice {
@@ -386,6 +408,9 @@ impl SynthVoice {
             pulse_width: Smoother::new(50.0),
             sub_oscillator: Smoother::new(0.0),
             cutoff_percent: Smoother::new(65.0),
+            cached_cutoff_percent: f32::NAN,
+            cached_cutoff_hz: 0.0,
+            cached_cutoff_bass: false,
             resonance_percent: Smoother::new(10.0),
             filter_env_percent: Smoother::new(25.0),
             locks: ParameterLocks::default(),
@@ -400,6 +425,19 @@ impl SynthVoice {
             delay_send: Smoother::new(0.0),
             reverb_send: Smoother::new(0.0),
             pan: Smoother::new(50.0),
+            pan_cache: f32::NAN,
+            pan_left: std::f32::consts::FRAC_1_SQRT_2,
+            pan_right: std::f32::consts::FRAC_1_SQRT_2,
         }
+    }
+
+    pub(super) fn pan_gains(&mut self, pan: f32) -> (f32, f32) {
+        if pan != self.pan_cache {
+            self.pan_cache = pan;
+            let angle = pan.clamp(0.0, 100.0) * std::f32::consts::FRAC_PI_2 / 100.0;
+            self.pan_left = angle.cos();
+            self.pan_right = angle.sin();
+        }
+        (self.pan_left, self.pan_right)
     }
 }

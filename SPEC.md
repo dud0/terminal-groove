@@ -669,9 +669,13 @@ Use one binary package with testable modules for model/validation, reducer and h
 - Noise generators use preallocated deterministic PRNG state local to each voice.
 - Idle drum voices do not advance oscillators, filters, or noise state; their mixer
   smoothers continue advancing so live parameter changes remain synchronized.
+- Preview rendering has an explicit per-track activity gate. It includes non-idle preview envelopes, chord/arpeggio voices, scheduled retriggers, chorus state, and insert-effect feedback tails. Inactive preview tracks skip voice mixing, panning, effect processing, and LFO advancement; preview LFO phases remain independent from live phases and reset on Stop or explicit audition.
 - Track effect chains bypass all DSP when every wet mix is settled at zero. Chorus,
   delay, and reverb use allocation-free activity gates: silent processors are skipped,
   and active processors continue for their preallocated effect tails before sleeping.
+- Insert effects gate distortion, phaser, and flanger independently. Their static mappings, modulation-rate conversions, feedback coefficients, and delay scaling are cached while parameters are settled; effect tails use a bounded, allocation-free drain when input becomes silent.
+- Synth filter coefficients are configured once per output frame before the two-times oversampling loop. ADSR physical times and one-pole coefficients, sidechain attack/release coefficients, sidechain gain, and settled equal-power pan gains are cached and refreshed only when their source values change.
+- The repository includes a diagnostic worst-case fixture: `cargo test --release worst_case_fixture_reports_callback_cost_without_a_brittle_limit -- --nocapture`. It reports Linux/architecture/compiler-profile context, nanoseconds per rendered frame, and callback load for 128-, 256-, and 512-frame buffers at 44.1, 48, and 96 kHz. The fixture intentionally has no absolute timing assertion; on the reference Linux x86_64 development machine, the optimized 512-frame cases measured approximately 222–465‰ load, which is an engineering headroom observation rather than a universal dropout guarantee.
 - Queue exhaustion is handled on the UI side before committing the model change.
 - CPAL stream errors are forwarded to the UI through a non-blocking error path and shown prominently.
 
