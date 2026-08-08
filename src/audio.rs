@@ -1650,14 +1650,26 @@ mod tests {
                 &[0.0; ParameterId::ALL.len()],
             );
         }
-        let stage_before_slide = renderer.synth[0].env.stage;
+        let vca_before_slide = renderer.synth[0].bass_vca.value();
+        let contour_before_slide = renderer.synth[0].bass_filter_envelope.value();
         let starting_frequency = renderer.synth[0].freq.next_value();
 
         renderer.boundary(0);
-        assert_eq!(renderer.synth[0].env.stage, stage_before_slide);
+        assert_eq!(renderer.synth[0].bass_vca.value(), vca_before_slide);
+        assert_eq!(
+            renderer.synth[0].bass_filter_envelope.value(),
+            contour_before_slide
+        );
         let first_frequency = renderer.synth[0].freq.next_value();
         assert!(first_frequency > starting_frequency);
         assert!(first_frequency < starting_frequency * 2.0);
+        Renderer::render_synth(
+            &mut renderer.synth[0],
+            renderer.sr,
+            &[0.0; ParameterId::ALL.len()],
+        );
+        assert!(renderer.synth[0].bass_vca.value() >= vca_before_slide);
+        assert!(renderer.synth[0].bass_filter_envelope.value() < contour_before_slide);
         for _ in 1..480 {
             renderer.synth[0].freq.next_value();
         }

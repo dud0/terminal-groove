@@ -245,10 +245,6 @@ impl Smoother {
         self.current
     }
 
-    pub fn target_value(&self) -> f32 {
-        self.target
-    }
-
     pub fn is_smoothing(&self) -> bool {
         self.remaining != 0
     }
@@ -1141,23 +1137,34 @@ impl BassFilterEnvelope {
 /// so consecutive accents retrigger deterministically and ties leave it alone.
 pub struct BassAccentEnvelope {
     value: f32,
-    target: f32,
+    stage: BassAccentStage,
     attack_coefficient: f32,
     coefficient: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BassAccentStage {
+    Idle,
+    Attack,
+    Decay,
 }
 
 impl BassAccentEnvelope {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             value: 0.0,
-            target: 0.0,
+            stage: BassAccentStage::Idle,
             attack_coefficient: 1.0 - (-6.907_755 / (0.003 * sample_rate.max(1.0))).exp(),
             coefficient: (-6.907_755 / (0.180 * sample_rate.max(1.0))).exp(),
         }
     }
 
     pub fn trigger(&mut self, accented: bool) {
-        self.target = if accented { 1.0 } else { 0.0 };
+        self.stage = if accented {
+            BassAccentStage::Attack
+        } else {
+            BassAccentStage::Decay
+        };
     }
 
     pub fn value(&self) -> f32 {
@@ -1165,13 +1172,22 @@ impl BassAccentEnvelope {
     }
 
     pub fn next_sample(&mut self) -> f32 {
-        if self.target > self.value {
-            self.value += (self.target - self.value) * self.attack_coefficient;
-        } else {
-            self.value *= self.coefficient;
+        match self.stage {
+            BassAccentStage::Idle => {}
+            BassAccentStage::Attack => {
+                self.value += (1.0 - self.value) * self.attack_coefficient;
+                if self.value >= 0.999 {
+                    self.value = 1.0;
+                    self.stage = BassAccentStage::Decay;
+                }
+            }
+            BassAccentStage::Decay => {
+                self.value *= self.coefficient;
+            }
         }
         if self.value <= 0.0001 {
             self.value = 0.0;
+            self.stage = BassAccentStage::Idle;
         }
         self.value
     }
@@ -2780,17 +2796,29 @@ mod tests {
     }
 
     #[test]
-    fn bass_accent_retrigger_is_click_safe() {
+    fn bass_accent_retriggers_smoothly_then_decays() {
         let mut accent = BassAccentEnvelope::new(8_000.0);
         accent.trigger(true);
         let first = accent.next_sample();
         assert!(first > 0.0 && first < 1.0);
-        accent.trigger(false);
-        let after_release = accent.next_sample();
-        assert!(after_release > 0.0 && after_release < first);
+        for _ in 0..40 {
+            accent.next_sample();
+        }
+        let peak = accent.value();
+        assert!(peak > 0.7);
+        for _ in 0..160 {
+            accent.next_sample();
+        }
+        let decaying = accent.value();
+        assert!(decaying > 0.1 && decaying < peak);
+
         accent.trigger(true);
         let retriggered = accent.next_sample();
-        assert!(retriggered > after_release && retriggered < 1.0);
+        assert!(retriggered > decaying && retriggered < 1.0);
+        for _ in 0..1_600 {
+            accent.next_sample();
+        }
+        assert!(accent.value() < 0.001, "accent contour must not sustain");
     }
 
     #[test]

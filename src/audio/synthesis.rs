@@ -393,7 +393,7 @@ impl Renderer {
                 voice.bass_vca.gate_on();
                 voice
                     .bass_filter_envelope
-                    .trigger(voice.bass_decay_percent.target_value());
+                    .trigger(voice.bass_decay_percent.value());
             }
         } else if !legato_slide {
             voice.env.gate_on();
