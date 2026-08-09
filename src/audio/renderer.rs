@@ -177,7 +177,11 @@ impl Renderer {
         // oscillators and filters for those voices on every callback sample.
         if v.is_idle() {
             match v.kind {
-                SynthVoiceKind::Bass => v.bass_filter.reset(),
+                SynthVoiceKind::Bass => {
+                    v.bass_filter.reset();
+                    v.bass_filter_envelope.reset();
+                    v.bass_accent_envelope.reset();
+                }
                 SynthVoiceKind::Juno => {
                     v.juno_filter.reset();
                     v.juno_highpass.clear_state();
@@ -384,6 +388,7 @@ impl Renderer {
             v.sub_oscillator.next_value(),
             offsets[ParameterId::SubOscillator as usize],
         ) / 100.0;
+        let noise_level = v.noise_level.next_value();
         let (pulse_gain, saw_gain) = v.oscillator_mix_gains(mix);
         let mut filtered = 0.0;
         for _ in 0..2 {
@@ -403,8 +408,8 @@ impl Renderer {
                     v.sub_osc_2.next_sub(frequency, v.sub_mode, sr * 2.0)
                 }
             };
-            let noise = if v.noise_level > 0.0 {
-                v.noise.next_sample() * v.noise_level
+            let noise = if noise_level > 0.0 {
+                v.noise.next_sample() * noise_level
             } else {
                 0.0
             };
@@ -658,7 +663,7 @@ impl Renderer {
         let chord_mute = self.mute[chord_track].next_value();
         for group in 0..2 {
             let start = group * CHORD_GROUP_SIZE;
-            let end = start + CHORD_GROUP_SIZE;
+            let end = start + self.chord.group_voice_counts[group];
             let mut left = 0.0;
             let mut right = 0.0;
             for voice in &mut self.chord.voices[start..end] {
@@ -692,7 +697,7 @@ impl Renderer {
         if self.preview_activity[chord_track] {
             for group in 0..2 {
                 let start = group * CHORD_GROUP_SIZE;
-                let end = start + CHORD_GROUP_SIZE;
+                let end = start + self.preview_chord.group_voice_counts[group];
                 let mut left = 0.0;
                 let mut right = 0.0;
                 for voice in &mut self.preview_chord.voices[start..end] {

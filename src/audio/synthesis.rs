@@ -209,7 +209,7 @@ impl Renderer {
                 Instrument::Bass(p) => {
                     voice.kind = SynthVoiceKind::Bass;
                     voice.sub_mode = crate::dsp::SubOscillatorMode::OneOctave;
-                    voice.noise_level = 0.0;
+                    voice.noise_level.set(0.0, smoothing);
                     voice.wave = locks.waveform.unwrap_or(p.waveform);
                     voice
                         .bass_decay_percent
@@ -227,10 +227,10 @@ impl Renderer {
                 Instrument::Chord(p) => {
                     voice.kind = SynthVoiceKind::Juno;
                     voice.sub_mode = crate::dsp::SubOscillatorMode::OneOctave;
-                    // A very low, deterministic noise bed keeps the source
-                    // available for the Juno path without forcing obvious
-                    // vintage noise into every patch.
-                    voice.noise_level = locks.noise.unwrap_or(p.noise).normalized() * 0.04;
+                    voice.noise_level.set(
+                        locks.noise.unwrap_or(p.noise).normalized() * 0.35,
+                        smoothing,
+                    );
                     voice.env.set_profile(EnvelopeProfile::Juno);
                     voice.oscillator_mix.set(
                         locks.oscillator_mix.unwrap_or(p.oscillator_mix).get() as f32,
@@ -256,9 +256,6 @@ impl Renderer {
                 }
                 Instrument::Lead(p) => {
                     voice.kind = SynthVoiceKind::Sh101;
-                    // The SH-101 sub divider is kept at the deeper internal
-                    // choice.  It remains a level-only persisted parameter
-                    // until a discrete model control is deliberately added.
                     voice.sub_mode = match locks.sub_mode.unwrap_or(p.sub_mode) {
                         crate::model::LeadSubMode::OneOctaveSquare => {
                             crate::dsp::SubOscillatorMode::OneOctave
@@ -270,7 +267,9 @@ impl Renderer {
                             crate::dsp::SubOscillatorMode::TwoOctavesNarrowPulse
                         }
                     };
-                    voice.noise_level = locks.noise.unwrap_or(p.noise).normalized() * 0.04;
+                    voice
+                        .noise_level
+                        .set(locks.noise.unwrap_or(p.noise).normalized(), smoothing);
                     voice.keyboard_tracking =
                         locks.keyboard_tracking.unwrap_or(p.keyboard_tracking).get() as f32;
                     voice.env.set_profile(EnvelopeProfile::Sh101);
@@ -380,7 +379,11 @@ impl Renderer {
         let lead_track = matches!(project.tracks[track].instrument, Instrument::Lead(_));
         let lead_legato = lead_track && voice.active && voice.slide_armed;
         let lead_time = match project.tracks[track].instrument {
-            Instrument::Lead(p) => locks.portamento_time.unwrap_or(p.portamento_time).get(),
+            Instrument::Lead(p) => voice
+                .locks
+                .portamento_time
+                .unwrap_or(p.portamento_time)
+                .get(),
             _ => 0,
         };
         voice.freq.set(
@@ -484,6 +487,10 @@ impl Renderer {
         if arpeggio.enabled {
             Self::release_chord(pool);
             pool.group = 1 - pool.group;
+            let start = pool.group * CHORD_GROUP_SIZE;
+            for voice in &mut pool.voices[start + 1..start + CHORD_GROUP_SIZE] {
+                voice.reset_to_idle();
+            }
             pool.arpeggiated = true;
             pool.arpeggio_trigger = SynthTrigger {
                 chord_shape: Some(shape),
@@ -498,6 +505,7 @@ impl Renderer {
                 project.globals.tempo_bpm,
             );
             pool.voice_count = 1;
+            pool.group_voice_counts[pool.group] = 1;
             Self::trigger_arpeggio_tone(project, sr, pool);
             for chorus in &mut pool.choruses {
                 Self::configure_chorus(chorus, project.tracks[CHORD_TRACK_INDEX], locks);
@@ -517,6 +525,10 @@ impl Renderer {
         pool.group = 1 - pool.group;
         let (midis, voice_count) =
             Self::chord_midis(project, trigger.degree, trigger.octave, shape);
+        let start = pool.group * CHORD_GROUP_SIZE;
+        for voice in &mut pool.voices[start + voice_count..start + CHORD_GROUP_SIZE] {
+            voice.reset_to_idle();
+        }
         for (voice, midi) in pool.voices
             [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + voice_count]
             .iter_mut()
@@ -534,6 +546,7 @@ impl Renderer {
             );
         }
         pool.voice_count = voice_count;
+        pool.group_voice_counts[pool.group] = voice_count;
         let spread =
             locks
                 .spread

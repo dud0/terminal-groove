@@ -79,3 +79,7 @@ These items belong together because they affect post-voice stereo mixing, sends,
 - No extreme valid effect setting produces a clamped half-cycle or non-finite state.
 - `SPEC.md` and TUI help/readouts match the implemented signal flow.
 - `cargo fmt`, `cargo test`, `cargo clippy`, and `cargo build --release` pass.
+
+## Follow-up status (2026-08-09)
+
+Implemented and corrected. Each Chord group now records its valid voice count so a reused group cannot retain an obsolete fourth voice. Insert effects retain their independent Chord-group state and now finish feedback-aware tails before sleeping and clearing state.

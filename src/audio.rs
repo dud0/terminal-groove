@@ -498,6 +498,7 @@ pub fn render_offline(project: &Project, sample_rate: u32, frames: usize) -> Vec
 
 #[cfg(test)]
 mod tests {
+    use super::voices::SynthTrigger;
     use super::*;
     use crate::model::{
         ArpeggioRate, ArpeggioType, ChordShape, DistortionParameters, FlangerParameters,
@@ -546,6 +547,9 @@ mod tests {
         project.globals.delay_feedback = Percent::new(85).unwrap();
         project.globals.reverb_return = Percent::new(75).unwrap();
         project.globals.reverb_time_seconds = 10.0;
+        if let Instrument::Chord(parameters) = &mut project.tracks[CHORD_TRACK_INDEX].instrument {
+            parameters.release = Percent::new(100).unwrap();
+        }
         for step in 0..16 {
             for track in 0..DRUM_TRACK_COUNT {
                 project.patterns[0].tracks[track].steps[step] = Some(StepEvent::Trigger {
@@ -569,11 +573,7 @@ mod tests {
                 octave: 3,
                 accent: step % 4 == 0,
                 chord_shape: Some(ChordShape::SeventhRoot),
-                arpeggio: ArpeggioConfig {
-                    enabled: step % 2 == 0,
-                    r#type: ArpeggioType::UpDown,
-                    rate: ArpeggioRate::ThirtySecond,
-                },
+                arpeggio: ArpeggioConfig::default(),
                 condition: Default::default(),
                 retrigger_count: 4,
                 locks: Default::default(),
@@ -589,6 +589,31 @@ mod tests {
             });
         }
         project
+    }
+
+    fn arm_second_worst_case_chord_group(renderer: &mut Renderer) {
+        Renderer::trigger_chord(
+            &renderer.project,
+            renderer.sr,
+            SynthTrigger {
+                degree: 5,
+                octave: 3,
+                accent: true,
+                slide: false,
+                chord_shape: Some(ChordShape::SeventhRoot),
+                arpeggio: ArpeggioConfig::default(),
+            },
+            ParameterLocks::default(),
+            &mut renderer.chord,
+        );
+        assert_eq!(renderer.chord.group_voice_counts, [4, 4]);
+        assert!(
+            renderer
+                .chord
+                .voices
+                .iter()
+                .all(|voice| voice.env.stage != crate::dsp::EnvStage::Idle)
+        );
     }
 
     fn allocator_counts() -> (usize, usize) {
@@ -696,13 +721,10 @@ mod tests {
             status.clone(),
             retire,
         );
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary(0);
+        arm_second_worst_case_chord_group(&mut renderer);
         let (mut producer, mut commands) = RingBuffer::new(16);
-        producer.push(AudioCommand::PlayPause).unwrap();
-        producer
-            .push(AudioCommand::Audition { track: 6, step: 0 })
-            .unwrap();
-        producer.push(AudioCommand::Stop).unwrap();
-        producer.push(Audio::snapshot(&project)).unwrap();
         let mut output = vec![0.0_f32; 256 * 2];
 
         crate::test_allocator::reset();
@@ -717,6 +739,28 @@ mod tests {
             |sample| sample,
         );
         assert_eq!(allocator_counts(), before);
+
+        let callback_commands = [
+            AudioCommand::Audition { track: 6, step: 0 },
+            Audio::snapshot(&project),
+            AudioCommand::Stop,
+            AudioCommand::PlayPause,
+        ];
+        for command in callback_commands {
+            producer.push(command).unwrap();
+            crate::test_allocator::reset();
+            let before = allocator_counts();
+            render(
+                &mut output,
+                2,
+                48_000,
+                &status,
+                &mut renderer,
+                &mut commands,
+                |sample| sample,
+            );
+            assert_eq!(allocator_counts(), before);
+        }
     }
 
     #[test]
@@ -789,7 +833,7 @@ mod tests {
 
     #[test]
     fn worst_case_fixture_reports_callback_cost_without_a_brittle_limit() {
-        const WARMUP_CALLBACKS: usize = 16;
+        const WARMUP_CALLBACKS: usize = 64;
         const MEASURED_CALLBACKS: usize = 64;
         let project = performance_project();
         eprintln!(
@@ -815,6 +859,7 @@ mod tests {
                 );
                 renderer.command(AudioCommand::PlayPause);
                 renderer.boundary(0);
+                arm_second_worst_case_chord_group(&mut renderer);
                 let (producer, mut commands) = RingBuffer::new(2);
                 drop(producer);
                 let mut output = vec![0.0_f32; buffer_frames * 2];
@@ -1733,6 +1778,97 @@ mod tests {
     }
 
     #[test]
+    fn lead_slide_uses_source_portamento_lock_and_tie_override() {
+        fn note(degree: u8, slide: bool, portamento: u8) -> StepEvent {
+            StepEvent::LeadNote {
+                degree,
+                octave: 3,
+                accent: false,
+                slide,
+                condition: Default::default(),
+                retrigger_count: 1,
+                locks: ParameterLocks {
+                    portamento_time: Percent::new(portamento),
+                    ..Default::default()
+                },
+            }
+        }
+
+        let mut project = Project::new();
+        project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[0] = Some(note(1, true, 100));
+        project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[1] = Some(note(8, false, 0));
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        let lead = LEAD_TRACK_INDEX - SYNTH_TRACK_START;
+
+        renderer.boundary(0);
+        let source = renderer.synth[lead].freq.value();
+        renderer.boundary(0);
+        let first = renderer.synth[lead].freq.next_value();
+        assert!(first > source && first < source * 1.01);
+
+        project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[1] = Some(StepEvent::Tie {
+            locks: ParameterLocks {
+                portamento_time: Percent::new(0),
+                ..Default::default()
+            },
+        });
+        project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[2] = Some(note(8, false, 100));
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.boundary(0);
+        renderer.boundary(0);
+        renderer.boundary(0);
+        assert!((renderer.synth[lead].freq.value() - source * 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn bass_idle_path_clears_accent_before_an_unaccented_note() {
+        let mut project = Project::new();
+        for (step, accent) in [true, false].into_iter().enumerate() {
+            project.patterns[0].tracks[SYNTH_TRACK_START].steps[step] = Some(StepEvent::BassNote {
+                degree: step as u8 + 1,
+                octave: 3,
+                accent,
+                slide: false,
+                condition: Default::default(),
+                retrigger_count: 1,
+                locks: Default::default(),
+            });
+        }
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.boundary(0);
+        for _ in 0..40 {
+            Renderer::render_synth(
+                &mut renderer.synth[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+        }
+        assert!(renderer.synth[0].bass_accent_envelope.value() > 0.7);
+        renderer.synth[0].gate_off();
+        renderer.synth[0].active = false;
+        for _ in 0..1_000 {
+            Renderer::render_synth(
+                &mut renderer.synth[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+        }
+        assert_eq!(renderer.synth[0].bass_accent_envelope.value(), 0.0);
+        assert_eq!(renderer.synth[0].bass_filter_envelope.value(), 0.0);
+
+        renderer.boundary(0);
+        Renderer::render_synth(
+            &mut renderer.synth[0],
+            renderer.sr,
+            &[0.0; ParameterId::ALL.len()],
+        );
+        assert_eq!(renderer.synth[0].bass_accent_envelope.value(), 0.0);
+    }
+
+    #[test]
     fn empty_bass_step_releases_the_fixed_vca_gate() {
         let mut project = Project::new();
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
@@ -2141,6 +2277,23 @@ mod tests {
     }
 
     #[test]
+    fn juno_and_sh101_noise_controls_use_instrument_specific_source_ranges() {
+        let project = AudioProject::from_project(&Project::new());
+        let locks = ParameterLocks {
+            noise: Percent::new(100),
+            ..Default::default()
+        };
+        let mut juno = SynthVoice::new(48_000.0);
+        Renderer::apply_synth_params(&project, 48_000.0, CHORD_TRACK_INDEX, locks, &mut juno, 0);
+        let mut sh101 = SynthVoice::new(48_000.0);
+        Renderer::apply_synth_params(&project, 48_000.0, LEAD_TRACK_INDEX, locks, &mut sh101, 0);
+
+        assert!((juno.noise_level.value() - 0.35).abs() < f32::EPSILON);
+        assert!((sh101.noise_level.value() - 1.0).abs() < f32::EPSILON);
+        assert!(sh101.noise_level.value() > juno.noise_level.value() * 2.0);
+    }
+
+    #[test]
     fn chord_track_triggers_close_position_triads_and_alternates_voice_groups() {
         let mut project = Project::new();
         project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
@@ -2243,6 +2396,71 @@ mod tests {
             let expected = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
             assert!((frequency - expected).abs() < 0.001);
         }
+    }
+
+    #[test]
+    fn reused_chord_group_clears_slots_not_used_by_the_new_shape() {
+        fn trigger(shape: ChordShape, arpeggio: ArpeggioConfig) -> SynthTrigger {
+            SynthTrigger {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                slide: false,
+                chord_shape: Some(shape),
+                arpeggio,
+            }
+        }
+
+        let project = AudioProject::from_project(&Project::new());
+        let mut pool = ChordVoicePool::new(48_000);
+        Renderer::trigger_chord(
+            &project,
+            48_000.0,
+            trigger(ChordShape::SeventhRoot, ArpeggioConfig::default()),
+            Default::default(),
+            &mut pool,
+        );
+        let first_group = pool.group;
+        Renderer::trigger_chord(
+            &project,
+            48_000.0,
+            trigger(ChordShape::TriadRoot, ArpeggioConfig::default()),
+            Default::default(),
+            &mut pool,
+        );
+        Renderer::trigger_chord(
+            &project,
+            48_000.0,
+            trigger(ChordShape::TriadRoot, ArpeggioConfig::default()),
+            Default::default(),
+            &mut pool,
+        );
+
+        assert_eq!(pool.group, first_group);
+        assert_eq!(pool.group_voice_counts[first_group], 3);
+        let unused = &pool.voices[first_group * CHORD_GROUP_SIZE + 3];
+        assert_eq!(unused.env.stage, crate::dsp::EnvStage::Idle);
+        assert!(!unused.active);
+
+        Renderer::trigger_chord(
+            &project,
+            48_000.0,
+            trigger(
+                ChordShape::SeventhRoot,
+                ArpeggioConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
+            ),
+            Default::default(),
+            &mut pool,
+        );
+        assert_eq!(pool.group_voice_counts[pool.group], 1);
+        assert!(
+            pool.voices[pool.group * CHORD_GROUP_SIZE + 1..(pool.group + 1) * CHORD_GROUP_SIZE]
+                .iter()
+                .all(|voice| voice.env.stage == crate::dsp::EnvStage::Idle)
+        );
     }
 
     #[test]

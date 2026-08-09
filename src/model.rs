@@ -2375,7 +2375,9 @@ impl ParameterId {
                         | Self::FlangerFeedback
                         | Self::FlangerMix
                         | Self::Waveform
+                        | Self::Noise
                         | Self::LeadSubMode
+                        | Self::KeyboardTracking
                         | Self::PortamentoTime
                         | Self::Chorus
                         | Self::Spread
@@ -3238,6 +3240,21 @@ mod tests {
         assert!(ParameterId::Pitch.supports_lfo(TrackKind::Chord));
         assert!(ParameterId::Pitch.supports_lfo(TrackKind::Lead));
         assert!(!ParameterId::Pitch.supports_lfo(TrackKind::Bass));
+        assert!(!ParameterId::Noise.supports_lfo(TrackKind::Chord));
+        assert!(!ParameterId::Noise.supports_lfo(TrackKind::Lead));
+        assert!(!ParameterId::KeyboardTracking.supports_lfo(TrackKind::Lead));
+        project.tracks[CHORD_TRACK_INDEX].lfos.noise = Some(LfoConfig::default());
+        assert_eq!(
+            project.validate(),
+            Err(ValidationError::Lfo(CHORD_TRACK_INDEX, "noise"))
+        );
+        project.tracks[CHORD_TRACK_INDEX].lfos.noise = None;
+        project.tracks[LEAD_TRACK_INDEX].lfos.keyboard_tracking = Some(LfoConfig::default());
+        assert_eq!(
+            project.validate(),
+            Err(ValidationError::Lfo(LEAD_TRACK_INDEX, "keyboard_tracking"))
+        );
+        project.tracks[LEAD_TRACK_INDEX].lfos.keyboard_tracking = None;
         assert!(!ParameterId::Pitch.is_valid_for(TrackKind::Chord));
         assert!(!project.tracks[CHORD_TRACK_INDEX].set_parameter(
             ParameterId::Pitch,

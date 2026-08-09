@@ -99,3 +99,7 @@ Complete. The implementation uses format version 17; earlier formats are intenti
 - New controls, if any, follow the full model/reducer/audio/TUI/persistence path.
 - Manual checks cover dry, chorus, high-resonance, bass, pad, pluck, and lead patches.
 - `cargo fmt`, `cargo test`, `cargo clippy`, and `cargo build --release` pass.
+
+## Follow-up status (2026-08-09)
+
+Implemented and corrected. Lead portamento now uses the source note's effective time, including inherited tie locks. Noise and Keyboard Tracking are explicitly non-LFO controls, format-17 loading removes their legacy inert assignments, Juno Noise reaches 0.35 source amplitude, and SH-101 Noise reaches full source amplitude.

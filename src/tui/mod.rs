@@ -1010,6 +1010,15 @@ mod tests {
         let spread = rendered(&app, 220, 34);
         assert!(!spread.contains(DIRECT_PERCENTAGE_HINT));
         assert!(!spread.contains("[Shift+L] LFO"));
+
+        app.mode = Mode::ParameterEdit(ParameterId::Noise);
+        let noise = rendered(&app, 220, 34);
+        assert!(!noise.contains("[Shift+L] LFO"));
+
+        app.row = LEAD_TRACK_INDEX + 1;
+        app.mode = Mode::ParameterEdit(ParameterId::KeyboardTracking);
+        let tracking = rendered(&app, 220, 34);
+        assert!(!tracking.contains("[Shift+L] LFO"));
     }
 
     #[test]

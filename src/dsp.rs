@@ -310,6 +310,9 @@ pub struct TrackEffectChain {
     distortion_tail_remaining: u32,
     phaser_tail_remaining: u32,
     flanger_tail_remaining: u32,
+    distortion_quiet_samples: u32,
+    phaser_quiet_samples: u32,
+    flanger_quiet_samples: u32,
     distortion_drive: Smoother,
     distortion_tone: Smoother,
     distortion_mix: Smoother,
@@ -362,6 +365,9 @@ impl TrackEffectChain {
             distortion_tail_remaining: 0,
             phaser_tail_remaining: 0,
             flanger_tail_remaining: 0,
+            distortion_quiet_samples: 0,
+            phaser_quiet_samples: 0,
+            flanger_quiet_samples: 0,
             distortion_drive: Smoother::new(0.0),
             distortion_tone: Smoother::new(50.0),
             distortion_mix: Smoother::new(0.0),
@@ -485,83 +491,77 @@ impl TrackEffectChain {
         let distortion_mix = self.distortion_mix.next_value() / 100.0;
         let phaser_mix = self.phaser_mix.next_value() / 100.0;
         let flanger_mix = self.flanger_mix.next_value() / 100.0;
-        let input_peak = finite_or_zero(input_l)
-            .abs()
-            .max(finite_or_zero(input_r).abs());
-        let input_active = input_peak > SILENCE_THRESHOLD;
-        let distortion_active =
-            distortion_mix > 0.0 && (input_active || self.distortion_tail_remaining > 0);
-        let phaser_active = if phaser_mix > 0.0 {
-            input_active || self.phaser_tail_remaining > 0
-        } else {
-            !input_active && self.phaser_tail_remaining > 0
-        };
-        let flanger_active = if flanger_mix > 0.0 {
-            input_active || self.flanger_tail_remaining > 0
-        } else {
-            !input_active && self.flanger_tail_remaining > 0
-        };
-        if !distortion_active && !phaser_active && !flanger_active {
-            self.distortion_active = false;
-            self.phaser_active = false;
-            self.flanger_active = false;
-            self.processing = self.has_pending_parameters();
-            return (input_l, input_r);
-        }
-
-        self.distortion_active = distortion_active;
-        self.phaser_active = phaser_active;
-        self.flanger_active = flanger_active;
-
-        let distorted_l = if distortion_active {
+        let input_active = stereo_peak(input_l, input_r) > SILENCE_THRESHOLD;
+        let run_distortion =
+            (distortion_mix > 0.0 && input_active) || self.distortion_tail_remaining > 0;
+        let distorted_l = if run_distortion {
             let drive = self.distortion_drive.next_value();
             let tone = self.distortion_tone.next_value();
             self.update_distortion_cache(drive, tone);
-            self.distortion_tail_remaining = if input_active {
-                self.tail_length()
-            } else {
-                self.distortion_tail_remaining.saturating_sub(1)
-            };
-            Self::distort_sample(
-                input_l,
+            let processed = Self::distort_sample(
+                if distortion_mix > 0.0 { input_l } else { 0.0 },
                 self.distortion_gain,
                 self.distortion_coefficient,
                 distortion_mix,
                 &mut self.distortion_state_l,
-            )
+            );
+            if distortion_mix > 0.0 {
+                processed
+            } else {
+                input_l
+            }
         } else {
             input_l
         };
-        let distorted_r = if distortion_active {
-            Self::distort_sample(
-                input_r,
+        let distorted_r = if run_distortion {
+            let processed = Self::distort_sample(
+                if distortion_mix > 0.0 { input_r } else { 0.0 },
                 self.distortion_gain,
                 self.distortion_coefficient,
                 distortion_mix,
                 &mut self.distortion_state_r,
-            )
+            );
+            if distortion_mix > 0.0 {
+                processed
+            } else {
+                input_r
+            }
         } else {
             input_r
         };
+        if run_distortion {
+            let state_peak = stereo_peak(self.distortion_state_l, self.distortion_state_r);
+            self.distortion_active = Self::update_tail_activity(
+                distortion_mix > 0.0 && input_active,
+                state_peak,
+                64,
+                self.tail_limit(),
+                &mut self.distortion_tail_remaining,
+                &mut self.distortion_quiet_samples,
+            );
+            if !self.distortion_active {
+                self.clear_distortion();
+            }
+        } else {
+            self.distortion_active = false;
+        }
 
-        let (processed_l, processed_r) = if phaser_active {
+        let phaser_input_active = stereo_peak(distorted_l, distorted_r) > SILENCE_THRESHOLD;
+        let run_phaser =
+            (phaser_mix > 0.0 && phaser_input_active) || self.phaser_tail_remaining > 0;
+        let (processed_l, processed_r) = if run_phaser {
             let phaser_rate = self.phaser_rate.next_value();
             let phaser_depth = self.phaser_depth.next_value();
             let phaser_feedback = (self.phaser_feedback.next_value() / 100.0).clamp(0.0, 0.9);
             self.update_phaser_cache(phaser_rate, phaser_depth);
-            self.phaser_tail_remaining = if input_active {
-                self.tail_length()
-            } else {
-                self.phaser_tail_remaining.saturating_sub(1)
-            };
             let feedback =
                 (self.phaser_feedback_l + self.phaser_feedback_r) * 0.5 * phaser_feedback;
             // Once the user-facing mix ramp reaches zero, keep draining the
             // feedback state silently. Re-expanding the tail to a derived wet
             // mix here would create a near-100% wet discontinuity.
             let effective_mix = phaser_mix;
-            let left_input = distorted_l + feedback;
-            let right_input = distorted_r - feedback;
+            let left_input = if phaser_mix > 0.0 { distorted_l } else { 0.0 } + feedback;
+            let right_input = if phaser_mix > 0.0 { distorted_r } else { 0.0 } - feedback;
             let left = Self::phaser_sample(
                 &mut self.phaser_l,
                 left_input,
@@ -580,15 +580,32 @@ impl TrackEffectChain {
             self.phaser_feedback_r = right;
             self.phaser_phase =
                 (self.phaser_phase + self.phaser_rate_hz / self.sample_rate).fract();
-            (
+            let output = (
                 distorted_l * (1.0 - effective_mix) + left * effective_mix,
                 distorted_r * (1.0 - effective_mix) + right * effective_mix,
-            )
+            );
+            self.phaser_active = Self::update_tail_activity(
+                phaser_mix > 0.0 && phaser_input_active,
+                stereo_peak(left, right),
+                64,
+                self.tail_limit(),
+                &mut self.phaser_tail_remaining,
+                &mut self.phaser_quiet_samples,
+            );
+            if !self.phaser_active {
+                self.clear_phaser();
+            }
+            output
         } else {
+            self.phaser_active = false;
             (distorted_l, distorted_r)
         };
 
-        if !flanger_active {
+        let flanger_input_active = stereo_peak(processed_l, processed_r) > SILENCE_THRESHOLD;
+        let run_flanger =
+            (flanger_mix > 0.0 && flanger_input_active) || self.flanger_tail_remaining > 0;
+        if !run_flanger {
+            self.flanger_active = false;
             self.processing = self.has_pending_parameters();
             return (processed_l, processed_r);
         }
@@ -597,21 +614,35 @@ impl TrackEffectChain {
         let flanger_depth = self.flanger_depth.next_value();
         let flanger_feedback = (self.flanger_feedback.next_value() / 100.0).clamp(0.0, 0.9);
         self.update_flanger_cache(flanger_rate, flanger_delay, flanger_depth);
-        self.flanger_tail_remaining = if input_active {
-            self.tail_length()
-        } else {
-            self.flanger_tail_remaining.saturating_sub(1)
-        };
         let effective_mix = flanger_mix;
-        self.flanger_sample(
-            processed_l,
-            processed_r,
+        let flanger_dsp_l = if flanger_mix > 0.0 { processed_l } else { 0.0 };
+        let flanger_dsp_r = if flanger_mix > 0.0 { processed_r } else { 0.0 };
+        let (mut output_l, mut output_r, wet_peak) = self.flanger_sample(
+            flanger_dsp_l,
+            flanger_dsp_r,
             FlangerControls {
                 rate: self.flanger_rate_hz,
                 feedback: flanger_feedback,
                 mix: effective_mix,
             },
-        )
+        );
+        if flanger_mix == 0.0 {
+            output_l = processed_l;
+            output_r = processed_r;
+        }
+        self.flanger_active = Self::update_tail_activity(
+            flanger_mix > 0.0 && flanger_input_active,
+            wet_peak,
+            self.flanger_quiet_length(),
+            self.tail_limit(),
+            &mut self.flanger_tail_remaining,
+            &mut self.flanger_quiet_samples,
+        );
+        if !self.flanger_active {
+            self.clear_flanger();
+        }
+        self.processing = self.has_pending_parameters();
+        (output_l, output_r)
     }
 
     fn distort_sample(input: f32, gain: f32, coefficient: f32, mix: f32, state: &mut f32) -> f32 {
@@ -643,7 +674,7 @@ impl TrackEffectChain {
         input_l: f32,
         input_r: f32,
         controls: FlangerControls,
-    ) -> (f32, f32) {
+    ) -> (f32, f32, f32) {
         let left_delay = self.flanger_delay_samples_cached(self.flanger_phase);
         let right_delay = self.flanger_delay_samples_cached((self.flanger_phase + 0.5).fract());
         let delayed_l = Self::read_delay(&self.flanger_l, self.flanger_write, left_delay);
@@ -657,6 +688,7 @@ impl TrackEffectChain {
         (
             finite_or_zero(input_l * (1.0 - controls.mix) + delayed_l * controls.mix),
             finite_or_zero(input_r * (1.0 - controls.mix) + delayed_r * controls.mix),
+            stereo_peak(delayed_l, delayed_r),
         )
     }
 
@@ -674,8 +706,39 @@ impl TrackEffectChain {
         .clamp(1.0, (self.flanger_l.len() - 2) as f32)
     }
 
+    fn tail_limit(&self) -> u32 {
+        (self.sample_rate * 2.0).round().max(1.0) as u32
+    }
+
+    #[cfg(test)]
     fn tail_length(&self) -> u32 {
-        (self.sample_rate * 0.25).round().max(1.0) as u32
+        self.tail_limit()
+    }
+
+    fn flanger_quiet_length(&self) -> u32 {
+        (self.sample_rate * 0.015).ceil() as u32 + 2
+    }
+
+    fn update_tail_activity(
+        feeding: bool,
+        state_peak: f32,
+        quiet_length: u32,
+        tail_limit: u32,
+        tail_remaining: &mut u32,
+        quiet_samples: &mut u32,
+    ) -> bool {
+        if feeding {
+            *tail_remaining = tail_limit;
+            *quiet_samples = 0;
+            return true;
+        }
+        *tail_remaining = tail_remaining.saturating_sub(1);
+        if state_peak <= SILENCE_THRESHOLD {
+            *quiet_samples = quiet_samples.saturating_add(1);
+        } else {
+            *quiet_samples = 0;
+        }
+        *tail_remaining > 0 && *quiet_samples < quiet_length
     }
 
     fn has_pending_parameters(&self) -> bool {
@@ -741,30 +804,49 @@ impl TrackEffectChain {
         finite_or_zero(buffer[first] * (1.0 - fraction) + buffer[second] * fraction)
     }
 
-    pub fn clear(&mut self) {
+    fn clear_distortion(&mut self) {
         self.distortion_state_l = 0.0;
         self.distortion_state_r = 0.0;
         self.distortion_active = false;
-        self.phaser_active = false;
-        self.flanger_active = false;
         self.distortion_tail_remaining = 0;
+        self.distortion_quiet_samples = 0;
+    }
+
+    fn clear_phaser(&mut self) {
+        self.phaser_active = false;
         self.phaser_tail_remaining = 0;
-        self.flanger_tail_remaining = 0;
-        self.phaser_phase = 0.0;
+        self.phaser_quiet_samples = 0;
         self.phaser_feedback_l = 0.0;
         self.phaser_feedback_r = 0.0;
         for stage in self.phaser_l.iter_mut().chain(self.phaser_r.iter_mut()) {
             stage.clear();
         }
-        self.flanger_phase = 0.0;
+    }
+
+    fn clear_flanger(&mut self) {
+        self.flanger_active = false;
+        self.flanger_tail_remaining = 0;
+        self.flanger_quiet_samples = 0;
         self.flanger_write = 0;
         self.flanger_l.fill(0.0);
         self.flanger_r.fill(0.0);
+    }
+
+    pub fn clear(&mut self) {
+        self.clear_distortion();
+        self.clear_phaser();
+        self.clear_flanger();
+        self.phaser_phase = 0.0;
+        self.flanger_phase = 0.0;
     }
 }
 
 fn finite_or_zero(value: f32) -> f32 {
     if value.is_finite() { value } else { 0.0 }
+}
+
+fn stereo_peak(left: f32, right: f32) -> f32 {
+    finite_or_zero(left).abs().max(finite_or_zero(right).abs())
 }
 
 fn sweep_value(phase: f32) -> f32 {
@@ -975,6 +1057,10 @@ impl Adsr {
             self.stage = EnvStage::Release
         }
     }
+    pub fn reset(&mut self) {
+        self.stage = EnvStage::Idle;
+        self.value = 0.0;
+    }
     pub fn next_sample(&mut self) -> f32 {
         self.next_sample_modulated(0.0, 0.0, 0.0, 0.0)
     }
@@ -1150,6 +1236,11 @@ impl BassVcaEnvelope {
         self.value
     }
 
+    pub fn reset(&mut self) {
+        self.value = 0.0;
+        self.gate = false;
+    }
+
     pub fn next_sample(&mut self) -> f32 {
         if self.gate {
             self.value += (1.0 - self.value) * self.attack_coefficient;
@@ -1201,6 +1292,10 @@ impl BassFilterEnvelope {
         self.value
     }
 
+    pub fn reset(&mut self) {
+        self.value = 0.0;
+    }
+
     pub fn next_sample(&mut self) -> f32 {
         self.value *= self.coefficient;
         if self.value <= 0.0001 {
@@ -1246,6 +1341,11 @@ impl BassAccentEnvelope {
 
     pub fn value(&self) -> f32 {
         self.value
+    }
+
+    pub fn reset(&mut self) {
+        self.value = 0.0;
+        self.stage = BassAccentStage::Idle;
     }
 
     pub fn next_sample(&mut self) -> f32 {
@@ -2932,11 +3032,11 @@ mod tests {
         chain.flanger_tail_remaining = chain.tail_length();
 
         chain.configure(TrackEffects::default(), ParameterLocks::default(), 1);
-        let output = chain.process_stereo(0.0, 0.0);
+        let output = chain.process_stereo(0.25, -0.5);
 
         assert_eq!(chain.flanger_mix.value(), 0.0);
         assert!(chain.flanger_active, "feedback should drain internally");
-        assert_eq!(output, (0.0, 0.0), "zero mix must remain an exact bypass");
+        assert_eq!(output, (0.25, -0.5), "zero mix must remain an exact bypass");
     }
 
     #[test]
@@ -2953,11 +3053,87 @@ mod tests {
         chain.phaser_tail_remaining = chain.tail_length();
 
         chain.configure(TrackEffects::default(), ParameterLocks::default(), 1);
-        let output = chain.process_stereo(0.0, 0.0);
+        let output = chain.process_stereo(0.25, -0.5);
 
         assert_eq!(chain.phaser_mix.value(), 0.0);
         assert!(chain.phaser_active, "feedback should drain internally");
-        assert_eq!(output, (0.0, 0.0), "zero mix must remain an exact bypass");
+        assert_eq!(output, (0.25, -0.5), "zero mix must remain an exact bypass");
+    }
+
+    #[test]
+    fn maximum_feedback_flanger_tail_is_not_cut_at_a_quarter_second() {
+        let sample_rate = 8_000;
+        let mut chain = TrackEffectChain::new(sample_rate);
+        let mut effects = TrackEffects::default();
+        effects.flanger.rate = crate::model::Percent::ZERO;
+        effects.flanger.delay = crate::model::Percent::new(100).unwrap();
+        effects.flanger.depth = crate::model::Percent::new(100).unwrap();
+        effects.flanger.feedback = crate::model::Percent::new(90).unwrap();
+        effects.flanger.mix = crate::model::Percent::new(100).unwrap();
+        chain.configure(effects, ParameterLocks::default(), 0);
+        chain.process(1.0);
+
+        let mut late_energy = 0.0;
+        for sample in 1..sample_rate / 2 {
+            let (left, right) = chain.process(0.0);
+            if sample >= sample_rate / 4 {
+                late_energy += left * left + right * right;
+            }
+        }
+        assert!(chain.flanger_active);
+        assert!(late_energy > 0.000_001, "late tail energy {late_energy}");
+
+        for _ in 0..sample_rate * 2 {
+            chain.process(0.0);
+        }
+        assert!(!chain.flanger_active);
+        assert!(chain.flanger_l.iter().all(|sample| *sample == 0.0));
+        assert!(chain.flanger_r.iter().all(|sample| *sample == 0.0));
+    }
+
+    #[test]
+    fn upstream_distortion_tail_keeps_the_downstream_phaser_awake() {
+        let mut chain = TrackEffectChain::new(8_000);
+        let mut effects = TrackEffects::default();
+        effects.distortion.drive = crate::model::Percent::new(100).unwrap();
+        effects.distortion.tone = crate::model::Percent::ZERO;
+        effects.distortion.mix = crate::model::Percent::new(100).unwrap();
+        effects.phaser.feedback = crate::model::Percent::new(90).unwrap();
+        effects.phaser.mix = crate::model::Percent::new(100).unwrap();
+        chain.configure(effects, ParameterLocks::default(), 0);
+        chain.process(1.0);
+        chain.clear_phaser();
+
+        chain.process(0.0);
+
+        assert!(chain.distortion_active);
+        assert!(chain.phaser_active);
+        assert!(chain.phaser_tail_remaining > 0);
+    }
+
+    #[test]
+    fn phaser_tail_eventually_clears_all_feedback_state() {
+        let sample_rate = 8_000;
+        let mut chain = TrackEffectChain::new(sample_rate);
+        let mut effects = TrackEffects::default();
+        effects.phaser.feedback = crate::model::Percent::new(90).unwrap();
+        effects.phaser.mix = crate::model::Percent::new(100).unwrap();
+        chain.configure(effects, ParameterLocks::default(), 0);
+        chain.process(1.0);
+        for _ in 0..sample_rate * 2 + 1 {
+            chain.process(0.0);
+        }
+
+        assert!(!chain.phaser_active);
+        assert_eq!(chain.phaser_feedback_l, 0.0);
+        assert_eq!(chain.phaser_feedback_r, 0.0);
+        assert!(
+            chain
+                .phaser_l
+                .iter()
+                .chain(chain.phaser_r.iter())
+                .all(|stage| stage.state == 0.0)
+        );
     }
 
     #[test]

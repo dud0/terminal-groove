@@ -96,3 +96,7 @@ These changes belong together because changing only the filter or only the envel
 - Sound calibration is manually checked through dry and moderately distorted acid patterns.
 - `SPEC.md` describes the implemented behavior accurately.
 - `cargo fmt`, `cargo test`, `cargo clippy`, and `cargo build --release` pass.
+
+## Follow-up status (2026-08-09)
+
+Implemented and corrected. The dedicated VCA, filter contour, and accent contour remain independent; the idle fast path now clears residual filter/accent state so a later unaccented note cannot inherit frozen accent energy.

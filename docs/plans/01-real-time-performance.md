@@ -102,3 +102,7 @@ This work should be completed as one project because preview gating, coefficient
 - No invariant exponential/trigonometric mapping remains in an inner oversampling loop.
 - Worst-case release benchmarks show a material improvement and are documented.
 - `cargo fmt`, `cargo test`, `cargo clippy`, and `cargo build --release` pass.
+
+## Follow-up status (2026-08-09)
+
+Implemented and corrected. The allocation fixture now measures active worst-case DSP and command transitions separately, the performance fixture pre-arms two four-voice Chord groups, and insert stages drain by measured quiet state with a two-second safety ceiling. Comparable reference results are recorded in `docs/AUDIO_PERFORMANCE.md`.

@@ -20,7 +20,7 @@ pub(super) struct SynthVoice {
     pub(super) sub_osc_2: PolyBlepOsc,
     pub(super) sub_mode: SubOscillatorMode,
     pub(super) noise: NoiseSource,
-    pub(super) noise_level: f32,
+    pub(super) noise_level: Smoother,
     pub(super) keyboard_tracking: f32,
     pub(super) env: Adsr,
     pub(super) bass_filter: Tb303Filter,
@@ -206,6 +206,7 @@ pub(super) struct ChordVoicePool {
     pub(super) voices: [SynthVoice; CHORD_GROUP_SIZE * 2],
     pub(super) group: usize,
     pub(super) voice_count: usize,
+    pub(super) group_voice_counts: [usize; 2],
     pub(super) active: bool,
     /// Each physical voice group owns its delay state so an overlapping
     /// release cannot borrow modulation history from a newly-triggered chord.
@@ -228,6 +229,7 @@ impl ChordVoicePool {
             }),
             group: 1,
             voice_count: 0,
+            group_voice_counts: [0; 2],
             active: false,
             choruses: std::array::from_fn(|_| StereoChorus::new(sample_rate)),
             arpeggiated: false,
@@ -459,7 +461,7 @@ impl SynthVoice {
             sub_osc_2: Default::default(),
             sub_mode: SubOscillatorMode::OneOctave,
             noise: NoiseSource::new(seed),
-            noise_level: 0.0,
+            noise_level: Smoother::new(0.0),
             keyboard_tracking: 50.0,
             env: Adsr::new(sr),
             bass_filter: Default::default(),
@@ -548,6 +550,15 @@ impl SynthVoice {
         } else {
             self.env.stage == crate::dsp::EnvStage::Idle
         }
+    }
+
+    pub(super) fn reset_to_idle(&mut self) {
+        self.env.reset();
+        self.active = false;
+        self.remaining = 0;
+        self.juno_filter.reset();
+        self.sh101_filter.reset();
+        self.juno_highpass.clear_state();
     }
 
     pub(super) fn gate_off(&mut self) {

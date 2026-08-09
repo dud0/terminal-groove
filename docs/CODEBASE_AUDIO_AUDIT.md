@@ -192,3 +192,19 @@ The work is split by shared architecture and verification needs:
 4. [Chord mixer and effects correctness](plans/04-mixer-and-effects.md)
 
 The plans are ordered by risk reduction. The real-time plan should land first so subsequent synthesis work can use cached/control-rate DSP infrastructure and can be measured against an established callback budget.
+
+## Follow-up verification (2026-08-09)
+
+The four plans were implemented and then reviewed. The follow-up repair pass resolved the remaining high-confidence defects:
+
+- Chord groups now own independent valid-slot counts, and reused triad/arpeggio groups clear obsolete voices.
+- Lead AUTO portamento reads the source note's effective lock chain before applying target locks.
+- Bass filter and accent contours clear when the independent VCA becomes idle.
+- Insert effects use stage-local quiet detection and a bounded safety ceiling instead of cutting every tail at 250 ms.
+- Noise and Keyboard Tracking are explicitly non-LFO destinations; legacy inert assignments are removed during format-17 loading.
+- Juno and SH-101 Noise ranges are now distinct and musically usable.
+- Allocation and performance fixtures exercise active DSP, command transitions, and two overlapping four-voice Chord groups.
+
+Reference-machine callback measurements are recorded in [Audio Callback Performance](AUDIO_PERFORMANCE.md). Hat and Cymbal DSP remains unchanged; their sample-free design description remains the accepted product behavior.
+
+Final verification passed 270 tests, formatting, Clippy with warnings denied, and the release build. The isolated 44.1 kHz/512-frame ALSA null-device stress run completed for 5 minutes 30 seconds with zero callback overruns.

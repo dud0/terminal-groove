@@ -50,18 +50,24 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
         });
     }
-    let project: Project =
+    let mut project: Project =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
         })?;
+    // Format 17 briefly accepted these assignments even though the audio
+    // renderer never applied them. Preserve project compatibility while
+    // removing only the two inert assignments before strict validation.
+    for track in &mut project.tracks {
+        track.lfos.noise = None;
+        track.lfos.keyboard_tracking = None;
+    }
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
             path: path.into(),
             source,
         })?;
-    let mut project = project;
     if !project.activate_pattern(0) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
@@ -401,6 +407,57 @@ mod tests {
         assert!(json.contains("rate_percent"));
         assert!(json.contains("quarter"));
         assert!(json.contains("\"pitch\""));
+    }
+
+    #[test]
+    fn loading_strips_only_legacy_noise_and_keyboard_tracking_lfos() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy-inert-lfos.groove.json");
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        let assignment = serde_json::to_value(crate::model::LfoConfig::default()).unwrap();
+        value["tracks"][crate::model::CHORD_TRACK_INDEX]["lfos"]["noise"] = assignment.clone();
+        value["tracks"][crate::model::LEAD_TRACK_INDEX]["lfos"]["keyboard_tracking"] =
+            assignment.clone();
+        value["tracks"][crate::model::LEAD_TRACK_INDEX]["lfos"]["cutoff"] = assignment;
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let loaded = load(&path).unwrap();
+        assert!(
+            loaded.tracks[crate::model::CHORD_TRACK_INDEX]
+                .lfos
+                .noise
+                .is_none()
+        );
+        assert!(
+            loaded.tracks[crate::model::LEAD_TRACK_INDEX]
+                .lfos
+                .keyboard_tracking
+                .is_none()
+        );
+        assert!(
+            loaded.tracks[crate::model::LEAD_TRACK_INDEX]
+                .lfos
+                .cutoff
+                .is_some()
+        );
+
+        save_atomic(&path, &loaded).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(
+            saved["tracks"][crate::model::CHORD_TRACK_INDEX]["lfos"]
+                .get("noise")
+                .is_none()
+        );
+        assert!(
+            saved["tracks"][crate::model::LEAD_TRACK_INDEX]["lfos"]
+                .get("keyboard_tracking")
+                .is_none()
+        );
+        assert!(
+            saved["tracks"][crate::model::LEAD_TRACK_INDEX]["lfos"]
+                .get("cutoff")
+                .is_some()
+        );
     }
 
     #[test]
