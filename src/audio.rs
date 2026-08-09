@@ -1679,8 +1679,8 @@ mod tests {
     }
 
     #[test]
-    fn rendered_bass_resonance_does_not_only_remove_low_end() {
-        fn bass_rms(resonance: u8) -> f32 {
+    fn rendered_bass_resonance_emphasizes_cutoff_relative_to_the_fundamental() {
+        fn cutoff_to_fundamental_ratio(resonance: u8) -> f32 {
             let mut project = Project::new();
             if let Instrument::Bass(parameters) = &mut project.tracks[SYNTH_TRACK_START].instrument
             {
@@ -1702,7 +1702,13 @@ mod tests {
             let status = Arc::new(AudioStatus::default());
             let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
             renderer.boundary(0);
-            let mut energy = 0.0;
+            let sample_rate = 48_000.0;
+            let fundamental = 130.8128;
+            let cutoff_harmonic = fundamental * 2.0;
+            let mut fundamental_sine = 0.0;
+            let mut fundamental_cosine = 0.0;
+            let mut cutoff_sine = 0.0;
+            let mut cutoff_cosine = 0.0;
             let mut count = 0;
             for sample in 0..4_096 {
                 let output = Renderer::render_synth(
@@ -1712,18 +1718,29 @@ mod tests {
                 )
                 .0;
                 if sample >= 1_024 {
-                    energy += output * output;
+                    let fundamental_phase =
+                        std::f32::consts::TAU * fundamental * sample as f32 / sample_rate;
+                    fundamental_sine += output * fundamental_phase.sin();
+                    fundamental_cosine += output * fundamental_phase.cos();
+                    let cutoff_phase =
+                        std::f32::consts::TAU * cutoff_harmonic * sample as f32 / sample_rate;
+                    cutoff_sine += output * cutoff_phase.sin();
+                    cutoff_cosine += output * cutoff_phase.cos();
                     count += 1;
                 }
             }
-            (energy / count as f32).sqrt()
+            let amplitude = |sine: f32, cosine: f32| {
+                2.0 * (sine * sine + cosine * cosine).sqrt() / count as f32
+            };
+            amplitude(cutoff_sine, cutoff_cosine) / amplitude(fundamental_sine, fundamental_cosine)
         }
 
-        let without_resonance = bass_rms(0);
-        let with_resonance = bass_rms(100);
+        let without_resonance = cutoff_to_fundamental_ratio(0);
+        let with_resonance = cutoff_to_fundamental_ratio(100);
         assert!(
             with_resonance > without_resonance,
-            "Bass resonance reduced the rendered voice: {without_resonance:.4} -> {with_resonance:.4}"
+            "Bass resonance did not emphasize cutoff relative to the fundamental: \
+             {without_resonance:.3} -> {with_resonance:.3}"
         );
     }
 

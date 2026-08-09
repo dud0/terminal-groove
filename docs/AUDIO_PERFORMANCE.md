@@ -36,6 +36,24 @@ Loads are percentages of the callback deadline. `ns/frame` is the median render 
 
 The updated median cost is approximately 12% lower. Every 44.1/48 kHz configuration meets the supported reference target of pooled p95 callback load no higher than 50%. The 96 kHz measurements are best-effort visibility and do not gate completion.
 
+## Four-pole Bass filter follow-up
+
+The saturated fixture was rerun after changing the dedicated Bass filter from three to four nonlinear stages and removing resonance-dependent post-filter makeup from Bass, Chord, and Lead. The additional pole does not materially change median callback cost, and every supported 44.1/48 kHz configuration remains below the 50% p95 target.
+
+| Rate | Frames | Median / p95 / p99 / max | Median ns/frame |
+|---:|---:|---:|---:|
+| 44.1 kHz | 128 | 27.9 / 32.7 / 42.0 / 62.6% | 6320.4 |
+| 44.1 kHz | 256 | 27.9 / 32.2 / 41.7 / 57.5% | 6315.8 |
+| 44.1 kHz | 512 | 27.8 / 30.9 / 44.1 / 59.0% | 6311.8 |
+| 48 kHz | 128 | 30.3 / 33.4 / 39.3 / 47.8% | 6322.6 |
+| 48 kHz | 256 | 30.3 / 34.5 / 36.9 / 73.3% | 6304.5 |
+| 48 kHz | 512 | 30.3 / 34.0 / 40.8 / 61.6% | 6320.0 |
+| 96 kHz | 128 | 60.6 / 70.2 / 90.8 / 97.9% | 6311.8 |
+| 96 kHz | 256 | 60.6 / 71.9 / 92.0 / 96.1% | 6315.3 |
+| 96 kHz | 512 | 61.4 / 93.4 / 98.4 / 144.7% | 6400.4 |
+
+The elevated 96 kHz tail latency remains best-effort host-scheduling evidence rather than a completion failure; median cost stays near 6.3 microseconds per frame.
+
 ## Evidence policy and device verification
 
 Wall-clock timing is a controlled local engineering measurement, not an automated regression proof or a universal dropout guarantee. Ordinary tests enforce deterministic finite output and callback allocation/deallocation safety under saturated DSP, audition, replacement, Stop/Play, and retirement-queue pressure; they contain no host-dependent timing limit.

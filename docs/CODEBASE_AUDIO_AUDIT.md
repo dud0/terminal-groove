@@ -48,15 +48,15 @@ Relevant code:
 
 Resolution: [TB-303 implementation plan](plans/02-tb303-engine.md).
 
-### A2. High: the Bass filter is a generic four-stage ladder
+### A2. High: the Bass filter lacked a dedicated topology
 
-The Bass voice uses the same `LadderFilter` structure as the other Roland-inspired voices. It is a nonlinear four-stage low-pass with feedback approaching 3.85. A TB-303-inspired implementation should use a dedicated three-pole/18 dB topology and calibrate resonance, cutoff loss, drive, and oversampling for that model.
+The original Bass voice used the same `LadderFilter` structure as the other Roland-inspired voices. The replacement is a dedicated nonlinear four-stage, diode-ladder-inspired low-pass processed at 2x oversampling. Its feedback, cutoff loss, drive, and smoothing remain independent from the Chord and Lead calibrations.
 
-The current filter can sound resonant and acidic, but its slope, phase response, feedback behavior, and resonance coloration differ materially from the target.
+An intermediate three-stage implementation was later corrected because the original diode ladder has four poles even though its transition around cutoff is often gentler than a conventional 24 dB/octave ladder. The implementation does not apply resonance-dependent output makeup, so its passband loss is preserved.
 
 Relevant code:
 
-- `src/dsp.rs`, `LadderFilter`
+- `src/dsp.rs`, `Tb303Filter`
 - `src/audio/renderer.rs`, `render_synth`
 
 Resolution: [TB-303 implementation plan](plans/02-tb303-engine.md).

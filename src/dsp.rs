@@ -1537,15 +1537,13 @@ impl Default for LadderFilter {
 
 /// Shared implementation for the two four-pole low-pass calibrations.  The
 /// wrappers below intentionally expose separate instrument types so their
-/// resonance and pass-band behavior cannot silently converge again.
+/// resonance behavior cannot silently converge again.
 struct CalibratedFourPole {
     stages: [f32; 4],
     coefficient: f32,
     feedback: f32,
-    passband_gain: f32,
     coefficient_step: f32,
     feedback_step: f32,
-    passband_gain_step: f32,
     parameter_smoothing_remaining: u8,
     cached_cutoff: f32,
     cached_resonance: f32,
@@ -1556,7 +1554,6 @@ struct CalibratedFourPole {
 struct FourPoleCalibration {
     cutoff_scale: f32,
     feedback_scale: f32,
-    passband_compensation: f32,
 }
 
 impl CalibratedFourPole {
@@ -1565,10 +1562,8 @@ impl CalibratedFourPole {
             stages: [0.0; 4],
             coefficient: 0.0,
             feedback: 0.0,
-            passband_gain: 1.0,
             coefficient_step: 0.0,
             feedback_step: 0.0,
-            passband_gain_step: 0.0,
             parameter_smoothing_remaining: 0,
             cached_cutoff: f32::NAN,
             cached_resonance: f32::NAN,
@@ -1602,20 +1597,14 @@ impl CalibratedFourPole {
         // still allowed to ring strongly, but extreme resonance remains
         // finite and does not turn the filter into an uncontrolled oscillator.
         let feedback = (resonance * calibration.feedback_scale).min(4.15);
-        // Counter the pass-band loss inherent in the resonant feedback path.
-        // Each instrument has its own bounded calibration so increasing
-        // resonance emphasizes the cutoff region without self-oscillation.
-        let passband_gain = 1.0 + resonance * calibration.passband_compensation;
         if initialize {
             self.coefficient = coefficient;
             self.feedback = feedback;
-            self.passband_gain = passband_gain;
             self.parameter_smoothing_remaining = 0;
         } else {
             let samples = f32::from(samples);
             self.coefficient_step = (coefficient - self.coefficient) / samples;
             self.feedback_step = (feedback - self.feedback) / samples;
-            self.passband_gain_step = (passband_gain - self.passband_gain) / samples;
             self.parameter_smoothing_remaining = samples as u8;
         }
     }
@@ -1624,7 +1613,6 @@ impl CalibratedFourPole {
         if self.parameter_smoothing_remaining > 0 {
             self.coefficient += self.coefficient_step;
             self.feedback += self.feedback_step;
-            self.passband_gain += self.passband_gain_step;
             self.parameter_smoothing_remaining -= 1;
         }
         let mut stage_input = (input * input_drive - self.stages[3] * self.feedback).tanh();
@@ -1632,7 +1620,7 @@ impl CalibratedFourPole {
             *stage += self.coefficient * (stage_input - stage.tanh());
             stage_input = stage.tanh();
         }
-        let output = self.stages[3] * self.passband_gain;
+        let output = self.stages[3];
         if output.is_finite() && self.stages.iter().all(|state| state.is_finite()) {
             output
         } else {
@@ -1667,7 +1655,6 @@ impl JunoFilter {
             FourPoleCalibration {
                 cutoff_scale: 0.92,
                 feedback_scale: 3.45,
-                passband_compensation: 1.25,
             },
         );
     }
@@ -1710,7 +1697,6 @@ impl Sh101Filter {
             FourPoleCalibration {
                 cutoff_scale: 1.06,
                 feedback_scale: 4.05,
-                passband_compensation: 1.50,
             },
         );
     }
@@ -1730,18 +1716,17 @@ impl Default for Sh101Filter {
     }
 }
 
-/// A three-pole, 18 dB/octave, transistor-ladder-inspired low-pass filter for
-/// the Bass voice.  It is intended to be driven at 2x the host sample rate.
-/// Parameter updates are cached and interpolated at control rate so cutoff
-/// changes do not produce zipper noise in the audio callback.
+/// A four-pole, diode-ladder-inspired nonlinear low-pass filter for the Bass
+/// voice.  Its transition around cutoff is deliberately gentle, while its
+/// far-stopband response approaches 24 dB/octave.  It is intended to be driven
+/// at 2x the host sample rate. Parameter updates are cached and interpolated at
+/// control rate so cutoff changes do not produce zipper noise in the callback.
 pub struct Tb303Filter {
-    stages: [f32; 3],
+    stages: [f32; 4],
     coefficient: f32,
     feedback: f32,
-    passband_gain: f32,
     coefficient_step: f32,
     feedback_step: f32,
-    passband_gain_step: f32,
     parameter_smoothing_remaining: u8,
     cached_cutoff: f32,
     cached_resonance: f32,
@@ -1751,13 +1736,11 @@ pub struct Tb303Filter {
 impl Tb303Filter {
     pub fn new() -> Self {
         Self {
-            stages: [0.0; 3],
+            stages: [0.0; 4],
             coefficient: 0.0,
             feedback: 0.0,
-            passband_gain: 1.0,
             coefficient_step: 0.0,
             feedback_step: 0.0,
-            passband_gain_step: 0.0,
             parameter_smoothing_remaining: 0,
             cached_cutoff: f32::NAN,
             cached_resonance: f32::NAN,
@@ -1766,7 +1749,7 @@ impl Tb303Filter {
     }
 
     pub fn reset(&mut self) {
-        self.stages = [0.0; 3];
+        self.stages = [0.0; 4];
     }
 
     pub fn set_parameters_smoothed(&mut self, cutoff: f32, resonance: f32, sr: f32, samples: u8) {
@@ -1783,10 +1766,6 @@ impl Tb303Filter {
         // The conservative feedback ceiling, paired with the tanh stages,
         // keeps self-oscillation character finite at extreme controls.
         let feedback = resonance * 2.75;
-        // The three-pole loop loses low-frequency gain as feedback rises.
-        // Compensate that loss here so resonance emphasizes the cutoff region
-        // instead of making the whole Bass voice thinner.
-        let passband_gain = 1.0 + resonance;
         let initialize = !self.cached_sr.is_finite() || samples == 0;
         self.cached_cutoff = cutoff;
         self.cached_resonance = resonance;
@@ -1794,13 +1773,11 @@ impl Tb303Filter {
         if initialize {
             self.coefficient = coefficient;
             self.feedback = feedback;
-            self.passband_gain = passband_gain;
             self.parameter_smoothing_remaining = 0;
         } else {
             let samples = f32::from(samples);
             self.coefficient_step = (coefficient - self.coefficient) / samples;
             self.feedback_step = (feedback - self.feedback) / samples;
-            self.passband_gain_step = (passband_gain - self.passband_gain) / samples;
             self.parameter_smoothing_remaining = samples as u8;
         }
     }
@@ -1809,15 +1786,14 @@ impl Tb303Filter {
         if self.parameter_smoothing_remaining > 0 {
             self.coefficient += self.coefficient_step;
             self.feedback += self.feedback_step;
-            self.passband_gain += self.passband_gain_step;
             self.parameter_smoothing_remaining -= 1;
         }
-        let mut stage_input = (input * 1.25 - self.stages[2] * self.feedback).tanh();
+        let mut stage_input = (input * 1.25 - self.stages[3] * self.feedback).tanh();
         for stage in &mut self.stages {
             *stage += self.coefficient * (stage_input - stage.tanh());
             stage_input = stage.tanh();
         }
-        let output = self.stages[2] * self.passband_gain;
+        let output = self.stages[3];
         if output.is_finite() && self.stages.iter().all(|state| state.is_finite()) {
             output
         } else {
@@ -2655,7 +2631,7 @@ mod tests {
     }
 
     #[test]
-    fn calibrated_four_pole_resonance_emphasizes_the_cutoff_without_losing_the_low_end() {
+    fn calibrated_four_pole_resonance_emphasizes_cutoff_relative_to_the_low_end() {
         enum Filter {
             Juno(JunoFilter),
             Sh101(Sh101Filter),
@@ -2710,20 +2686,13 @@ mod tests {
             let cutoff_at_zero = rms_at(kind, 0.0, cutoff_region);
             let cutoff_at_maximum = rms_at(kind, 1.0, cutoff_region);
             let high_at_maximum = rms_at(kind, 1.0, cutoff_region * 4.0);
-            let cutoff_boost_db = 20.0 * (cutoff_at_maximum / cutoff_at_zero).log10();
-            let low_change_db = 20.0 * (low_at_maximum / low_at_zero).log10();
+            let ratio_at_zero = cutoff_at_zero / low_at_zero;
+            let ratio_at_maximum = cutoff_at_maximum / low_at_maximum;
 
             assert!(
-                cutoff_boost_db >= 3.0,
-                "{kind} cutoff-region boost was {cutoff_boost_db:.1} dB"
-            );
-            assert!(
-                low_change_db >= -6.0,
-                "{kind} 100 Hz response changed by {low_change_db:.1} dB"
-            );
-            assert!(
-                cutoff_boost_db < 12.0,
-                "{kind} cutoff-region boost was unbounded at {cutoff_boost_db:.1} dB"
+                ratio_at_maximum > ratio_at_zero,
+                "{kind} resonance did not emphasize cutoff relative to the low end: \
+                 {ratio_at_zero:.3} -> {ratio_at_maximum:.3}"
             );
             assert!(
                 high_at_maximum < low_at_maximum * 0.5,
@@ -3606,35 +3575,38 @@ mod tests {
     }
 
     #[test]
-    fn tb303_filter_has_three_pole_lowpass_rolloff() {
-        fn rms_at(frequency: f32) -> f32 {
-            let sample_rate = 48_000.0;
+    fn tb303_filter_approaches_four_pole_far_stopband_rolloff() {
+        fn amplitude_at(frequency: f32) -> f32 {
+            let sample_rate = 96_000.0;
             let mut filter = Tb303Filter::new();
             filter.set_parameters_smoothed(250.0, 0.0, sample_rate, 0);
-            let mut energy = 0.0;
+            let mut sine = 0.0;
+            let mut cosine = 0.0;
             let mut count = 0;
-            for sample in 0..48_000 {
-                let input = (std::f32::consts::TAU * frequency * sample as f32 / sample_rate).sin();
+            for sample in 0..96_000 {
+                let phase = std::f32::consts::TAU * frequency * sample as f32 / sample_rate;
+                let input = 0.1 * phase.sin();
                 let output = filter.process(input);
-                if sample > 24_000 {
-                    energy += output * output;
+                if sample >= 48_000 {
+                    sine += output * phase.sin();
+                    cosine += output * phase.cos();
                     count += 1;
                 }
             }
-            (energy / count as f32).sqrt()
+            2.0 * (sine * sine + cosine * cosine).sqrt() / count as f32
         }
 
-        let low = rms_at(80.0);
-        let high = rms_at(640.0);
-        let attenuation_db = 20.0 * (high / low).log10();
+        let lower_octave = amplitude_at(2_000.0);
+        let upper_octave = amplitude_at(4_000.0);
+        let attenuation_db = 20.0 * (upper_octave / lower_octave).log10();
         assert!(
-            attenuation_db < -15.0,
-            "expected 18 dB/octave-like attenuation, got {attenuation_db:.1} dB"
+            (-30.0..=-18.0).contains(&attenuation_db),
+            "expected four-pole far-stopband attenuation, got {attenuation_db:.1} dB/octave"
         );
     }
 
     #[test]
-    fn tb303_filter_resonance_preserves_bass_and_emphasizes_cutoff() {
+    fn tb303_filter_resonance_emphasizes_cutoff_relative_to_the_low_end() {
         fn rms_at(resonance: f32, frequency: f32) -> f32 {
             let sample_rate = 48_000.0;
             let mut filter = Tb303Filter::new();
@@ -3656,13 +3628,12 @@ mod tests {
         let low_with_resonance = rms_at(1.0, 80.0);
         let cutoff_without_resonance = rms_at(0.0, 250.0);
         let cutoff_with_resonance = rms_at(1.0, 250.0);
+        let ratio_without_resonance = cutoff_without_resonance / low_without_resonance;
+        let ratio_with_resonance = cutoff_with_resonance / low_with_resonance;
         assert!(
-            low_with_resonance >= low_without_resonance * 0.75,
-            "resonance removed too much bass: {low_without_resonance:.4} -> {low_with_resonance:.4}"
-        );
-        assert!(
-            cutoff_with_resonance >= cutoff_without_resonance * 1.4,
-            "resonance did not emphasize the cutoff: {cutoff_without_resonance:.4} -> {cutoff_with_resonance:.4}"
+            ratio_with_resonance > ratio_without_resonance,
+            "resonance did not emphasize cutoff relative to the low end: \
+             {ratio_without_resonance:.3} -> {ratio_with_resonance:.3}"
         );
     }
 }

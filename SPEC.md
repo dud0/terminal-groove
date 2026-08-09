@@ -214,7 +214,7 @@ Defaults: tune 50%, tone 55%, decay 30%. Accent adds about 3 dB and a short high
 The Bass track is a 303-inspired engine with:
 
 - Band-limited asymmetric saw or square waveform.
-- A nonlinear three-pole (18 dB/octave) resonant low-pass filter processed at 2x oversampling.
+- A nonlinear four-pole, diode-ladder-inspired resonant low-pass filter processed at 2x oversampling. Its transition around cutoff is deliberately gentle, while its far-stopband response approaches 24 dB/octave.
 - `cutoff` mapped exponentially from 80 Hz to 8 kHz, `resonance`, positive `filter envelope` up to five octaves, and an exponential filter-contour `decay` mapped from about 80 ms to 2 seconds.
 - A separate fixed fast VCA gate with approximately 3 ms attack and 55 ms release. Held notes remain audible after the filter contour reaches its floor; empty steps release this gate and ties hold it.
 - Accent adds about 3 dB through a dedicated short amplitude contour plus extra filter excitation. Each accented note retriggers that contour; ties do not. A Bass slide retains the VCA and filter contours while gliding to its target over the fixed 60 ms.
@@ -222,6 +222,8 @@ The Bass track is a 303-inspired engine with:
 Defaults: saw, cutoff 45%, resonance 55%, filter envelope 65%, decay 40%.
 
 Chord is a Juno-60-inspired polyphonic engine; Lead is an SH-101-inspired monophonic engine. Both provide phase-aligned band-limited Pulse and Saw sources, an additive source mixer, a nonlinear four-stage resonant low-pass filter, one ADSR for amplitude and positive filter modulation, and these controls:
+
+The Bass, Chord, and Lead filters apply resonance within their feedback loops without resonance-dependent output makeup. Increasing resonance therefore emphasizes the cutoff region relative to the low-frequency passband and may reduce the voice's overall level.
 
 - `oscillator mix`: 0% is Pulse, 100% is Saw. Intermediate values are additive pulse/saw source levels with equal-power macro gains, so both sources contribute simultaneously without changing the saved-project meaning of this control.
 - `pulse width`: maps from 5% through 95% duty cycle.
