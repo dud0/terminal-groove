@@ -148,18 +148,38 @@ impl Lfo {
         self.smoothed
     }
 
+    pub fn restart(&mut self, config: LfoConfig, tempo_bpm: u16, sample_rate: f32) -> f32 {
+        self.activate(config);
+        self.refresh_cache(config, tempo_bpm, sample_rate);
+        let raw = self.raw_value(config.waveform);
+        self.smoothed = raw;
+        self.advance_phase(config.waveform);
+        raw
+    }
+
     pub fn next(&mut self, config: Option<LfoConfig>, tempo_bpm: u16, sample_rate: f32) -> f32 {
         let Some(config) = config.filter(|config| config.enabled) else {
             self.disable();
             return 0.0;
         };
         if !self.active {
-            self.phase = 0.0;
-            self.smoothed = 0.0;
-            self.rng = self.seed;
-            self.held = self.random_bipolar();
-            self.active = true;
+            return self.restart(config, tempo_bpm, sample_rate);
         }
+        self.refresh_cache(config, tempo_bpm, sample_rate);
+        let raw = self.raw_value(config.waveform);
+        self.smoothed += (raw - self.smoothed) * self.smoothing_coefficient;
+        self.advance_phase(config.waveform);
+        self.smoothed
+    }
+
+    fn activate(&mut self, config: LfoConfig) {
+        self.phase = config.start_phase.normalized().fract();
+        self.rng = self.seed;
+        self.held = self.random_bipolar();
+        self.active = true;
+    }
+
+    fn refresh_cache(&mut self, config: LfoConfig, tempo_bpm: u16, sample_rate: f32) {
         if self.cached_config != Some(config)
             || self.cached_tempo_bpm != tempo_bpm
             || self.cached_sample_rate != sample_rate
@@ -170,7 +190,10 @@ impl Lfo {
             self.increment = config.rate.hz(tempo_bpm) / sample_rate;
             self.smoothing_coefficient = 1.0 - (-1.0 / (sample_rate * 0.005).max(1.0)).exp();
         }
-        let raw = match config.waveform {
+    }
+
+    fn raw_value(&self, waveform: LfoWaveform) -> f32 {
+        match waveform {
             LfoWaveform::Sine => (std::f32::consts::TAU * self.phase).sin(),
             LfoWaveform::Triangle => (2.0 / PI) * (std::f32::consts::TAU * self.phase).sin().asin(),
             LfoWaveform::Square => {
@@ -182,16 +205,17 @@ impl Lfo {
             }
             LfoWaveform::Saw => self.phase * 2.0 - 1.0,
             LfoWaveform::SampleAndHold => self.held,
-        };
-        self.smoothed += (raw - self.smoothed) * self.smoothing_coefficient;
+        }
+    }
+
+    fn advance_phase(&mut self, waveform: LfoWaveform) {
         self.phase += self.increment.max(0.0);
         if self.phase >= 1.0 {
             self.phase = self.phase.fract();
-            if config.waveform == LfoWaveform::SampleAndHold {
+            if waveform == LfoWaveform::SampleAndHold {
                 self.held = self.random_bipolar();
             }
         }
-        self.smoothed
     }
 
     fn random_bipolar(&mut self) -> f32 {
@@ -3042,6 +3066,41 @@ mod tests {
                 second.next(Some(random), 120, 1_000.0)
             );
         }
+    }
+
+    #[test]
+    fn lfo_start_phase_and_restart_are_exact_and_deterministic() {
+        use crate::model::Percent;
+
+        let config = LfoConfig {
+            waveform: LfoWaveform::Sine,
+            reset_on_trigger: true,
+            start_phase: Percent::new(25).unwrap(),
+            depth: Percent::new(100).unwrap(),
+            ..Default::default()
+        };
+        let mut lfo = Lfo::new(41);
+        assert!((lfo.next(Some(config), 120, 48_000.0) - 1.0).abs() < 0.000_001);
+        for _ in 0..100 {
+            lfo.next(Some(config), 120, 48_000.0);
+        }
+        assert!((lfo.restart(config, 120, 48_000.0) - 1.0).abs() < 0.000_001);
+
+        let wrapped = LfoConfig {
+            start_phase: Percent::new(100).unwrap(),
+            ..config
+        };
+        assert!(lfo.restart(wrapped, 120, 48_000.0).abs() < 0.000_001);
+
+        let random = LfoConfig {
+            waveform: LfoWaveform::SampleAndHold,
+            ..config
+        };
+        let first = lfo.restart(random, 120, 48_000.0);
+        for _ in 0..100 {
+            lfo.next(Some(random), 120, 48_000.0);
+        }
+        assert_eq!(lfo.restart(random, 120, 48_000.0), first);
     }
 
     #[test]

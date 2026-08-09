@@ -602,7 +602,7 @@ pub(super) fn render_lfo_popup(
     };
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1, 5); 5])
+        .constraints([Constraint::Ratio(1, 7); 7])
         .split(controls_area);
     for (index, field) in LfoField::ALL.iter().enumerate() {
         render_lfo_control(
@@ -625,7 +625,9 @@ pub(super) fn render_lfo_popup(
     f.render_widget(
         Paragraph::new(vec![
             Line::from("[←/→] select   [↑/↓] adjust   [Shift+↑/↓] ±10% fields"),
-            Line::from("[`/1–9/0] free rate/depth   [Backspace/Del] remove   [Enter/Esc] close"),
+            Line::from(
+                "[`/1–9/0] phase/free rate/depth   [Backspace/Del] remove   [Enter/Esc] close",
+            ),
         ])
         .alignment(Alignment::Center),
         help_area,
@@ -653,6 +655,8 @@ pub(super) fn render_lfo_control(
     let label = match field {
         LfoField::Enabled => "Enabled",
         LfoField::Waveform => "Waveform",
+        LfoField::TriggerReset => "Trigger Reset",
+        LfoField::StartPhase => "Start Phase",
         LfoField::RateMode => "Rate Mode",
         LfoField::Rate => "Rate",
         LfoField::Depth => "Depth",
@@ -685,6 +689,34 @@ pub(super) fn render_lfo_control(
                 .position(|waveform| *waveform == config.waveform)
                 .unwrap();
             render_lfo_selector(f, content, &choices, current, style);
+        }
+        LfoField::TriggerReset => {
+            render_lfo_switch(f, content, "ON", "OFF", config.reset_on_trigger, style)
+        }
+        LfoField::StartPhase => {
+            render_centered(
+                f,
+                &format!(
+                    "{}% · {:.0}°",
+                    config.start_phase.get(),
+                    config.start_phase.get() as f32 * 3.6
+                ),
+                Rect {
+                    height: 1,
+                    ..content
+                },
+                style,
+            );
+            render_lfo_fader(
+                f,
+                Rect {
+                    y: content.y + 1,
+                    height: content.height.saturating_sub(1),
+                    ..content
+                },
+                config.start_phase.get(),
+                style,
+            );
         }
         LfoField::RateMode => render_lfo_switch(
             f,
@@ -1007,7 +1039,7 @@ pub(super) fn tempo_popup_rect(area: Rect) -> Rect {
 }
 
 pub(super) fn lfo_popup_rect(area: Rect) -> Rect {
-    let width = area.width.saturating_sub(4).min(92);
+    let width = area.width.saturating_sub(4).min(116);
     let height = area.height.saturating_sub(4).min(20);
     Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
@@ -1029,7 +1061,14 @@ fn compact_popup_rect(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 pub(super) fn trigger_popup_rect(area: Rect) -> Rect {
-    lfo_popup_rect(area)
+    let width = area.width.saturating_sub(4).min(92);
+    let height = area.height.saturating_sub(4).min(20);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height + 5),
+        width,
+        height,
+    }
 }
 
 pub(super) fn generator_popup_rect(area: Rect) -> Rect {

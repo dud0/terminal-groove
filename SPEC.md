@@ -153,13 +153,15 @@ All continuous DSP parameters use short smoothing ramps. A default ramp of appro
 
 Each track may attach one independent LFO to each eligible continuous instrument parameter, track level, and pan. Chord and Lead additionally support the LFO-only `pitch` destination. Waveform, mute, delay send, reverb send, accent, slide, Chord spread, Chord/Lead Noise, Lead Keyboard Tracking, and global parameters are not eligible.
 
-Each assignment stores enabled state, waveform, rate, and depth. Waveforms are sine, triangle, square, rising saw, and deterministic sample-and-hold. Sine and triangle begin at the center and rise, square begins high, saw begins at -1 and rises, and sample-and-hold selects one deterministic pseudorandom bipolar value per cycle.
+Each assignment stores enabled state, waveform, trigger-reset state, starting phase, rate, and depth. Starting phase is a 0–100% cycle position; 0% and 100% are equivalent. Waveforms are sine, triangle, square, rising saw, and deterministic sample-and-hold. At 0%, sine and triangle begin at the center and rise, square begins high, saw begins at -1 and rises, and sample-and-hold selects one deterministic pseudorandom bipolar value per cycle.
 
 Depth is 0–100 percentage points and is bipolar. For ordinary destinations, the engine adds `waveform * depth` to the current effective base-or-lock percentage, clamps to 0–100, and only then maps the percentage to its physical value. `pitch` is LFO-only: it has no base value or step lock, and converts `waveform * depth` to `offset_percent / 100 * 2` semitones around every triggered Chord or Lead note. Thus 100% depth is bipolar ±2 semitones. The frequency multiplier is `2^(semitones/12)`. Discontinuous waveforms receive an approximately 5 ms smoothing stage.
 
 Free rate uses an exponential 0–100 control mapping from 0.01 Hz through 20 Hz. Tempo-synchronized cycle lengths, from slowest to fastest, are four bars, two bars, one bar, half, dotted quarter, quarter, quarter triplet, dotted eighth, eighth, eighth triplet, sixteenth, sixteenth triplet, and thirty-second.
 
-Sequence LFO phase starts at zero, resets on explicit Stop, freezes on pause, and continues on resume. Events do not retrigger it. Stopped auditions use independent preview LFO state beginning at phase zero. Drum instrument parameters sample their modulated values when a hit starts; level and pitched-voice destinations modulate continuously, including ties and release tails.
+Sequence LFO phase starts at its configured starting phase after explicit Stop or when newly enabled, freezes on pause, and continues on resume. When trigger reset is enabled, each accepted drum or note hit resets the track parameter's LFO to its starting phase before the voice samples modulation. This includes every hit in a configured retrigger burst and a tie that must recover an inactive source voice, but excludes rejected conditions/probability gates, ordinary held ties, empty boundaries, and Chord arpeggiator substeps. The starting waveform value applies exactly on the hit; subsequent discontinuities retain the normal smoothing stage. Changing starting phase while an LFO is running takes effect at its next initialization or qualifying trigger.
+
+Auditions use independent preview LFO state beginning at the configured starting phase. Every new audition initializes that state, and subsequent hits in its retrigger burst reset only assignments whose trigger reset is enabled. Sample-and-hold initialization and trigger resets reproduce the assignment's deterministic seeded value. Drum instrument parameters sample their modulated values when a hit starts; level and pitched-voice destinations modulate continuously, including ties and release tails.
 
 ### 3.3 Kick drum
 
@@ -428,7 +430,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - `C` opens a compact horizontal Chord trigger editor over the selected track's parameter section, keeping the sequencer visible. Left/Right selects Shape, Arp, Type, or Rate; Up/Down changes the selected value and stops at list boundaries; PageUp/PageDown moves between steps. Shape order begins with `1`, `1-3`, and `1-5`, followed by the existing three- and four-note shapes. Type and Rate remain remembered but are disabled while Arp is off. Note triggers show their values, ties show inherited source values read-only, and empty steps edit input defaults. Chord settings are not BASE/LOCK parameters.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
-- The LFO modal uses left/right to select enabled, waveform, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to free rate and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
+- The LFO modal uses left/right to select enabled, waveform, trigger reset, starting phase, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to starting phase, free rate, and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
 - `A` toggles accent immediately on a trigger or note, or toggles the selected track's persisted input accent default when the step is empty without creating an event. `Shift+G` toggles slide on a Bass or Lead note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. `Shift+Q` opens the selected-track probability editor with the same controls: Up/Down changes by 1%, Shift+Up/Down by 10%, and values clamp to 0–100%. Enter, Esc, or Shift+Q closes while retaining immediate edits. These edits are undoable and repeated arrow changes coalesce into one transaction; direct accent editing remains invalid on ties. Lowercase `p` remains the BASE/LOCK scope toggle, and `P` remains the Chord/Lead pulse-width shortcut.
 
 The pattern-idea generator opens with `g` and is session-only; its settings are never written to project JSON. Its fields, in order, are `Target`, `Track`, `Seed`, `Density`, `Low octave`, `High octave`, `Chord shapes`, `Ties`, `Accents`, and `Slides`. Up/down moves between fields and clamps at the first or last field; Tab and BackTab move through the same ten-field order and wrap. Target and Track use left/right, the Track selector wraps through all nine tracks, and Seed accepts digits with Backspace (left also removes its last digit). Percentage fields change by 5 points and clamp to 0–100%. Low octave and High octave use left/right one octave at a time: Low is clamped to 0 through High, while High is clamped to Low through 7. Chord shapes is an ordered selector that clamps through Default, Root shapes, and All shapes. Enter applies the generator and Esc closes it; range edits do not alter existing events. Defaults are the deterministic seed, 48% density, O2–O6, All shapes, 18% ties, 24% accents, and 18% slides. Rimshot generation uses steps 5 and 13 as its higher-probability backbeat anchors.
@@ -462,7 +464,7 @@ At `120x34` or larger, the normal screen contains:
 
 Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows event accent, the empty-step input accent default, inherited accent/source on ties, and Bass or Lead slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, envelope, distortion, phaser, and flanger groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout; flanger readouts show Hz, center delay/excursion in ms, feedback, and wet mix. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.
 
-The compact, centered track-level LFO modal arranges enabled, waveform, rate mode, rate, and depth as five control columns from left to right, matching left/right field selection and up/down value adjustment. Its size is capped rather than expanding with larger terminals, and control names occupy their card borders to avoid duplicated labels and empty space. Enabled and rate mode use two-position switches, waveform and synchronized rate use multi-value selectors that fill all available rows, and free rate and depth use ten-segment faders. Up selects the displayed option above and Down selects the option below; both two-position switches and multi-value selectors stop at their first and last values instead of cycling. For faders, Up increases and Down decreases. The selected column uses the same heavy outline, reverse styling, and bold labeling as an active parameter. Rate shows its synchronized division or free percentage together with the resulting physical Hz value; ordinary depth is labeled in bipolar percentage points, while pitch depth also shows its ±semitone range. The Chord editor uses the same compact treatment as LFO, with four equal-width Shape, Arp, Type, and Rate fields, disabled Type/Rate styling while Arp is off, trigger-origin indicators, and PageUp/PageDown step navigation. The trigger editor uses the same large card treatment with five horizontal Mode, Phase, Length, Chance, and Retrigger fields: Mode, Phase, Length, and Retrigger are multi-option selectors, Chance is a ten-segment percentage fader, and selector arrows follow the displayed order. Inactive mode-specific fields remain visibly muted. Swing and pattern-generator dialogs use compact, content-sized centered overlays.
+The compact, centered track-level LFO modal arranges enabled, waveform, trigger reset, starting phase, rate mode, rate, and depth as seven control columns from left to right, matching left/right field selection and up/down value adjustment. Its width is capped at 116 columns and shrinks safely on smaller areas. Control names occupy their card borders to avoid duplicated labels and empty space. Enabled, trigger reset, and rate mode use two-position switches; waveform and synchronized rate use multi-value selectors that fill all available rows; and starting phase, free rate, and depth use ten-segment faders. Up selects the displayed option above and Down selects the option below; switches and selectors stop at their first and last values instead of cycling. For faders, Up increases and Down decreases. Starting phase shows both percentage and derived degrees. The selected column uses the same heavy outline, reverse styling, and bold labeling as an active parameter. Rate shows its synchronized division or free percentage together with the resulting physical Hz value; ordinary depth is labeled in bipolar percentage points, while pitch depth also shows its ±semitone range. The Chord editor uses the same compact treatment as LFO, with four equal-width Shape, Arp, Type, and Rate fields, disabled Type/Rate styling while Arp is off, trigger-origin indicators, and PageUp/PageDown step navigation. The trigger editor uses the same large card treatment with five horizontal Mode, Phase, Length, Chance, and Retrigger fields: Mode, Phase, Length, and Retrigger are multi-option selectors, Chance is a ten-segment percentage fader, and selector arrows follow the displayed order. Inactive mode-specific fields remain visibly muted. Swing and pattern-generator dialogs use compact, content-sized centered overlays.
 
 Parameter shortcuts are displayed beside the controls they operate in the detail cards. Other event, navigation, and track-action shortcut hints are not shown in the main layout. The help overlay remains available for the complete key map; there is no persistent bottom instruction panel.
 
@@ -534,7 +536,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 18,
+  "format_version": 19,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -603,6 +605,8 @@ An empty LFO collection is `{}`. Assignment keys are compatible continuous instr
   "cutoff": {
     "enabled": true,
     "waveform": "sine",
+    "reset_on_trigger": false,
+    "start_phase": 0,
     "rate": { "mode": "synced", "division": "quarter" },
     "depth": 10
   }
@@ -617,6 +621,8 @@ For Chord or Lead pitch:
     "pitch": {
       "enabled": true,
       "waveform": "triangle",
+      "reset_on_trigger": true,
+      "start_phase": 25,
       "rate": { "mode": "synced", "division": "quarter" },
       "depth": 100
     }
@@ -624,7 +630,7 @@ For Chord or Lead pitch:
 }
 ```
 
-The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. The additive field is supported in format version 18.
+The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. Trigger reset and starting phase are required LFO fields in format version 19.
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 

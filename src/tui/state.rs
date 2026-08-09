@@ -66,6 +66,8 @@ impl SidechainField {
 pub(crate) enum LfoField {
     Enabled,
     Waveform,
+    TriggerReset,
+    StartPhase,
     RateMode,
     Rate,
     Depth,
@@ -105,9 +107,11 @@ impl ChordField {
 }
 
 impl LfoField {
-    pub(super) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 7] = [
         Self::Enabled,
         Self::Waveform,
+        Self::TriggerReset,
+        Self::StartPhase,
         Self::RateMode,
         Self::Rate,
         Self::Depth,

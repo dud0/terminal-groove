@@ -548,6 +548,8 @@ mod tests {
         let lfo = Some(LfoConfig {
             enabled: true,
             waveform: LfoWaveform::Sine,
+            reset_on_trigger: false,
+            start_phase: Percent::ZERO,
             rate: LfoRate::Synced {
                 division: LfoDivision::Sixteenth,
             },
@@ -2915,6 +2917,144 @@ mod tests {
         assert_eq!(renderer.lfo_offsets[0][ParameterId::Level as usize], moving);
         renderer.command(AudioCommand::Stop);
         assert_eq!(renderer.lfo_offsets[0][ParameterId::Level as usize], 0.0);
+    }
+
+    #[test]
+    fn trigger_reset_applies_exact_phase_before_drum_sampling() {
+        let mut project = Project::new();
+        project.tracks[0].lfos.tune = Some(LfoConfig {
+            waveform: LfoWaveform::Square,
+            reset_on_trigger: true,
+            start_phase: Percent::new(75).unwrap(),
+            rate: LfoRate::Free {
+                rate_percent: Percent::new(100).unwrap(),
+            },
+            depth: Percent::new(50).unwrap(),
+            ..Default::default()
+        });
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 2,
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 1_000, status);
+
+        for _ in 0..20 {
+            renderer.advance_lfos();
+        }
+        let moving = renderer.lfo_offsets[0][ParameterId::Tune as usize];
+        assert!(moving > -49.0);
+        renderer.process_track_action(0, 0, false, false);
+        assert_eq!(renderer.lfo_offsets[0][ParameterId::Tune as usize], moving);
+
+        renderer.process_track_action(0, 0, false, true);
+        assert_eq!(renderer.lfo_offsets[0][ParameterId::Tune as usize], -50.0);
+        assert_eq!(renderer.drums[0].tune, 0.0);
+
+        renderer.advance_lfos();
+        renderer.process_track_action(0, 0, true, true);
+        assert_eq!(renderer.lfo_offsets[0][ParameterId::Tune as usize], -50.0);
+
+        renderer.audition(0, 0);
+        assert_eq!(
+            renderer.preview_lfo_offsets[0][ParameterId::Tune as usize],
+            -50.0
+        );
+        assert_eq!(renderer.preview_drums[0].tune, 0.0);
+    }
+
+    #[test]
+    fn held_ties_do_not_reset_lfos_but_cold_ties_do() {
+        let track = SYNTH_TRACK_START;
+        let mut project = Project::new();
+        project.tracks[track].lfos.level = Some(LfoConfig {
+            waveform: LfoWaveform::Sine,
+            reset_on_trigger: true,
+            start_phase: Percent::new(25).unwrap(),
+            rate: LfoRate::Free {
+                rate_percent: Percent::new(100).unwrap(),
+            },
+            depth: Percent::new(40).unwrap(),
+            ..Default::default()
+        });
+        project.patterns[0].tracks[track].steps[0] = Some(StepEvent::BassNote {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        project.patterns[0].tracks[track].steps[1] = Some(StepEvent::Tie {
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 1_000, status);
+
+        renderer.process_track_action(track, 0, false, true);
+        assert!((renderer.lfo_offsets[track][ParameterId::Level as usize] - 40.0).abs() < 0.000_1);
+        for _ in 0..20 {
+            renderer.advance_lfos();
+        }
+        let moving = renderer.lfo_offsets[track][ParameterId::Level as usize];
+        renderer.process_track_action(track, 1, false, true);
+        assert_eq!(
+            renderer.lfo_offsets[track][ParameterId::Level as usize],
+            moving
+        );
+
+        renderer.synth[0].active = false;
+        renderer.process_track_action(track, 1, false, true);
+        assert!((renderer.lfo_offsets[track][ParameterId::Level as usize] - 40.0).abs() < 0.000_1);
+    }
+
+    #[test]
+    fn chord_arpeggio_substeps_do_not_reset_lfos() {
+        let track = CHORD_TRACK_INDEX;
+        let mut project = Project::new();
+        project.tracks[track].lfos.level = Some(LfoConfig {
+            waveform: LfoWaveform::Sine,
+            reset_on_trigger: true,
+            start_phase: Percent::new(25).unwrap(),
+            rate: LfoRate::Free {
+                rate_percent: Percent::new(100).unwrap(),
+            },
+            depth: Percent::new(40).unwrap(),
+            ..Default::default()
+        });
+        project.patterns[0].tracks[track].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            chord_shape: None,
+            arpeggio: crate::model::ArpeggioConfig {
+                enabled: true,
+                r#type: ArpeggioType::Up,
+                rate: ArpeggioRate::Sixteenth,
+            },
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 1_000, status);
+
+        renderer.process_track_action(track, 0, false, true);
+        for _ in 0..20 {
+            renderer.advance_lfos();
+        }
+        let moving = renderer.lfo_offsets[track][ParameterId::Level as usize];
+        let position = renderer.chord.arpeggio.position;
+        renderer.chord.arpeggio.phase = 0.0;
+        renderer.advance_chord_arpeggios();
+        assert_ne!(renderer.chord.arpeggio.position, position);
+        assert_eq!(
+            renderer.lfo_offsets[track][ParameterId::Level as usize],
+            moving
+        );
     }
 
     #[test]

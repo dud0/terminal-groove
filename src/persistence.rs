@@ -44,7 +44,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if version != Some(18) {
+    if version != Some(19) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 18);
+        assert_eq!(value["format_version"], 19);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -391,15 +391,15 @@ mod tests {
     #[test]
     fn legacy_projects_are_rejected_after_the_format_bump() {
         for json in [
-            r#"{"format_version":17}"#,
-            r#"{"format_version":17,"globals":{},"tracks":[]}"#,
+            r#"{"format_version":18}"#,
+            r#"{"format_version":18,"globals":{},"tracks":[]}"#,
         ] {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
             assert!(matches!(
                 load(path.path()),
                 Err(ProjectIoError::Validation {
-                    source: crate::model::ValidationError::Version(17),
+                    source: crate::model::ValidationError::Version(18),
                     ..
                 })
             ));
@@ -413,6 +413,8 @@ mod tests {
         let mut project = Project::new();
         project.tracks[0].lfos.tune = Some(crate::model::LfoConfig {
             waveform: crate::model::LfoWaveform::SampleAndHold,
+            reset_on_trigger: true,
+            start_phase: crate::model::Percent::new(25).unwrap(),
             rate: crate::model::LfoRate::Free {
                 rate_percent: crate::model::Percent::new(75).unwrap(),
             },
@@ -433,6 +435,8 @@ mod tests {
         assert_eq!(loaded, project);
         let json = fs::read_to_string(path).unwrap();
         assert!(json.contains("sample_and_hold"));
+        assert!(json.contains("\"reset_on_trigger\": true"));
+        assert!(json.contains("\"start_phase\": 25"));
         assert!(json.contains("rate_percent"));
         assert!(json.contains("quarter"));
         assert!(json.contains("\"pitch\""));
@@ -466,6 +470,16 @@ mod tests {
         let mut value = serde_json::to_value(Project::new()).unwrap();
         value["tracks"][0]["lfos"]["wat"] =
             serde_json::to_value(crate::model::LfoConfig::default()).unwrap();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+
+        let mut project = Project::new();
+        project.tracks[0].lfos.tune = Some(crate::model::LfoConfig::default());
+        let mut value = serde_json::to_value(project).unwrap();
+        value["tracks"][0]["lfos"]["tune"]
+            .as_object_mut()
+            .unwrap()
+            .remove("start_phase");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
 
@@ -587,7 +601,7 @@ mod tests {
             .remove("flanger");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 18);
+        assert_eq!(loaded.format_version, 19);
         assert_eq!(
             loaded.tracks[0].effects.flanger,
             crate::model::FlangerParameters::default()

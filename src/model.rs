@@ -355,6 +355,8 @@ impl LfoRate {
 pub struct LfoConfig {
     pub enabled: bool,
     pub waveform: LfoWaveform,
+    pub reset_on_trigger: bool,
+    pub start_phase: Percent,
     pub rate: LfoRate,
     pub depth: Percent,
 }
@@ -364,6 +366,8 @@ impl Default for LfoConfig {
         Self {
             enabled: true,
             waveform: LfoWaveform::Sine,
+            reset_on_trigger: false,
+            start_phase: Percent::ZERO,
             rate: LfoRate::Synced {
                 division: LfoDivision::Quarter,
             },
@@ -1801,7 +1805,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 18,
+            format_version: 19,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1958,7 +1962,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 18 {
+        if self.format_version != 19 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -3057,7 +3061,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 18);
+        assert_eq!(project.format_version, 19);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
@@ -3283,6 +3287,9 @@ mod tests {
 
     #[test]
     fn lfo_targets_and_rates_are_bounded_and_contextual() {
+        let default = LfoConfig::default();
+        assert!(!default.reset_on_trigger);
+        assert_eq!(default.start_phase, Percent::ZERO);
         assert!(
             (LfoRate::Free {
                 rate_percent: Percent::ZERO

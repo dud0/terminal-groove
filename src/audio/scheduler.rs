@@ -282,6 +282,52 @@ impl Renderer {
         }
     }
 
+    pub(super) fn restart_trigger_lfo_bank(
+        states: &mut [Lfo; ParameterId::ALL.len()],
+        offsets: &mut [f32; ParameterId::ALL.len()],
+        destinations: &[ParameterId; ParameterId::ALL.len()],
+        destination_count: u8,
+        track: AudioTrack,
+        tempo_bpm: u16,
+        sample_rate: f32,
+    ) {
+        for &parameter in destinations.iter().take(destination_count as usize) {
+            let Some(config) = track
+                .lfos
+                .get(parameter)
+                .filter(|config| config.enabled && config.reset_on_trigger)
+            else {
+                continue;
+            };
+            let value = states[parameter as usize].restart(config, tempo_bpm, sample_rate);
+            offsets[parameter as usize] = value * config.depth.get() as f32;
+        }
+    }
+
+    pub(super) fn restart_trigger_lfos(&mut self, track: usize) {
+        Self::restart_trigger_lfo_bank(
+            &mut self.lfos[track],
+            &mut self.lfo_offsets[track],
+            &self.lfo_destinations[track],
+            self.lfo_destination_count[track],
+            self.project.tracks[track],
+            self.project.globals.tempo_bpm,
+            self.sr,
+        );
+    }
+
+    pub(super) fn restart_preview_trigger_lfos(&mut self, track: usize) {
+        Self::restart_trigger_lfo_bank(
+            &mut self.preview_lfos[track],
+            &mut self.preview_lfo_offsets[track],
+            &self.lfo_destinations[track],
+            self.lfo_destination_count[track],
+            self.project.tracks[track],
+            self.project.globals.tempo_bpm,
+            self.sr,
+        );
+    }
+
     pub(super) fn advance_lfos(&mut self) {
         let tempo = self.project.globals.tempo_bpm;
         for track in 0..TRACK_COUNT {

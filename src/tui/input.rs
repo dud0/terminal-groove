@@ -1677,6 +1677,13 @@ pub(super) fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Res
                     config.waveform =
                         LfoWaveform::ALL[lfo_choice_index(index, LfoWaveform::ALL.len(), k.code)];
                 }
+                LfoField::TriggerReset => {
+                    let current = usize::from(!config.reset_on_trigger);
+                    config.reset_on_trigger = lfo_choice_index(current, 2, k.code) == 0;
+                }
+                LfoField::StartPhase => {
+                    config.start_phase = config.start_phase.saturating_add(percent_delta);
+                }
                 LfoField::RateMode => {
                     let current = usize::from(matches!(config.rate, LfoRate::Free { .. }));
                     config.rate = match (lfo_choice_index(current, 2, k.code), config.rate) {
@@ -1709,6 +1716,10 @@ pub(super) fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Res
         KeyCode::Char(c) => crate::reducer::percentage_key(c).is_some_and(|value| match field {
             LfoField::Depth => {
                 config.depth = value;
+                true
+            }
+            LfoField::StartPhase => {
+                config.start_phase = value;
                 true
             }
             LfoField::Rate => match &mut config.rate {

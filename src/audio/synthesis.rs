@@ -795,6 +795,7 @@ impl Renderer {
             return;
         }
         self.preview_scheduled = [None; 24];
+        self.reset_preview_lfos(track);
         let count = self.project.patterns[self.active_pattern].tracks[track].steps[step]
             .and_then(|event| event.retrigger_count())
             .unwrap_or(1);
@@ -820,7 +821,6 @@ impl Renderer {
         {
             return;
         }
-        self.reset_preview_lfos(track);
         self.configure_track_effects(
             track,
             self.locks_at(track, step),
@@ -833,6 +833,7 @@ impl Renderer {
                 Some(StepEvent::Trigger { accent, .. }) => accent,
                 _ => self.project.tracks[track].input_accent,
             };
+            self.restart_preview_trigger_lfos(track);
             self.trigger_preview_drum(track, accent, self.locks_at(track, step));
             return;
         }
@@ -934,6 +935,7 @@ impl Renderer {
             chord_shape,
             arpeggio,
         };
+        self.restart_preview_trigger_lfos(track);
         if track == CHORD_TRACK_INDEX {
             Self::trigger_chord(
                 &self.project,
@@ -1049,6 +1051,7 @@ impl Renderer {
             if trigger_allowed
                 && let Some(StepEvent::Trigger { accent, locks, .. }) = sequence.steps[step]
             {
+                self.restart_trigger_lfos(track);
                 self.trigger_drum(track, accent, locks);
             }
             return;
@@ -1090,6 +1093,7 @@ impl Renderer {
                     chord_shape,
                     arpeggio,
                 };
+                self.restart_trigger_lfos(track);
                 if track == CHORD_TRACK_INDEX {
                     Self::trigger_chord(&self.project, self.sr, trigger, locks, &mut self.chord);
                 } else {

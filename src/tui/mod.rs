@@ -1120,7 +1120,11 @@ mod tests {
     #[test]
     fn lfo_modal_and_fader_badge_render_at_minimum_size() {
         let mut project = Project::new();
-        project.tracks[SYNTH_TRACK_START].lfos.cutoff = Some(LfoConfig::default());
+        project.tracks[SYNTH_TRACK_START].lfos.cutoff = Some(LfoConfig {
+            reset_on_trigger: true,
+            start_phase: Percent::new(25).unwrap(),
+            ..Default::default()
+        });
         let mut app = App::new(project, None);
         app.row = SYNTH_TRACK_START + 1;
         app.mode = Mode::LfoEdit {
@@ -1130,6 +1134,8 @@ mod tests {
         let screen = rendered(&app, 120, 34);
         assert!(screen.contains("Track LFO · cutoff"));
         assert!(screen.contains("● Sine"));
+        assert!(screen.contains("● ON"));
+        assert!(screen.contains("25% · 90°"));
         assert!(screen.contains("±10 pp"));
         assert!(screen.contains("███"));
         assert!(screen.contains("║"));
@@ -1218,11 +1224,11 @@ mod tests {
     fn lfo_modal_is_lower_and_capped_on_large_terminals() {
         assert_eq!(
             lfo_popup_rect(Rect::new(0, 0, 120, 34)),
-            Rect::new(14, 9, 92, 20)
+            Rect::new(2, 9, 116, 20)
         );
         assert_eq!(
             lfo_popup_rect(Rect::new(0, 0, 200, 50)),
-            Rect::new(54, 25, 92, 20)
+            Rect::new(42, 25, 116, 20)
         );
     }
 
@@ -1399,11 +1405,15 @@ mod tests {
         let screen = rendered(&app, 120, 34);
         let enabled = screen.rfind("Enabled").unwrap();
         let waveform = screen.rfind("Waveform").unwrap();
+        let trigger_reset = screen.rfind("Trigger Reset").unwrap();
+        let start_phase = screen.rfind("Start Phase").unwrap();
         let rate_mode = screen.rfind("Rate Mode").unwrap();
         let rate = screen.rfind("Rate").unwrap();
         let depth = screen.rfind("Depth").unwrap();
         assert!(enabled < waveform);
-        assert!(waveform < rate_mode);
+        assert!(waveform < trigger_reset);
+        assert!(trigger_reset < start_phase);
+        assert!(start_phase < rate_mode);
         assert!(rate_mode < rate);
         assert!(rate < depth);
     }

@@ -1906,7 +1906,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         )));
     } else if matches!(a.mode, Mode::LfoEdit { .. }) {
         status_lines.push(Line::from(
-            "Track-level LFO · [←/→] field  [↑/↓] adjust  [Shift+↑/↓] ±10% fields  [`/1–9/0] free rate/depth  [Backspace/Del] remove  [Enter/Esc] finish",
+            "Track-level LFO · [←/→] field  [↑/↓] adjust  [Shift+↑/↓] ±10% fields  [`/1–9/0] phase/free rate/depth  [Backspace/Del] remove  [Enter/Esc] finish",
         ));
     } else if matches!(a.mode, Mode::ChordEdit { .. }) {
         status_lines.push(Line::from(
