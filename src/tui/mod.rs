@@ -17,7 +17,7 @@ use std::{
 #[allow(unused_imports)]
 use crate::{
     audio::{AudioCommand, ParameterSmoothing},
-    generator::{Config as GeneratorConfig, Target as GeneratorTarget},
+    generator::{ChordShapePool, Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
         ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT,
         DelayDivision, GlobalParameterId, LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate,
@@ -448,11 +448,11 @@ mod tests {
         assert_eq!(move_generator_field(0, true), 0);
         assert_eq!(move_generator_field(0, false), 1);
         assert_eq!(move_generator_field(4, false), 5);
-        assert_eq!(move_generator_field(6, false), 7);
-        assert_eq!(move_generator_field(7, false), 7);
-        assert_eq!(move_generator_field(7, true), 6);
-        assert_eq!(move_generator_tab(7, false), 0);
-        assert_eq!(move_generator_tab(0, true), 7);
+        assert_eq!(move_generator_field(8, false), 9);
+        assert_eq!(move_generator_field(9, false), 9);
+        assert_eq!(move_generator_field(9, true), 8);
+        assert_eq!(move_generator_tab(9, false), 0);
+        assert_eq!(move_generator_tab(0, true), 9);
 
         let mut dialog = GeneratorDialog {
             target: GeneratorTarget::WholePattern,
@@ -461,8 +461,10 @@ mod tests {
             density: Percent::new(48).unwrap(),
             range_low: 2,
             range_high: 6,
+            chord_shapes: ChordShapePool::AllShapes,
             ties: Percent::new(18).unwrap(),
             accents: Percent::new(24).unwrap(),
+            slides: Percent::new(18).unwrap(),
             field: 3,
         };
         change_generator_value(&mut dialog, true);
@@ -497,11 +499,27 @@ mod tests {
         dialog.range_high = 6;
         dialog.field = 6;
         change_generator_value(&mut dialog, false);
-        assert_eq!(dialog.ties, Percent::new(13).unwrap());
+        assert_eq!(dialog.chord_shapes, ChordShapePool::RootShapes);
+        change_generator_value(&mut dialog, false);
+        assert_eq!(dialog.chord_shapes, ChordShapePool::Default);
+        change_generator_value(&mut dialog, false);
+        assert_eq!(dialog.chord_shapes, ChordShapePool::Default);
+        change_generator_value(&mut dialog, true);
+        assert_eq!(dialog.chord_shapes, ChordShapePool::RootShapes);
+
         dialog.field = 7;
+        change_generator_value(&mut dialog, false);
+        assert_eq!(dialog.ties, Percent::new(13).unwrap());
+        dialog.field = 8;
         dialog.accents = Percent::new(100).unwrap();
         change_generator_value(&mut dialog, true);
         assert_eq!(dialog.accents, Percent::new(100).unwrap());
+        dialog.field = 9;
+        dialog.slides = Percent::ZERO;
+        change_generator_value(&mut dialog, false);
+        assert_eq!(dialog.slides, Percent::ZERO);
+        change_generator_value(&mut dialog, true);
+        assert_eq!(dialog.slides, Percent::new(5).unwrap());
 
         dialog.field = 0;
         change_generator_value(&mut dialog, true);
@@ -521,14 +539,18 @@ mod tests {
             density: Percent::new(48).unwrap(),
             range_low: 1,
             range_high: 5,
+            chord_shapes: ChordShapePool::RootShapes,
             ties: Percent::new(18).unwrap(),
             accents: Percent::new(24).unwrap(),
+            slides: Percent::new(35).unwrap(),
             field: 4,
         };
         let config = generator_config(&dialog);
         assert_eq!(config.range_low, 1);
         assert_eq!(config.range_high, 5);
         assert_eq!(config.seed, 123);
+        assert_eq!(config.chord_shapes, ChordShapePool::RootShapes);
+        assert_eq!(config.slides, Percent::new(35).unwrap());
     }
 
     #[test]
@@ -541,8 +563,10 @@ mod tests {
             density: Percent::new(48).unwrap(),
             range_low: 2,
             range_high: 6,
+            chord_shapes: ChordShapePool::AllShapes,
             ties: Percent::new(18).unwrap(),
             accents: Percent::new(24).unwrap(),
+            slides: Percent::new(18).unwrap(),
             field: 4,
         });
 
@@ -1166,7 +1190,7 @@ mod tests {
     fn compact_dialog_rectangles_fit_their_content() {
         let area = Rect::new(0, 0, 120, 34);
         assert_eq!(trigger_popup_rect(area), Rect::new(14, 9, 92, 20));
-        assert_eq!(generator_popup_rect(area), Rect::new(31, 10, 58, 13));
+        assert_eq!(generator_popup_rect(area), Rect::new(31, 9, 58, 15));
         assert_eq!(swing_popup_rect(area), Rect::new(36, 14, 48, 6));
         assert_eq!(probability_popup_rect(area), Rect::new(36, 14, 48, 6));
 
@@ -1176,7 +1200,7 @@ mod tests {
         );
         assert_eq!(
             generator_popup_rect(Rect::new(0, 0, 200, 50)),
-            Rect::new(71, 18, 58, 13)
+            Rect::new(71, 17, 58, 15)
         );
         assert_eq!(
             generator_popup_rect(Rect::new(0, 0, 40, 10)),
@@ -1207,8 +1231,10 @@ mod tests {
             density: Percent::new(48).unwrap(),
             range_low: 2,
             range_high: 6,
+            chord_shapes: ChordShapePool::AllShapes,
             ties: Percent::new(18).unwrap(),
             accents: Percent::new(24).unwrap(),
+            slides: Percent::new(18).unwrap(),
             field: 3,
         });
         let generator = rendered_lines(&app, 120, 34);

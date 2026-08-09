@@ -5,13 +5,41 @@
 //! events, so projects remain fully compatible with the existing JSON format.
 
 use crate::model::{
-    ArpeggioConfig, ParameterLocks, Percent, Project, Step, StepEvent, TrackKind, TriggerCondition,
+    ArpeggioConfig, ChordShape, ParameterLocks, Percent, Project, Step, StepEvent, TrackKind,
+    TriggerCondition,
 };
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     WholePattern,
     Track(usize),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ChordShapePool {
+    Default,
+    RootShapes,
+    #[default]
+    AllShapes,
+}
+
+impl ChordShapePool {
+    pub const ALL: [Self; 3] = [Self::Default, Self::RootShapes, Self::AllShapes];
+}
+
+impl fmt::Display for ChordShapePool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Default => "Default",
+                Self::RootShapes => "Root shapes",
+                Self::AllShapes => "All shapes",
+            }
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,8 +49,10 @@ pub struct Config {
     pub density: Percent,
     pub range_low: u8,
     pub range_high: u8,
+    pub chord_shapes: ChordShapePool,
     pub ties: Percent,
     pub accents: Percent,
+    pub slides: Percent,
 }
 
 impl Default for Config {
@@ -33,8 +63,10 @@ impl Default for Config {
             density: Percent::new(48).unwrap(),
             range_low: 2,
             range_high: 6,
+            chord_shapes: ChordShapePool::default(),
             ties: Percent::new(18).unwrap(),
             accents: Percent::new(24).unwrap(),
+            slides: Percent::new(18).unwrap(),
         }
     }
 }
@@ -120,6 +152,8 @@ pub fn generate(project: &Project, config: Config) -> Generated {
                 &mut rng,
                 config.density,
                 config.accents,
+                config.slides,
+                config.chord_shapes,
                 range_low,
                 range_high,
                 None,
@@ -167,6 +201,8 @@ pub fn generate(project: &Project, config: Config) -> Generated {
             &mut rng,
             config.density,
             config.accents,
+            config.slides,
+            config.chord_shapes,
             range_low,
             range_high,
             rhythm,
@@ -188,6 +224,8 @@ fn fill_track(
     rng: &mut Rng,
     density: Percent,
     accents: Percent,
+    slides: Percent,
+    chord_shapes: ChordShapePool,
     range_low: u8,
     range_high: u8,
     groove: Option<&[bool]>,
@@ -223,7 +261,7 @@ fn fill_track(
                 degree: rng.range(1, 5),
                 octave: rng.range(range_low, range_high),
                 accent,
-                slide: false,
+                slide: rng.percent(slides),
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
                 locks: ParameterLocks::default(),
@@ -232,7 +270,7 @@ fn fill_track(
                 degree: rng.range(1, 7),
                 octave: rng.range(range_low, range_high),
                 accent,
-                chord_shape: None,
+                chord_shape: random_chord_shape(rng, chord_shapes),
                 arpeggio: ArpeggioConfig::default(),
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
@@ -242,7 +280,7 @@ fn fill_track(
                 degree: rng.range(1, 8),
                 octave: rng.range(range_low, range_high),
                 accent,
-                slide: false,
+                slide: rng.percent(slides),
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
                 locks: ParameterLocks::default(),
@@ -251,6 +289,27 @@ fn fill_track(
         count += 1;
     }
     count
+}
+
+const ROOT_CHORD_SHAPES: [ChordShape; 8] = [
+    ChordShape::Single,
+    ChordShape::DyadThird,
+    ChordShape::DyadFifth,
+    ChordShape::TriadRoot,
+    ChordShape::SeventhRoot,
+    ChordShape::SixthRoot,
+    ChordShape::Sus2Root,
+    ChordShape::Sus4Root,
+];
+
+fn random_chord_shape(rng: &mut Rng, pool: ChordShapePool) -> Option<ChordShape> {
+    let shapes: &[ChordShape] = match pool {
+        ChordShapePool::Default => return None,
+        ChordShapePool::RootShapes => &ROOT_CHORD_SHAPES,
+        ChordShapePool::AllShapes => &ChordShape::ALL,
+    };
+    let shape = shapes[usize::from(rng.range(0, shapes.len() as u8 - 1))];
+    (shape != ChordShape::default()).then_some(shape)
 }
 
 fn add_ties(steps: &mut [Step], rng: &mut Rng, amount: Percent) -> usize {
@@ -441,6 +500,104 @@ mod tests {
         let octaves = generated_octaves(&result.tracks[crate::model::CHORD_TRACK_INDEX]);
         assert!(octaves.iter().all(|octave| (2..=6).contains(octave)));
         assert!(octaves.windows(2).any(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
+    fn generated_slides_follow_the_configured_probability_on_bass_and_lead() {
+        let p = Project::new();
+        for track in [
+            crate::model::SYNTH_TRACK_START,
+            crate::model::LEAD_TRACK_INDEX,
+        ] {
+            let without_slides = generate(
+                &p,
+                Config {
+                    target: Target::Track(track),
+                    density: Percent::new(100).unwrap(),
+                    ties: Percent::ZERO,
+                    slides: Percent::ZERO,
+                    ..Config::default()
+                },
+            );
+            assert!(without_slides.tracks[track].iter().all(|event| matches!(
+                event,
+                Some(
+                    StepEvent::BassNote { slide: false, .. }
+                        | StepEvent::LeadNote { slide: false, .. }
+                )
+            )));
+
+            let all_slides = generate(
+                &p,
+                Config {
+                    target: Target::Track(track),
+                    density: Percent::new(100).unwrap(),
+                    ties: Percent::ZERO,
+                    slides: Percent::new(100).unwrap(),
+                    ..Config::default()
+                },
+            );
+            assert!(all_slides.tracks[track].iter().all(|event| matches!(
+                event,
+                Some(
+                    StepEvent::BassNote { slide: true, .. }
+                        | StepEvent::LeadNote { slide: true, .. }
+                )
+            )));
+        }
+    }
+
+    #[test]
+    fn chord_shape_pools_generate_only_their_documented_shapes() {
+        let mut p = Project::new();
+        let track = crate::model::CHORD_TRACK_INDEX;
+        p.tracks[track].steps.resize(64, None);
+        let shapes_for = |chord_shapes| {
+            generate(
+                &p,
+                Config {
+                    target: Target::Track(track),
+                    density: Percent::new(100).unwrap(),
+                    ties: Percent::ZERO,
+                    chord_shapes,
+                    ..Config::default()
+                },
+            )
+            .tracks[track]
+                .iter()
+                .filter_map(|event| match event {
+                    Some(StepEvent::Note { chord_shape, .. }) => {
+                        Some(chord_shape.unwrap_or_default())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert!(
+            shapes_for(ChordShapePool::Default)
+                .iter()
+                .all(|shape| *shape == ChordShape::TriadRoot)
+        );
+        let root_shapes = shapes_for(ChordShapePool::RootShapes);
+        assert!(
+            root_shapes
+                .iter()
+                .all(|shape| ROOT_CHORD_SHAPES.contains(shape))
+        );
+        assert!(root_shapes.windows(2).any(|pair| pair[0] != pair[1]));
+
+        let all_shapes = shapes_for(ChordShapePool::AllShapes);
+        assert!(
+            all_shapes
+                .iter()
+                .all(|shape| ChordShape::ALL.contains(shape))
+        );
+        assert!(
+            all_shapes
+                .iter()
+                .any(|shape| !ROOT_CHORD_SHAPES.contains(shape))
+        );
     }
 
     #[test]

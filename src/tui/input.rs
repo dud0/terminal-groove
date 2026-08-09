@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     audio::{Audio, AudioCommand},
-    generator::{Config as GeneratorConfig, Target as GeneratorTarget},
+    generator::{ChordShapePool, Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
         ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT,
         LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue,
@@ -208,8 +208,10 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 density: defaults.density,
                 range_low: defaults.range_low,
                 range_high: defaults.range_high,
+                chord_shapes: defaults.chord_shapes,
                 ties: defaults.ties,
                 accents: defaults.accents,
+                slides: defaults.slides,
                 field: 0,
             });
             a.status = "Generator ready".into();
@@ -588,7 +590,7 @@ pub(super) fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEven
         KeyCode::Left | KeyCode::Right if (4..=5).contains(&dialog.field) => {
             change_generator_value(dialog, k.code == KeyCode::Right);
         }
-        KeyCode::Left | KeyCode::Right if (3..=7).contains(&dialog.field) => {
+        KeyCode::Left | KeyCode::Right if (3..=9).contains(&dialog.field) => {
             change_generator_value(dialog, k.code == KeyCode::Right);
         }
         KeyCode::Enter => {
@@ -621,7 +623,7 @@ pub(super) fn move_generator_field(field: usize, up: bool) -> usize {
     }
 }
 
-const GENERATOR_FIELD_COUNT: usize = 8;
+const GENERATOR_FIELD_COUNT: usize = 10;
 
 pub(super) fn move_generator_tab(field: usize, backward: bool) -> usize {
     if backward {
@@ -641,8 +643,10 @@ pub(super) fn generator_config(dialog: &GeneratorDialog) -> GeneratorConfig {
         density: dialog.density,
         range_low: dialog.range_low,
         range_high: dialog.range_high,
+        chord_shapes: dialog.chord_shapes,
         ties: dialog.ties,
         accents: dialog.accents,
+        slides: dialog.slides,
     }
 }
 
@@ -675,12 +679,25 @@ pub(super) fn change_generator_value(dialog: &mut GeneratorDialog, right: bool) 
                 dialog.range_high = dialog.range_high.saturating_sub(1).max(dialog.range_low);
             }
         }
-        3 | 6 | 7 => {
+        6 => {
+            let index = ChordShapePool::ALL
+                .iter()
+                .position(|value| *value == dialog.chord_shapes)
+                .unwrap_or_default();
+            let next = if right {
+                index.saturating_add(1).min(ChordShapePool::ALL.len() - 1)
+            } else {
+                index.saturating_sub(1)
+            };
+            dialog.chord_shapes = ChordShapePool::ALL[next];
+        }
+        3 | 7 | 8 | 9 => {
             let delta = if right { 5 } else { -5 };
             match dialog.field {
                 3 => dialog.density = dialog.density.saturating_add(delta),
-                6 => dialog.ties = dialog.ties.saturating_add(delta),
-                7 => dialog.accents = dialog.accents.saturating_add(delta),
+                7 => dialog.ties = dialog.ties.saturating_add(delta),
+                8 => dialog.accents = dialog.accents.saturating_add(delta),
+                9 => dialog.slides = dialog.slides.saturating_add(delta),
                 _ => unreachable!(),
             }
         }

@@ -1,7 +1,7 @@
 use super::render::ValueOrigin;
 use crate::tui::DIRECT_PARAMETER_RAMP;
 use crate::{
-    generator::Target as GeneratorTarget,
+    generator::{ChordShapePool, Target as GeneratorTarget},
     model::{ChordShape, GlobalParameterId, ParameterId, Percent, Project, TRACK_COUNT},
     reducer::{Editor, Scope},
 };
@@ -126,8 +126,10 @@ pub(crate) struct GeneratorDialog {
     pub(crate) density: Percent,
     pub(crate) range_low: u8,
     pub(crate) range_high: u8,
+    pub(crate) chord_shapes: ChordShapePool,
     pub(crate) ties: Percent,
     pub(crate) accents: Percent,
+    pub(crate) slides: Percent,
     pub(crate) field: usize,
 }
 pub struct App {

@@ -529,8 +529,10 @@ pub(super) fn render_generator_popup(
         (Some(3), format!("Density    {}", dialog.density)),
         (Some(4), format!("Low octave O{}", dialog.range_low)),
         (Some(5), format!("High octave O{}", dialog.range_high)),
-        (Some(6), format!("Ties       {}", dialog.ties)),
-        (Some(7), format!("Accents    {}", dialog.accents)),
+        (Some(6), format!("Chord shapes {}", dialog.chord_shapes)),
+        (Some(7), format!("Ties       {}", dialog.ties)),
+        (Some(8), format!("Accents    {}", dialog.accents)),
+        (Some(9), format!("Slides     {}", dialog.slides)),
     ];
     let lines = fields
         .into_iter()
@@ -1023,7 +1025,7 @@ pub(super) fn trigger_popup_rect(area: Rect) -> Rect {
 }
 
 pub(super) fn generator_popup_rect(area: Rect) -> Rect {
-    compact_popup_rect(area, 58, 13)
+    compact_popup_rect(area, 58, 15)
 }
 
 pub(super) fn swing_popup_rect(area: Rect) -> Rect {
