@@ -531,6 +531,24 @@ mod tests {
     }
 
     #[test]
+    fn single_and_dyad_chord_shapes_use_stable_schema_names() {
+        use crate::model::ChordShape;
+
+        for (shape, name) in [
+            (ChordShape::Single, "single"),
+            (ChordShape::DyadThird, "dyad_third"),
+            (ChordShape::DyadFifth, "dyad_fifth"),
+        ] {
+            let encoded = serde_json::to_value(shape).unwrap();
+            assert_eq!(encoded, name);
+            assert_eq!(
+                serde_json::from_value::<ChordShape>(encoded).unwrap(),
+                shape
+            );
+        }
+    }
+
+    #[test]
     fn arpeggio_schema_round_trips_note_values_and_omits_defaults() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("arpeggio.groove.json");

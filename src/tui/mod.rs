@@ -1070,7 +1070,7 @@ mod tests {
             degree: 1,
             octave: 3,
             accent: false,
-            chord_shape: Some(ChordShape::SeventhFirstInversion),
+            chord_shape: Some(ChordShape::DyadThird),
             arpeggio: crate::model::ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
@@ -1079,14 +1079,16 @@ mod tests {
         let mut app = App::new(project, None);
         app.row = CHORD_TRACK_INDEX + 1;
         let title_screen = rendered(&app, 120, 34);
-        assert!(title_screen.contains("Chord trigger 3-5-7-1"));
+        assert!(title_screen.contains("Chord trigger 1-3"));
         app.mode = Mode::ChordEdit {
-            shape: ChordShape::SeventhFirstInversion,
+            shape: ChordShape::DyadThird,
         };
         let screen = rendered(&app, 120, 34);
         assert!(screen.contains("Chord · Step 1"));
         assert!(screen.contains("Shape"));
-        assert!(screen.contains("3-5-7-1"));
+        assert!(screen.contains("○ 1"));
+        assert!(screen.contains("● 1-3"));
+        assert!(screen.contains("○ 1-5"));
         assert!(screen.contains("[←/→] select"));
     }
 

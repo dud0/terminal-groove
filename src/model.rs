@@ -581,6 +581,9 @@ impl fmt::Display for ChordSpread {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChordShape {
+    Single,
+    DyadThird,
+    DyadFifth,
     #[default]
     TriadRoot,
     TriadFirstInversion,
@@ -709,7 +712,10 @@ impl fmt::Display for ArpeggioRate {
 }
 
 impl ChordShape {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 20] = [
+        Self::Single,
+        Self::DyadThird,
+        Self::DyadFifth,
         Self::TriadRoot,
         Self::TriadFirstInversion,
         Self::TriadSecondInversion,
@@ -731,6 +737,9 @@ impl ChordShape {
 
     pub const fn degrees(self) -> &'static [u8] {
         match self {
+            Self::Single => &[1],
+            Self::DyadThird => &[1, 3],
+            Self::DyadFifth => &[1, 5],
             Self::TriadRoot => &[1, 3, 5],
             Self::TriadFirstInversion => &[3, 5, 1],
             Self::TriadSecondInversion => &[5, 1, 3],
@@ -2874,6 +2883,21 @@ mod tests {
     #[test]
     fn chord_shapes_use_diatonic_degrees_and_lift_inversions() {
         let project = Project::new();
+        assert_eq!(ChordShape::Single.to_string(), "1");
+        assert_eq!(ChordShape::DyadThird.to_string(), "1-3");
+        assert_eq!(ChordShape::DyadFifth.to_string(), "1-5");
+        assert_eq!(
+            project.chord_midis_for(1, 3, ChordShape::Single),
+            Some(([48, 0, 0, 0], 1))
+        );
+        assert_eq!(
+            project.chord_midis_for(1, 3, ChordShape::DyadThird),
+            Some(([48, 52, 0, 0], 2))
+        );
+        assert_eq!(
+            project.chord_midis_for(1, 3, ChordShape::DyadFifth),
+            Some(([48, 55, 0, 0], 2))
+        );
         assert_eq!(ChordShape::SeventhRoot.to_string(), "1-3-5-7");
         assert_eq!(
             project.chord_midis_for(1, 3, ChordShape::SeventhRoot),

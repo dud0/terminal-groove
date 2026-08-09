@@ -2011,27 +2011,27 @@ mod tests {
     fn chord_shape_edits_selected_notes_and_empty_step_defaults() {
         let mut editor = Editor::new(Project::new());
         editor
-            .set_chord_shape(CHORD_TRACK_INDEX, 0, ChordShape::SeventhRoot)
+            .set_chord_shape(CHORD_TRACK_INDEX, 0, ChordShape::Single)
             .unwrap();
         assert_eq!(
             editor.project.tracks[CHORD_TRACK_INDEX].input_chord_shape,
-            Some(ChordShape::SeventhRoot)
+            Some(ChordShape::Single)
         );
         editor.set_note(CHORD_TRACK_INDEX, 0, 1).unwrap();
         assert!(matches!(
             editor.project.tracks[CHORD_TRACK_INDEX].steps[0],
             Some(StepEvent::Note {
-                chord_shape: Some(ChordShape::SeventhRoot),
+                chord_shape: Some(ChordShape::Single),
                 ..
             })
         ));
         editor
-            .set_chord_shape(CHORD_TRACK_INDEX, 0, ChordShape::Sus4FirstInversion)
+            .set_chord_shape(CHORD_TRACK_INDEX, 0, ChordShape::DyadFifth)
             .unwrap();
         assert!(matches!(
             editor.project.tracks[CHORD_TRACK_INDEX].steps[0],
             Some(StepEvent::Note {
-                chord_shape: Some(ChordShape::Sus4FirstInversion),
+                chord_shape: Some(ChordShape::DyadFifth),
                 ..
             })
         ));
@@ -2039,7 +2039,7 @@ mod tests {
         assert!(matches!(
             editor.project.tracks[CHORD_TRACK_INDEX].steps[0],
             Some(StepEvent::Note {
-                chord_shape: Some(ChordShape::SeventhRoot),
+                chord_shape: Some(ChordShape::Single),
                 ..
             })
         ));

@@ -517,9 +517,9 @@ mod tests {
     use super::voices::SynthTrigger;
     use super::*;
     use crate::model::{
-        ArpeggioRate, ArpeggioType, ChordShape, DistortionParameters, FlangerParameters,
-        LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate, LfoWaveform, PhaserParameters,
-        TrackEffects,
+        ArpeggioRate, ArpeggioType, ChordShape, ChordSpread, DistortionParameters,
+        FlangerParameters, LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
+        PhaserParameters, TrackEffects,
     };
     use std::{fs, time::Instant};
 
@@ -2608,6 +2608,75 @@ mod tests {
     }
 
     #[test]
+    fn chord_track_renders_single_and_dyad_shapes_with_expected_spread() {
+        fn trigger(shape: ChordShape) -> SynthTrigger {
+            SynthTrigger {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                slide: false,
+                chord_shape: Some(shape),
+                arpeggio: ArpeggioConfig::default(),
+            }
+        }
+
+        let mut project = Project::new();
+        let Instrument::Chord(parameters) = &mut project.tracks[CHORD_TRACK_INDEX].instrument
+        else {
+            panic!("expected Chord instrument");
+        };
+        parameters.spread = ChordSpread::Wide;
+        let project = AudioProject::from_project(&project);
+        let mut pool = ChordVoicePool::new(48_000);
+
+        Renderer::trigger_chord(
+            &project,
+            48_000.0,
+            trigger(ChordShape::Single),
+            Default::default(),
+            &mut pool,
+        );
+        let start = pool.group * CHORD_GROUP_SIZE;
+        assert_eq!(pool.group_voice_counts[pool.group], 1);
+        assert_eq!(pool.voices[start].pan.next_value(), 50.0);
+        assert!((pool.voices[start].freq.next_value() - 130.81279).abs() < 0.001);
+
+        Renderer::trigger_chord(
+            &project,
+            48_000.0,
+            trigger(ChordShape::DyadThird),
+            Default::default(),
+            &mut pool,
+        );
+        let start = pool.group * CHORD_GROUP_SIZE;
+        assert_eq!(pool.group_voice_counts[pool.group], 2);
+        assert_eq!(pool.voices[start].pan.next_value(), 0.0);
+        assert_eq!(pool.voices[start + 1].pan.next_value(), 100.0);
+        let expected = [48, 52].map(|midi| 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0));
+        for (voice, expected) in pool.voices[start..start + 2].iter_mut().zip(expected) {
+            assert!((voice.freq.next_value() - expected).abs() < 0.001);
+        }
+
+        Renderer::trigger_chord(
+            &project,
+            48_000.0,
+            trigger(ChordShape::DyadFifth),
+            Default::default(),
+            &mut pool,
+        );
+        let start = pool.group * CHORD_GROUP_SIZE;
+        let expected = [48, 55].map(|midi| 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0));
+        for (voice, expected) in pool.voices[start..start + 2].iter_mut().zip(expected) {
+            assert!((voice.freq.next_value() - expected).abs() < 0.001);
+        }
+        assert!(
+            pool.voices[start + 2..start + CHORD_GROUP_SIZE]
+                .iter()
+                .all(|voice| voice.env.stage == crate::dsp::EnvStage::Idle && !voice.active)
+        );
+    }
+
+    #[test]
     fn reused_chord_group_clears_slots_not_used_by_the_new_shape() {
         fn trigger(shape: ChordShape, arpeggio: ArpeggioConfig) -> SynthTrigger {
             SynthTrigger {
@@ -2640,16 +2709,18 @@ mod tests {
         Renderer::trigger_chord(
             &project,
             48_000.0,
-            trigger(ChordShape::TriadRoot, ArpeggioConfig::default()),
+            trigger(ChordShape::Single, ArpeggioConfig::default()),
             Default::default(),
             &mut pool,
         );
 
         assert_eq!(pool.group, first_group);
-        assert_eq!(pool.group_voice_counts[first_group], 3);
-        let unused = &pool.voices[first_group * CHORD_GROUP_SIZE + 3];
-        assert_eq!(unused.env.stage, crate::dsp::EnvStage::Idle);
-        assert!(!unused.active);
+        assert_eq!(pool.group_voice_counts[first_group], 1);
+        assert!(
+            pool.voices[first_group * CHORD_GROUP_SIZE + 1..(first_group + 1) * CHORD_GROUP_SIZE]
+                .iter()
+                .all(|voice| voice.env.stage == crate::dsp::EnvStage::Idle && !voice.active)
+        );
 
         Renderer::trigger_chord(
             &project,
@@ -2835,6 +2906,21 @@ mod tests {
             );
             assert_eq!(state.order, order);
             assert_eq!(state.order_len as usize, length);
+        }
+        for (shape, expected_up_down, expected_length) in [
+            (ChordShape::Single, [0, 0, 0, 0, 0, 0, 0, 0], 1),
+            (ChordShape::DyadThird, [0, 1, 0, 0, 0, 0, 0, 0], 2),
+        ] {
+            let mut state = ArpeggioState::default();
+            state.reset(
+                shape,
+                ArpeggioType::UpDown,
+                ArpeggioRate::Sixteenth,
+                44_100.0,
+                123,
+            );
+            assert_eq!(state.order, expected_up_down);
+            assert_eq!(state.order_len as usize, expected_length);
         }
         let mut state = ArpeggioState::default();
         state.reset(
