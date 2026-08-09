@@ -455,6 +455,8 @@ impl SynthVoice {
     }
 
     pub(super) fn new_with_seed(sr: f32, seed: u32) -> Self {
+        let mut juno_highpass = Biquad::new();
+        juno_highpass.set_highpass(32.0, 0.707, sr * 2.0);
         Self {
             osc: Default::default(),
             sub_osc: Default::default(),
@@ -471,7 +473,7 @@ impl SynthVoice {
             bass_decay_percent: Smoother::new(40.0),
             juno_filter: Default::default(),
             sh101_filter: Default::default(),
-            juno_highpass: Biquad::new(),
+            juno_highpass,
             freq: Smoother::new(110.0),
             wave: Waveform::Saw,
             oscillator_mix: Smoother::new(70.0),

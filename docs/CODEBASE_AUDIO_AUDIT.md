@@ -207,4 +207,6 @@ The four plans were implemented and then reviewed. The follow-up repair pass res
 
 Reference-machine callback measurements are recorded in [Audio Callback Performance](AUDIO_PERFORMANCE.md). Hat and Cymbal DSP remains unchanged; their sample-free design description remains the accepted product behavior.
 
-Final verification passed 270 tests, formatting, Clippy with warnings denied, and the release build. The isolated 44.1 kHz/512-frame ALSA null-device stress run completed for 5 minutes 30 seconds with zero callback overruns.
+The performance-remediation follow-up moved fixed Juno high-pass setup out of the render path, interpolates phaser coefficients over eight-frame control blocks, sizes flanger storage from the selected sample rate, and removes unused ordinary Chord effect chains while preserving independent live/preview Chord-group state. Its ignored release benchmark uses five trials, 128 warm-up callbacks, 512 measured callbacks, and every valid LFO destination. The supported reference target is pooled p95 no higher than 50% at 44.1/48 kHz for all three buffer sizes; 96 kHz is best effort. Timing is local evidence, not an automated regression assertion; allocation safety remains automated.
+
+The earlier isolated 44.1 kHz/512-frame ALSA null-device stress run completed for 5 minutes 30 seconds with zero callback overruns. Current benchmark and verification results are recorded in [Audio Callback Performance](AUDIO_PERFORMANCE.md).

@@ -2,7 +2,7 @@ use super::effects::{modulated_percent, pitch_modulated_frequency};
 use super::voices::{CHORD_GROUP_SIZE, SynthVoiceKind};
 use super::{
     AudioProject, AudioStatus, ChordVoicePool, DrumVoice, ParameterId, Renderer, StepClock,
-    SynthVoice, TRACK_COUNT, TrackEffectChain,
+    SynthVoice, TRACK_COUNT, TrackEffectChain, effect_slot,
 };
 use crate::dsp::{
     Delay, EnvStage, Lfo, MasterLimiter, Reverb, SidechainCompressor, Smoother, exp_map_f32,
@@ -57,7 +57,7 @@ impl Renderer {
             !self.preview[track - super::SYNTH_TRACK_START].is_idle()
         };
         voice_active
-            || self.preview_effects[track].is_active()
+            || effect_slot(track).is_some_and(|slot| self.preview_effects[slot].is_active())
             || self
                 .preview_scheduled
                 .iter()
@@ -355,7 +355,6 @@ impl Renderer {
                     // The fixed low corner is intentionally subtle: it gives
                     // the Chord path the Juno high-pass architecture without
                     // adding a new persisted panel control.
-                    v.juno_highpass.set_highpass(32.0, 0.707, sr * 2.0);
                     v.juno_filter.set_parameters_smoothed(
                         cutoff,
                         resonance_percent / 100.0,
@@ -565,7 +564,7 @@ impl Renderer {
                 self.lfo_offsets[i][ParameterId::Level as usize],
                 self.lfo_offsets[i][ParameterId::Pan as usize],
             );
-            let (effect_l, effect_r) = self.effects[i].process(x);
+            let (effect_l, effect_r) = self.effects[effect_slot(i).unwrap()].process(x);
             let (pl, pr) = self.drums[i].pan_gains(pan);
             let level = modulated_percent(
                 self.drums[i].level.next_value(),
@@ -595,7 +594,7 @@ impl Renderer {
                 self.preview_lfo_offsets[i][ParameterId::Level as usize],
                 self.preview_lfo_offsets[i][ParameterId::Pan as usize],
             );
-            let (effect_l, effect_r) = self.preview_effects[i].process(x);
+            let (effect_l, effect_r) = self.preview_effects[effect_slot(i).unwrap()].process(x);
             let (pl, pr) = self.preview_drums[i].pan_gains(pan);
             let level = modulated_percent(
                 self.preview_drums[i].level.next_value(),
@@ -613,7 +612,7 @@ impl Renderer {
             let track = i + super::SYNTH_TRACK_START;
             let (x, ds, rs) =
                 Self::render_synth(&mut self.synth[i], self.sr, &self.lfo_offsets[track]);
-            let (effect_l, effect_r) = self.effects[track].process(x);
+            let (effect_l, effect_r) = self.effects[effect_slot(track).unwrap()].process(x);
             let pan = modulated_percent(
                 self.synth[i].pan.next_value(),
                 self.lfo_offsets[track][ParameterId::Pan as usize],
@@ -638,7 +637,7 @@ impl Renderer {
                 self.sr,
                 &self.preview_lfo_offsets[track],
             );
-            let (effect_l, effect_r) = self.preview_effects[track].process(x);
+            let (effect_l, effect_r) = self.preview_effects[effect_slot(track).unwrap()].process(x);
             let pan = modulated_percent(
                 self.preview[i].pan.next_value(),
                 self.preview_lfo_offsets[track][ParameterId::Pan as usize],

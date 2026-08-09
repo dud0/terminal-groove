@@ -1,4 +1,4 @@
-use super::{AudioCommand, AudioStatus, Renderer};
+use super::{AudioCommand, AudioStatus, Renderer, effect_slot};
 use crate::model::ParameterLocks;
 use rtrb::Consumer;
 use std::{
@@ -30,12 +30,15 @@ impl Renderer {
             smoothing_samples,
         );
         for track in 0..super::TRACK_COUNT {
-            self.effects[track].configure(
+            let Some(slot) = effect_slot(track) else {
+                continue;
+            };
+            self.effects[slot].configure(
                 self.project.tracks[track].effects,
                 ParameterLocks::default(),
                 smoothing_samples,
             );
-            self.preview_effects[track].configure(
+            self.preview_effects[slot].configure(
                 self.project.tracks[track].effects,
                 ParameterLocks::default(),
                 smoothing_samples,
@@ -70,10 +73,11 @@ impl Renderer {
             }
             return;
         }
+        let slot = effect_slot(track).expect("non-Chord track has an effect slot");
         if preview {
-            self.preview_effects[track].configure(effects, locks, smoothing_samples);
+            self.preview_effects[slot].configure(effects, locks, smoothing_samples);
         } else {
-            self.effects[track].configure(effects, locks, smoothing_samples);
+            self.effects[slot].configure(effects, locks, smoothing_samples);
         }
     }
 

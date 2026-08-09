@@ -276,8 +276,9 @@ impl EffectAllpass {
     }
 }
 
-const FLANGER_BUFFER_SIZE: usize = 8_192;
 pub const FLANGER_MIN_DELAY_MS: f32 = 0.1;
+const FLANGER_MAX_DELAY_SECONDS: f32 = 0.015;
+const PHASER_CONTROL_FRAMES: u8 = 8;
 
 /// Returns the center, effective depth, and physical delay endpoints for the
 /// flanger controls.  Depth is constrained before modulation rather than
@@ -333,6 +334,11 @@ pub struct TrackEffectChain {
     phaser_r: [EffectAllpass; 4],
     phaser_sweep: f32,
     phaser_rate_hz: f32,
+    phaser_coefficient_l: f32,
+    phaser_coefficient_r: f32,
+    phaser_coefficient_step_l: f32,
+    phaser_coefficient_step_r: f32,
+    phaser_control_remaining: u8,
     cached_phaser_depth: f32,
     cached_phaser_rate: f32,
     flanger_rate: Smoother,
@@ -355,8 +361,14 @@ pub struct TrackEffectChain {
 
 impl TrackEffectChain {
     pub fn new(sample_rate: u32) -> Self {
-        let flanger_l = vec![0.0; FLANGER_BUFFER_SIZE].into_boxed_slice();
-        let flanger_r = vec![0.0; FLANGER_BUFFER_SIZE].into_boxed_slice();
+        let flanger_buffer_size = ((sample_rate as f32 * FLANGER_MAX_DELAY_SECONDS).ceil()
+            as usize)
+            .saturating_add(2)
+            .max(3);
+        let flanger_l = vec![0.0; flanger_buffer_size].into_boxed_slice();
+        let flanger_r = vec![0.0; flanger_buffer_size].into_boxed_slice();
+        let sample_rate_f32 = sample_rate as f32;
+        let initial_phaser_coefficient = Self::phaser_coefficient(0.0, 0.0, sample_rate_f32);
         Self {
             processing: false,
             distortion_active: false,
@@ -388,6 +400,11 @@ impl TrackEffectChain {
             phaser_r: [EffectAllpass::new(); 4],
             phaser_sweep: 0.0,
             phaser_rate_hz: 0.05,
+            phaser_coefficient_l: initial_phaser_coefficient,
+            phaser_coefficient_r: initial_phaser_coefficient,
+            phaser_coefficient_step_l: 0.0,
+            phaser_coefficient_step_r: 0.0,
+            phaser_control_remaining: 0,
             cached_phaser_depth: f32::NAN,
             cached_phaser_rate: f32::NAN,
             flanger_rate: Smoother::new(25.0),
@@ -399,7 +416,7 @@ impl TrackEffectChain {
             flanger_write: 0,
             flanger_l,
             flanger_r,
-            sample_rate: sample_rate as f32,
+            sample_rate: sample_rate_f32,
             flanger_rate_hz: 0.05,
             flanger_center_samples: sample_rate as f32 * 0.0002,
             flanger_depth_samples: 0.0,
@@ -554,6 +571,7 @@ impl TrackEffectChain {
             let phaser_depth = self.phaser_depth.next_value();
             let phaser_feedback = (self.phaser_feedback.next_value() / 100.0).clamp(0.0, 0.9);
             self.update_phaser_cache(phaser_rate, phaser_depth);
+            self.update_phaser_coefficients();
             let feedback =
                 (self.phaser_feedback_l + self.phaser_feedback_r) * 0.5 * phaser_feedback;
             // Once the user-facing mix ramp reaches zero, keep draining the
@@ -562,24 +580,15 @@ impl TrackEffectChain {
             let effective_mix = phaser_mix;
             let left_input = if phaser_mix > 0.0 { distorted_l } else { 0.0 } + feedback;
             let right_input = if phaser_mix > 0.0 { distorted_r } else { 0.0 } - feedback;
-            let left = Self::phaser_sample(
-                &mut self.phaser_l,
-                left_input,
-                self.phaser_phase,
-                self.phaser_sweep,
-                self.sample_rate,
-            );
-            let right = Self::phaser_sample(
-                &mut self.phaser_r,
-                right_input,
-                (self.phaser_phase + 0.5).fract(),
-                self.phaser_sweep,
-                self.sample_rate,
-            );
+            let left =
+                Self::phaser_sample(&mut self.phaser_l, left_input, self.phaser_coefficient_l);
+            let right =
+                Self::phaser_sample(&mut self.phaser_r, right_input, self.phaser_coefficient_r);
             self.phaser_feedback_l = left;
             self.phaser_feedback_r = right;
             self.phaser_phase =
                 (self.phaser_phase + self.phaser_rate_hz / self.sample_rate).fract();
+            self.advance_phaser_coefficients();
             let output = (
                 distorted_l * (1.0 - effective_mix) + left * effective_mix,
                 distorted_r * (1.0 - effective_mix) + right * effective_mix,
@@ -651,17 +660,47 @@ impl TrackEffectChain {
         input * (1.0 - mix) + *state * mix
     }
 
-    fn phaser_sample(
-        stages: &mut [EffectAllpass; 4],
-        input: f32,
-        phase: f32,
-        sweep: f32,
-        sample_rate: f32,
-    ) -> f32 {
+    fn phaser_coefficient(phase: f32, sweep: f32, sample_rate: f32) -> f32 {
         let frequency = 300.0 * (sweep_value(phase) * sweep).exp();
         let frequency = frequency.clamp(300.0, (sample_rate * 0.45).max(301.0));
         let tangent = (std::f32::consts::PI * frequency / sample_rate).tan();
-        let coefficient = ((1.0 - tangent) / (1.0 + tangent)).clamp(-0.98, 0.98);
+        ((1.0 - tangent) / (1.0 + tangent)).clamp(-0.98, 0.98)
+    }
+
+    fn update_phaser_coefficients(&mut self) {
+        if self.phaser_control_remaining == 0 {
+            self.phaser_coefficient_l =
+                Self::phaser_coefficient(self.phaser_phase, self.phaser_sweep, self.sample_rate);
+            self.phaser_coefficient_r = Self::phaser_coefficient(
+                (self.phaser_phase + 0.5).fract(),
+                self.phaser_sweep,
+                self.sample_rate,
+            );
+            let future_phase = (self.phaser_phase
+                + self.phaser_rate_hz / self.sample_rate * f32::from(PHASER_CONTROL_FRAMES))
+            .fract();
+            let target_l =
+                Self::phaser_coefficient(future_phase, self.phaser_sweep, self.sample_rate);
+            let target_r = Self::phaser_coefficient(
+                (future_phase + 0.5).fract(),
+                self.phaser_sweep,
+                self.sample_rate,
+            );
+            self.phaser_coefficient_step_l =
+                (target_l - self.phaser_coefficient_l) / f32::from(PHASER_CONTROL_FRAMES);
+            self.phaser_coefficient_step_r =
+                (target_r - self.phaser_coefficient_r) / f32::from(PHASER_CONTROL_FRAMES);
+            self.phaser_control_remaining = PHASER_CONTROL_FRAMES;
+        }
+    }
+
+    fn advance_phaser_coefficients(&mut self) {
+        self.phaser_coefficient_l += self.phaser_coefficient_step_l;
+        self.phaser_coefficient_r += self.phaser_coefficient_step_r;
+        self.phaser_control_remaining -= 1;
+    }
+
+    fn phaser_sample(stages: &mut [EffectAllpass; 4], input: f32, coefficient: f32) -> f32 {
         let mut value = input;
         for stage in stages {
             value = stage.process(value, coefficient);
@@ -683,7 +722,7 @@ impl TrackEffectChain {
             finite_or_zero(input_l + delayed_l * controls.feedback);
         self.flanger_r[self.flanger_write] =
             finite_or_zero(input_r + delayed_r * controls.feedback);
-        self.flanger_write = (self.flanger_write + 1) % FLANGER_BUFFER_SIZE;
+        self.flanger_write = (self.flanger_write + 1) % self.flanger_l.len();
         self.flanger_phase = (self.flanger_phase + controls.rate / self.sample_rate).fract();
         (
             finite_or_zero(input_l * (1.0 - controls.mix) + delayed_l * controls.mix),
@@ -837,6 +876,13 @@ impl TrackEffectChain {
         self.clear_phaser();
         self.clear_flanger();
         self.phaser_phase = 0.0;
+        self.phaser_coefficient_l =
+            Self::phaser_coefficient(0.0, self.phaser_sweep, self.sample_rate);
+        self.phaser_coefficient_r =
+            Self::phaser_coefficient(0.5, self.phaser_sweep, self.sample_rate);
+        self.phaser_coefficient_step_l = 0.0;
+        self.phaser_coefficient_step_r = 0.0;
+        self.phaser_control_remaining = 0;
         self.flanger_phase = 0.0;
     }
 }
@@ -1850,6 +1896,11 @@ impl Biquad {
     pub fn clear_state(&mut self) {
         self.z1 = 0.0;
         self.z2 = 0.0;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn coefficients(&self) -> [f32; 5] {
+        [self.b0, self.b1, self.b2, self.a1, self.a2]
     }
 }
 
@@ -3149,6 +3200,91 @@ mod tests {
             TrackEffectChain::read_delay(&chain.flanger_l, 0, delay),
             0.25
         );
+    }
+
+    #[test]
+    fn flanger_storage_matches_maximum_delay_at_supported_rates() {
+        for sample_rate in [8, 44_100, 48_000, 96_000, 192_000] {
+            let chain = TrackEffectChain::new(sample_rate);
+            let expected = ((sample_rate as f32 * FLANGER_MAX_DELAY_SECONDS).ceil() as usize)
+                .saturating_add(2)
+                .max(3);
+            assert_eq!(chain.flanger_l.len(), expected);
+            assert_eq!(chain.flanger_r.len(), expected);
+            let maximum = chain.flanger_delay_samples(10.0, 5.0, 0.25);
+            assert!(maximum <= (expected - 2) as f32);
+            for write in 0..expected {
+                assert!(TrackEffectChain::read_delay(&chain.flanger_l, write, maximum).is_finite());
+            }
+        }
+    }
+
+    #[test]
+    fn phaser_control_block_tracks_full_rate_coefficients() {
+        for sample_rate in [44_100, 48_000, 96_000, 192_000] {
+            for (rate, depth) in [(0, 0), (0, 100), (100, 0), (100, 100)] {
+                let mut effects = TrackEffects::default();
+                effects.phaser.rate = crate::model::Percent::new(rate).unwrap();
+                effects.phaser.depth = crate::model::Percent::new(depth).unwrap();
+                effects.phaser.mix = crate::model::Percent::new(100).unwrap();
+                let mut chain = TrackEffectChain::new(sample_rate);
+                chain.configure(effects, ParameterLocks::default(), 0);
+                for _ in 0..sample_rate.min(4_096) {
+                    chain.process_stereo(0.2, -0.2);
+                    let reference_l = TrackEffectChain::phaser_coefficient(
+                        chain.phaser_phase,
+                        chain.phaser_sweep,
+                        chain.sample_rate,
+                    );
+                    let reference_r = TrackEffectChain::phaser_coefficient(
+                        (chain.phaser_phase + 0.5).fract(),
+                        chain.phaser_sweep,
+                        chain.sample_rate,
+                    );
+                    assert!(chain.phaser_coefficient_l.is_finite());
+                    assert!(chain.phaser_coefficient_r.is_finite());
+                    assert!(chain.phaser_coefficient_l.abs() <= 0.980_001);
+                    assert!(chain.phaser_coefficient_r.abs() <= 0.980_001);
+                    assert!(
+                        (chain.phaser_coefficient_l - reference_l).abs() <= 0.005,
+                        "sr={sample_rate} rate={rate} depth={depth} phase={} actual={} reference={reference_l}",
+                        chain.phaser_phase,
+                        chain.phaser_coefficient_l,
+                    );
+                    assert!(
+                        (chain.phaser_coefficient_r - reference_r).abs() <= 0.005,
+                        "sr={sample_rate} rate={rate} depth={depth} phase={} actual={} reference={reference_r}",
+                        chain.phaser_phase,
+                        chain.phaser_coefficient_r,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn phaser_parameter_ramps_remain_smooth_and_stereo_opposed() {
+        let mut chain = TrackEffectChain::new(48_000);
+        let mut effects = TrackEffects::default();
+        effects.phaser.mix = crate::model::Percent::new(100).unwrap();
+        chain.configure(effects, ParameterLocks::default(), 0);
+        for _ in 0..32 {
+            chain.process(0.25);
+        }
+        effects.phaser.rate = crate::model::Percent::new(100).unwrap();
+        effects.phaser.depth = crate::model::Percent::new(100).unwrap();
+        chain.configure(effects, ParameterLocks::default(), 256);
+        let mut previous = chain.process(0.25);
+        let mut stereo = false;
+        for _ in 0..512 {
+            let output = chain.process(0.25);
+            assert!(output.0.is_finite() && output.1.is_finite());
+            assert!((output.0 - previous.0).abs() < 0.25);
+            assert!((output.1 - previous.1).abs() < 0.25);
+            stereo |= (chain.phaser_coefficient_l - chain.phaser_coefficient_r).abs() > 0.000_001;
+            previous = output;
+        }
+        assert!(stereo);
     }
 
     #[test]

@@ -131,8 +131,8 @@ struct Renderer {
     preview: [SynthVoice; 3],
     chord: ChordVoicePool,
     preview_chord: ChordVoicePool,
-    effects: [TrackEffectChain; TRACK_COUNT],
-    preview_effects: [TrackEffectChain; TRACK_COUNT],
+    effects: [TrackEffectChain; NON_CHORD_TRACK_COUNT],
+    preview_effects: [TrackEffectChain; NON_CHORD_TRACK_COUNT],
     chord_effects: [TrackEffectChain; 2],
     preview_chord_effects: [TrackEffectChain; 2],
     sidechain: SidechainCompressor,
@@ -154,6 +154,22 @@ struct Renderer {
     condition_rng: [u32; TRACK_COUNT],
     probability_rng: [u32; TRACK_COUNT],
     preview_scheduled: [Option<PreviewAction>; 24],
+}
+
+const NON_CHORD_TRACK_COUNT: usize = TRACK_COUNT - 1;
+
+/// Maps a logical track to its ordinary effect-chain slot. Chord is handled by
+/// its two independent group chains and intentionally has no ordinary slot.
+const fn effect_slot(track: usize) -> Option<usize> {
+    if track == CHORD_TRACK_INDEX {
+        None
+    } else if track < CHORD_TRACK_INDEX {
+        Some(track)
+    } else if track < TRACK_COUNT {
+        Some(track - 1)
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -541,8 +557,11 @@ mod tests {
             track.delay_send = Percent::new(100).unwrap();
             track.reverb_send = Percent::new(100).unwrap();
             track.effects = saturated_effects;
-            track.lfos.level = lfo;
-            track.lfos.pan = lfo;
+            for parameter in ParameterId::ALL {
+                if track.supports_lfo(parameter) {
+                    assert!(track.set_lfo(parameter, lfo));
+                }
+            }
         }
         project.globals.delay_feedback = Percent::new(85).unwrap();
         project.globals.reverb_return = Percent::new(75).unwrap();
@@ -618,6 +637,40 @@ mod tests {
 
     fn allocator_counts() -> (usize, usize) {
         crate::test_allocator::counts()
+    }
+
+    #[test]
+    fn effect_slots_cover_only_non_chord_tracks() {
+        let mut slots = [false; NON_CHORD_TRACK_COUNT];
+        for track in 0..TRACK_COUNT {
+            if track == CHORD_TRACK_INDEX {
+                assert_eq!(effect_slot(track), None);
+            } else {
+                let slot = effect_slot(track).unwrap();
+                assert!(!slots[slot], "slot {slot} is shared by logical tracks");
+                slots[slot] = true;
+            }
+        }
+        assert!(slots.into_iter().all(|used| used));
+        assert_eq!(effect_slot(TRACK_COUNT), None);
+    }
+
+    #[test]
+    fn juno_highpass_reset_preserves_constructor_coefficients() {
+        let mut voice = SynthVoice::new(48_000.0);
+        let coefficients = voice.juno_highpass.coefficients();
+        assert_ne!(coefficients, [1.0, 0.0, 0.0, 0.0, 0.0]);
+        voice.juno_highpass.process(1.0);
+        voice.reset_to_idle();
+        assert_eq!(voice.juno_highpass.coefficients(), coefficients);
+
+        let mut fresh = SynthVoice::new(48_000.0);
+        for input in [1.0, 0.0, -0.25, 0.5] {
+            assert_eq!(
+                voice.juno_highpass.process(input),
+                fresh.juno_highpass.process(input)
+            );
+        }
     }
 
     #[test]
@@ -832,9 +885,15 @@ mod tests {
     }
 
     #[test]
-    fn worst_case_fixture_reports_callback_cost_without_a_brittle_limit() {
-        const WARMUP_CALLBACKS: usize = 64;
-        const MEASURED_CALLBACKS: usize = 64;
+    #[ignore = "controlled local release benchmark; timing is host-dependent"]
+    fn saturated_callback_benchmark() {
+        const TRIALS: usize = 5;
+        const WARMUP_CALLBACKS: usize = 128;
+        const MEASURED_CALLBACKS: usize = 512;
+        if cfg!(debug_assertions) {
+            eprintln!("audio fixture: skipped; rerun with cargo test --release");
+            return;
+        }
         let project = performance_project();
         eprintln!(
             "audio fixture: os={} arch={} rustc={} profile={}",
@@ -849,65 +908,68 @@ mod tests {
         );
         for sample_rate in [44_100, 48_000, 96_000] {
             for buffer_frames in [128, 256, 512] {
-                let status = Arc::new(AudioStatus::default());
-                let (retire, _retired) = RingBuffer::new(32);
-                let mut renderer = Renderer::new_with_retirement(
-                    Box::new(AudioProject::from_project(&project)),
-                    sample_rate,
-                    status.clone(),
-                    retire,
-                );
-                renderer.command(AudioCommand::PlayPause);
-                renderer.boundary(0);
-                arm_second_worst_case_chord_group(&mut renderer);
-                let (producer, mut commands) = RingBuffer::new(2);
-                drop(producer);
-                let mut output = vec![0.0_f32; buffer_frames * 2];
-                for _ in 0..WARMUP_CALLBACKS {
-                    render(
-                        &mut output,
-                        2,
+                let mut durations = Vec::with_capacity(TRIALS * MEASURED_CALLBACKS);
+                for _ in 0..TRIALS {
+                    let status = Arc::new(AudioStatus::default());
+                    let (retire, _retired) = RingBuffer::new(32);
+                    let mut renderer = Renderer::new_with_retirement(
+                        Box::new(AudioProject::from_project(&project)),
                         sample_rate,
-                        &status,
-                        &mut renderer,
-                        &mut commands,
-                        |sample| sample,
+                        status.clone(),
+                        retire,
                     );
-                }
-                status.max_callback_duration_ns.store(0, Ordering::Relaxed);
-                status
-                    .max_callback_load_per_mille
-                    .store(0, Ordering::Relaxed);
-                status.callback_overruns.store(0, Ordering::Relaxed);
-                let mut durations = Vec::with_capacity(MEASURED_CALLBACKS);
-                for _ in 0..MEASURED_CALLBACKS {
-                    let start = Instant::now();
-                    render(
-                        &mut output,
-                        2,
-                        sample_rate,
-                        &status,
-                        &mut renderer,
-                        &mut commands,
-                        |sample| sample,
-                    );
-                    durations.push(start.elapsed().as_nanos());
+                    renderer.command(AudioCommand::PlayPause);
+                    renderer.boundary(0);
+                    arm_second_worst_case_chord_group(&mut renderer);
+                    let (producer, mut commands) = RingBuffer::new(2);
+                    drop(producer);
+                    let mut output = vec![0.0_f32; buffer_frames * 2];
+                    for _ in 0..WARMUP_CALLBACKS {
+                        render(
+                            &mut output,
+                            2,
+                            sample_rate,
+                            &status,
+                            &mut renderer,
+                            &mut commands,
+                            |sample| sample,
+                        );
+                    }
+                    for _ in 0..MEASURED_CALLBACKS {
+                        let start = Instant::now();
+                        render(
+                            &mut output,
+                            2,
+                            sample_rate,
+                            &status,
+                            &mut renderer,
+                            &mut commands,
+                            |sample| sample,
+                        );
+                        durations.push(start.elapsed().as_nanos());
+                    }
+                    assert!(output.iter().all(|sample| sample.is_finite()));
                 }
                 durations.sort_unstable();
-                let median = durations[MEASURED_CALLBACKS / 2];
-                let p95 = durations[(MEASURED_CALLBACKS * 95 / 100).min(MEASURED_CALLBACKS - 1)];
+                let count = durations.len();
+                let median = durations[count / 2];
+                let p95 = durations[(count * 95 / 100).min(count - 1)];
+                let p99 = durations[(count * 99 / 100).min(count - 1)];
+                let maximum = durations[count - 1];
                 let budget_ns =
                     buffer_frames as u128 * 1_000_000_000_u128 / u128::from(sample_rate);
                 eprintln!(
-                    "audio fixture: sr={} buffer={} median_ns/frame={:.1} median_load={}‰ p95_load={}‰ max_load={}‰",
+                    "audio fixture: sr={} buffer={} trials={} samples={} median={:.1}% p95={:.1}% p99={:.1}% max={:.1}% median_ns/frame={:.1}",
                     sample_rate,
                     buffer_frames,
+                    TRIALS,
+                    count,
+                    median as f64 * 100.0 / budget_ns as f64,
+                    p95 as f64 * 100.0 / budget_ns as f64,
+                    p99 as f64 * 100.0 / budget_ns as f64,
+                    maximum as f64 * 100.0 / budget_ns as f64,
                     median as f64 / buffer_frames as f64,
-                    median * 1_000 / budget_ns,
-                    p95 * 1_000 / budget_ns,
-                    status.max_callback_load_per_mille.load(Ordering::Relaxed),
                 );
-                assert!(output.iter().all(|sample| sample.is_finite()));
             }
         }
     }
