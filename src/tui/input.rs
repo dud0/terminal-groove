@@ -590,7 +590,10 @@ pub(super) fn handle_generator_dialog(a: &mut App, audio: &mut Audio, k: KeyEven
         KeyCode::Left | KeyCode::Right if (4..=5).contains(&dialog.field) => {
             change_generator_value(dialog, k.code == KeyCode::Right);
         }
-        KeyCode::Left | KeyCode::Right if (3..=9).contains(&dialog.field) => {
+        KeyCode::Left | KeyCode::Right
+            if (3..=9).contains(&dialog.field)
+                && dialog.field_is_applicable(&a.editor.project, dialog.field) =>
+        {
             change_generator_value(dialog, k.code == KeyCode::Right);
         }
         KeyCode::Enter => {

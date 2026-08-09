@@ -578,6 +578,46 @@ mod tests {
     }
 
     #[test]
+    fn generator_dialog_marks_track_specific_fields_inapplicable() {
+        let project = Project::new();
+        let mut dialog = GeneratorDialog {
+            target: GeneratorTarget::Track(0),
+            track: 0,
+            seed: "123".into(),
+            density: Percent::new(48).unwrap(),
+            range_low: 2,
+            range_high: 6,
+            chord_shapes: ChordShapePool::AllShapes,
+            ties: Percent::new(18).unwrap(),
+            accents: Percent::new(24).unwrap(),
+            slides: Percent::new(18).unwrap(),
+            field: 6,
+        };
+
+        assert!(!dialog.field_is_applicable(&project, 6));
+        assert!(!dialog.field_is_applicable(&project, 9));
+        dialog.target = GeneratorTarget::Track(SYNTH_TRACK_START);
+        assert!(!dialog.field_is_applicable(&project, 6));
+        assert!(dialog.field_is_applicable(&project, 9));
+        dialog.target = GeneratorTarget::Track(CHORD_TRACK_INDEX);
+        assert!(dialog.field_is_applicable(&project, 6));
+        assert!(!dialog.field_is_applicable(&project, 9));
+        dialog.target = GeneratorTarget::Track(LEAD_TRACK_INDEX);
+        assert!(!dialog.field_is_applicable(&project, 6));
+        assert!(dialog.field_is_applicable(&project, 9));
+        dialog.target = GeneratorTarget::WholePattern;
+        assert!(dialog.field_is_applicable(&project, 6));
+        assert!(dialog.field_is_applicable(&project, 9));
+
+        let mut app = App::new(project, None);
+        dialog.target = GeneratorTarget::Track(0);
+        app.mode = Mode::GeneratorDialog(dialog);
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("> Chord shapes All shapes  (n/a)"));
+        assert!(screen.contains("Slides     18%  (n/a)"));
+    }
+
+    #[test]
     fn trigger_dialog_renders_horizontal_cards() {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {

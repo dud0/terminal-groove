@@ -2,7 +2,7 @@ use super::render::ValueOrigin;
 use crate::tui::DIRECT_PARAMETER_RAMP;
 use crate::{
     generator::{ChordShapePool, Target as GeneratorTarget},
-    model::{ChordShape, GlobalParameterId, ParameterId, Percent, Project, TRACK_COUNT},
+    model::{ChordShape, GlobalParameterId, ParameterId, Percent, Project, TRACK_COUNT, TrackKind},
     reducer::{Editor, Scope},
 };
 use std::{path::PathBuf, time::Instant};
@@ -131,6 +131,22 @@ pub(crate) struct GeneratorDialog {
     pub(crate) accents: Percent,
     pub(crate) slides: Percent,
     pub(crate) field: usize,
+}
+
+impl GeneratorDialog {
+    pub(crate) fn field_is_applicable(&self, project: &Project, field: usize) -> bool {
+        let GeneratorTarget::Track(track) = self.target else {
+            return true;
+        };
+        let Some(kind) = project.tracks.get(track).map(|track| track.kind) else {
+            return false;
+        };
+        match field {
+            6 => kind == TrackKind::Chord,
+            9 => matches!(kind, TrackKind::Bass | TrackKind::Lead),
+            _ => true,
+        }
+    }
 }
 pub struct App {
     pub editor: Editor,

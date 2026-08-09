@@ -538,8 +538,15 @@ pub(super) fn render_generator_popup(
         .into_iter()
         .map(|(index, field)| {
             let active = index == Some(dialog.field);
+            let applicable = index
+                .map(|index| dialog.field_is_applicable(&a.editor.project, index))
+                .unwrap_or(true);
             let marker = if active { "> " } else { "  " };
-            let style = if active {
+            let style = if !applicable {
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM)
+            } else if active {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
@@ -547,7 +554,8 @@ pub(super) fn render_generator_popup(
             } else {
                 Style::default()
             };
-            Line::from(Span::styled(format!("{marker}{field}"), style))
+            let suffix = if applicable { "" } else { "  (n/a)" };
+            Line::from(Span::styled(format!("{marker}{field}{suffix}"), style))
         })
         .chain([
             Line::from(""),
