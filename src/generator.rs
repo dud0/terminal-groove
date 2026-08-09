@@ -230,12 +230,11 @@ fn fill_track(
                 retrigger_count: 1,
                 locks: ParameterLocks::default(),
             },
-            TrackKind::Lead => StepEvent::Note {
+            TrackKind::Lead => StepEvent::LeadNote {
                 degree: rng.range(1, 8),
                 octave: rng.range(range_low, range_high),
                 accent,
-                chord_shape: None,
-                arpeggio: ArpeggioConfig::default(),
+                slide: false,
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
                 locks: ParameterLocks::default(),
@@ -253,7 +252,11 @@ fn add_ties(steps: &mut [Step], rng: &mut Rng, amount: Percent) -> usize {
             && rng.percent(amount)
             && matches!(
                 steps[i - 1],
-                Some(StepEvent::BassNote { .. } | StepEvent::Note { .. })
+                Some(
+                    StepEvent::BassNote { .. }
+                        | StepEvent::Note { .. }
+                        | StepEvent::LeadNote { .. }
+                )
             )
         {
             steps[i] = Some(StepEvent::Tie {
@@ -302,7 +305,11 @@ mod tests {
                         i > 0
                             && matches!(
                                 steps[i - 1],
-                                Some(StepEvent::BassNote { .. } | StepEvent::Note { .. })
+                                Some(
+                                    StepEvent::BassNote { .. }
+                                        | StepEvent::Note { .. }
+                                        | StepEvent::LeadNote { .. }
+                                )
                             )
                     );
                 }
@@ -336,9 +343,11 @@ mod tests {
         steps
             .iter()
             .filter_map(|event| match event {
-                Some(StepEvent::BassNote { octave, .. } | StepEvent::Note { octave, .. }) => {
-                    Some(*octave)
-                }
+                Some(
+                    StepEvent::BassNote { octave, .. }
+                    | StepEvent::Note { octave, .. }
+                    | StepEvent::LeadNote { octave, .. },
+                ) => Some(*octave),
                 _ => None,
             })
             .collect()
@@ -416,5 +425,30 @@ mod tests {
         let octaves = generated_octaves(&result.tracks[crate::model::CHORD_TRACK_INDEX]);
         assert!(octaves.iter().all(|octave| (2..=6).contains(octave)));
         assert!(octaves.windows(2).any(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
+    fn generated_pattern_is_valid_and_uses_lead_note_events() {
+        let mut project = Project::new();
+        let generated = generate(
+            &project,
+            Config {
+                density: Percent::new(100).unwrap(),
+                ties: Percent::new(100).unwrap(),
+                ..Config::default()
+            },
+        );
+
+        for (track, steps) in project.tracks.iter_mut().zip(generated.tracks) {
+            track.steps = steps;
+        }
+        assert!(project.store_active_pattern(0));
+        project.validate().unwrap();
+        assert!(
+            project.tracks[crate::model::LEAD_TRACK_INDEX]
+                .steps
+                .iter()
+                .any(|event| matches!(event, Some(StepEvent::LeadNote { .. })))
+        );
     }
 }
