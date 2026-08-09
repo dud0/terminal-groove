@@ -21,8 +21,8 @@ use crate::{
     model::{
         ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT,
         DelayDivision, GlobalParameterId, LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate,
-        LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE,
-        STEP_ROW_SIZE, SYNTH_TRACK_START, Scale, StepEvent, TRACK_COUNT, TrackKind,
+        LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, RIMSHOT_TRACK_INDEX,
+        STEP_BANK_SIZE, STEP_ROW_SIZE, SYNTH_TRACK_START, Scale, StepEvent, TRACK_COUNT, TrackKind,
         TriggerCondition, Waveform,
     },
     persistence,
@@ -219,6 +219,11 @@ mod tests {
         assert_eq!(cymbal[4].id, ParameterId::Tune);
         assert_eq!(cymbal[5].id, ParameterId::Tone);
         assert_eq!(cymbal[6].id, ParameterId::Decay);
+        let rimshot = parameter_descriptors(TrackKind::Rimshot);
+        assert_eq!(rimshot.len(), tom.len());
+        assert_eq!(rimshot[4].id, ParameterId::Tune);
+        assert_eq!(rimshot[5].id, ParameterId::Tone);
+        assert_eq!(rimshot[6].id, ParameterId::Decay);
         let synth = parameter_descriptors(TrackKind::Chord);
         assert_eq!(synth.len(), 18);
         assert_eq!(synth[4].id, ParameterId::OscillatorMix);
@@ -613,6 +618,10 @@ mod tests {
         assert_eq!(
             track_jump_index(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::SHIFT)),
             Some(0)
+        );
+        assert_eq!(
+            track_jump_index(KeyEvent::new(KeyCode::Char('('), KeyModifiers::SHIFT)),
+            Some(8)
         );
     }
 
@@ -1420,6 +1429,19 @@ mod tests {
         assert_eq!(
             physical_parameter_readout(&app, 0, 0, ParameterId::Decay),
             "1200 ms · BASE"
+        );
+    }
+
+    #[test]
+    fn rimshot_readouts_show_reference_modes_and_longest_decay() {
+        let app = App::new(Project::new(), None);
+        assert_eq!(
+            physical_parameter_readout(&app, RIMSHOT_TRACK_INDEX, 0, ParameterId::Tune),
+            "222/500/1000 Hz modes · BASE"
+        );
+        assert_eq!(
+            physical_parameter_readout(&app, RIMSHOT_TRACK_INDEX, 0, ParameterId::Decay),
+            "45 ms longest mode · BASE"
         );
     }
 

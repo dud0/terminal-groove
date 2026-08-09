@@ -1385,7 +1385,9 @@ pub fn percentage_key(c: char) -> Option<Percent> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CHORD_TRACK_INDEX, LEAD_TRACK_INDEX, SYNTH_TRACK_START, TRACK_COUNT};
+    use crate::model::{
+        CHORD_TRACK_INDEX, LEAD_TRACK_INDEX, RIMSHOT_TRACK_INDEX, SYNTH_TRACK_START, TRACK_COUNT,
+    };
     #[test]
     fn undo_dirty_redo() {
         let mut e = Editor::new(Project::new());
@@ -1712,6 +1714,30 @@ mod tests {
         };
         assert_eq!(kick.tune.get(), 72);
         assert_eq!(kick.decay.get(), 34);
+
+        for (parameter, value) in [
+            (ParameterId::Tune, 64),
+            (ParameterId::Tone, 37),
+            (ParameterId::Decay, 81),
+        ] {
+            e.set_parameter(
+                RIMSHOT_TRACK_INDEX,
+                0,
+                Scope::Base,
+                parameter,
+                p(value),
+                None,
+            )
+            .unwrap();
+        }
+        let crate::model::Instrument::Rimshot(rimshot) =
+            &e.project.tracks[RIMSHOT_TRACK_INDEX].instrument
+        else {
+            panic!("expected rimshot")
+        };
+        assert_eq!(rimshot.tune.get(), 64);
+        assert_eq!(rimshot.tone.get(), 37);
+        assert_eq!(rimshot.decay.get(), 81);
 
         for (parameter, value) in [
             (ParameterId::Cutoff, 41),

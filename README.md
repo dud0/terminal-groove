@@ -1,6 +1,6 @@
 # terminal-groove
 
-A Linux-first, real-time terminal groovebox. It provides eight independently looping 1–64-step sequences, 909-inspired procedural drums including Tom and Cymbal voices, a 303-inspired monophonic Bass, a Juno-60-inspired Chord synth with two alternating four-voice groups, an SH-101-inspired monophonic Lead, strict versioned JSON projects, undo/redo, parameter locks, and per-parameter LFOs. Chord sequencer degrees produce diatonic shapes with inversions and optional arpeggiation.
+A Linux-first, real-time terminal groovebox. It provides nine independently looping 1–64-step sequences, 909-inspired procedural drums including Tom, Cymbal, and Rimshot voices, a 303-inspired monophonic Bass, a Juno-60-inspired Chord synth with two alternating four-voice groups, an SH-101-inspired monophonic Lead, strict versioned JSON projects, undo/redo, parameter locks, and per-parameter LFOs. Chord sequencer degrees produce diatonic shapes with inversions and optional arpeggiation.
 
 ## Build prerequisites
 

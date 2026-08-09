@@ -250,6 +250,16 @@ impl ChordVoicePool {
 
 pub(super) const DRUM_SILENCE: f32 = 0.0001;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DrumVoiceKind {
+    Kick,
+    Snare,
+    Hat,
+    Tom,
+    Cymbal,
+    Rimshot,
+}
+
 pub(super) struct DrumEnvelope {
     pub(super) value: f32,
     pub(super) start: f32,
@@ -355,11 +365,17 @@ impl KickPitchEnvelope {
 }
 
 pub(super) struct DrumVoice {
+    pub(super) kind: DrumVoiceKind,
     pub(super) envelope: DrumEnvelope,
     pub(super) kick_pitch: KickPitchEnvelope,
     pub(super) tom_pitch: KickPitchEnvelope,
     pub(super) phase: f32,
     pub(super) phase2: f32,
+    pub(super) rimshot_phases: [f32; 3],
+    pub(super) rimshot_frequencies: [f32; 3],
+    pub(super) rimshot_amplitudes: [f32; 3],
+    pub(super) rimshot_decay_coefficients: [f32; 3],
+    pub(super) rimshot_attack_samples: u32,
     pub(super) metallic: [PolyBlepOsc; 6],
     pub(super) filter: Biquad,
     pub(super) filter2: Biquad,
@@ -384,6 +400,7 @@ pub(super) struct DrumVoice {
 
 #[derive(Clone, Copy)]
 pub(super) struct DrumControls {
+    pub(super) kind: DrumVoiceKind,
     pub(super) tune: f32,
     pub(super) tone: f32,
     pub(super) snappy: f32,
@@ -394,11 +411,17 @@ pub(super) struct DrumControls {
 impl DrumVoice {
     pub(super) fn new(seed: u32) -> Self {
         Self {
+            kind: DrumVoiceKind::Kick,
             envelope: DrumEnvelope::new(),
             kick_pitch: KickPitchEnvelope::new(),
             tom_pitch: KickPitchEnvelope::new(),
             phase: 0.0,
             phase2: 0.0,
+            rimshot_phases: [0.0; 3],
+            rimshot_frequencies: [222.0, 500.0, 1_000.0],
+            rimshot_amplitudes: [0.0; 3],
+            rimshot_decay_coefficients: [0.0; 3],
+            rimshot_attack_samples: 1,
             metallic: std::array::from_fn(|_| PolyBlepOsc::default()),
             filter: Biquad::new(),
             filter2: Biquad::new(),

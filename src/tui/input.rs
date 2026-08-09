@@ -408,6 +408,7 @@ pub(super) fn track_jump_index(k: KeyEvent) -> Option<usize> {
         '^' => Some(5),
         '&' => Some(6),
         '*' => Some(7),
+        '(' => Some(8),
         _ => None,
     };
     if shifted_symbol.is_some() {
@@ -416,7 +417,7 @@ pub(super) fn track_jump_index(k: KeyEvent) -> Option<usize> {
     if k.modifiers.contains(KeyModifiers::SHIFT) {
         return c
             .to_digit(10)
-            .filter(|&track| (1..=8).contains(&track))
+            .filter(|&track| (1..=9).contains(&track))
             .map(|track| track as usize - 1);
     }
     None

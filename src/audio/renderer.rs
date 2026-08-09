@@ -1,5 +1,5 @@
 use super::effects::{modulated_percent, pitch_modulated_frequency};
-use super::voices::{CHORD_GROUP_SIZE, SynthVoiceKind};
+use super::voices::{CHORD_GROUP_SIZE, DrumVoiceKind, SynthVoiceKind};
 use super::{
     AudioProject, AudioStatus, ChordVoicePool, DrumVoice, ParameterId, Renderer, StepClock,
     SynthVoice, TRACK_COUNT, TrackEffectChain, effect_slot,
@@ -98,6 +98,7 @@ impl Renderer {
                         0xdead_beef,
                         0x71a2_4c9d,
                         0x4f83_d2b1,
+                        0x2d74_a6c3,
                     ][i],
                 )
             }),
@@ -109,6 +110,7 @@ impl Renderer {
                         0x6d2b_f193,
                         0x8c1e_5a77,
                         0xb643_92e0,
+                        0x3e95_c841,
                     ][i],
                 )
             }),
@@ -433,20 +435,20 @@ impl Renderer {
     }
     fn render_drum_raw(
         voice: &mut DrumVoice,
-        track: usize,
+        _track: usize,
         sr: f32,
         _level_offset: f32,
         pan_offset: f32,
     ) -> (f32, f32, f32, f32) {
-        let raw = match track {
-            0 => {
+        let raw = match voice.kind {
+            DrumVoiceKind::Kick => {
                 let hz = voice.kick_pitch.next_value();
                 let body = (TAU * voice.phase).sin();
                 voice.phase = (voice.phase + hz / sr).fract();
                 let click_env = (-(voice.envelope.elapsed as f32) / (sr * 0.003)).exp();
                 body + voice.noise() * click_env * voice.attack * 0.35
             }
-            1 => {
+            DrumVoiceKind::Snare => {
                 let hz = 150.0 + voice.tune * 150.0;
                 let lower = 1.0 - 4.0 * (voice.phase - 0.5).abs();
                 let upper = 1.0 - 4.0 * (voice.phase2 - 0.5).abs();
@@ -457,7 +459,7 @@ impl Renderer {
                 let body = lower * (0.42 - voice.tone * 0.12) + upper * (0.12 + voice.tone * 0.18);
                 body + noise * (0.25 + voice.snappy * 0.72)
             }
-            2 => {
+            DrumVoiceKind::Hat => {
                 const RATIOS: [f32; 6] = [1.0, 1.447, 1.617, 1.926, 2.502, 2.663];
                 let base = 310.0 + voice.tune * 360.0;
                 let mut metal = 0.0;
@@ -469,7 +471,7 @@ impl Renderer {
                 let bright = voice.filter.process(source);
                 bright * 0.75 + voice.filter2.process(source) * 0.25
             }
-            3 => {
+            DrumVoiceKind::Tom => {
                 let hz = voice.tom_pitch.next_value();
                 let lower = 1.0 - 4.0 * (voice.phase - 0.5).abs();
                 let upper = 1.0 - 4.0 * (voice.phase2 - 0.5).abs();
@@ -480,7 +482,7 @@ impl Renderer {
                 let click = voice.noise() * click_env * (0.08 + voice.tone * 0.16);
                 body + click
             }
-            _ => {
+            DrumVoiceKind::Cymbal => {
                 const RATIOS: [f32; 6] = [1.0, 1.342, 1.483, 1.773, 2.113, 2.641];
                 let base = 240.0 + voice.tune * 480.0;
                 let mut metal = 0.0;
@@ -493,8 +495,27 @@ impl Renderer {
                 let bright = voice.filter.process(source);
                 bright * 0.82 + voice.filter2.process(source) * 0.18
             }
+            DrumVoiceKind::Rimshot => {
+                let attack = (voice.envelope.elapsed as f32
+                    / voice.rimshot_attack_samples.max(1) as f32)
+                    .min(1.0);
+                let mut modes = 0.0;
+                for mode in 0..3 {
+                    modes +=
+                        (TAU * voice.rimshot_phases[mode]).sin() * voice.rimshot_amplitudes[mode];
+                    voice.rimshot_phases[mode] =
+                        (voice.rimshot_phases[mode] + voice.rimshot_frequencies[mode] / sr).fract();
+                    voice.rimshot_amplitudes[mode] *= voice.rimshot_decay_coefficients[mode];
+                }
+                voice.filter.process(modes * attack)
+            }
         };
-        let sample = (raw * 1.15).tanh() * voice.envelope.next_value() * 1.40;
+        let envelope = voice.envelope.next_value();
+        let sample = if voice.kind == DrumVoiceKind::Rimshot {
+            (raw * 1.35).tanh() * 0.82
+        } else {
+            (raw * 1.15).tanh() * envelope * 1.40
+        };
         (
             sample,
             voice.delay_send.next_value(),

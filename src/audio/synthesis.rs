@@ -1,6 +1,7 @@
 use super::effects::modulated_percent;
 use super::voices::{
-    CHORD_GROUP_SIZE, ChordVoicePool, DrumControls, DrumVoice, SynthTrigger, SynthVoiceKind,
+    CHORD_GROUP_SIZE, ChordVoicePool, DRUM_SILENCE, DrumControls, DrumVoice, DrumVoiceKind,
+    SynthTrigger, SynthVoiceKind,
 };
 use super::{
     AudioProject, AudioTrack, ParameterSmoothing, PreviewAction, Renderer, ScheduledTrackAction,
@@ -25,6 +26,7 @@ impl Renderer {
         };
         match track.instrument {
             Instrument::Kick(p) => Some(DrumControls {
+                kind: DrumVoiceKind::Kick,
                 tune: value(p.tune, locks.tune, ParameterId::Tune),
                 tone: 0.5,
                 snappy: 0.0,
@@ -32,6 +34,7 @@ impl Renderer {
                 attack: value(p.attack, locks.attack, ParameterId::Attack),
             }),
             Instrument::Snare(p) => Some(DrumControls {
+                kind: DrumVoiceKind::Snare,
                 tune: value(p.tune, locks.tune, ParameterId::Tune),
                 tone: value(p.tone, locks.tone, ParameterId::Tone),
                 snappy: value(p.snappy, locks.snappy, ParameterId::Snappy),
@@ -39,6 +42,7 @@ impl Renderer {
                 attack: 0.0,
             }),
             Instrument::Hat(p) => Some(DrumControls {
+                kind: DrumVoiceKind::Hat,
                 tune: value(p.tune, locks.tune, ParameterId::Tune),
                 tone: 0.5,
                 snappy: 0.0,
@@ -46,6 +50,7 @@ impl Renderer {
                 attack: 0.0,
             }),
             Instrument::Tom(p) => Some(DrumControls {
+                kind: DrumVoiceKind::Tom,
                 tune: value(p.tune, locks.tune, ParameterId::Tune),
                 tone: value(p.tone, locks.tone, ParameterId::Tone),
                 snappy: 0.0,
@@ -53,6 +58,15 @@ impl Renderer {
                 attack: 0.0,
             }),
             Instrument::Cymbal(p) => Some(DrumControls {
+                kind: DrumVoiceKind::Cymbal,
+                tune: value(p.tune, locks.tune, ParameterId::Tune),
+                tone: value(p.tone, locks.tone, ParameterId::Tone),
+                snappy: 0.0,
+                decay: value(p.decay, locks.decay, ParameterId::Decay),
+                attack: 0.0,
+            }),
+            Instrument::Rimshot(p) => Some(DrumControls {
+                kind: DrumVoiceKind::Rimshot,
                 tune: value(p.tune, locks.tune, ParameterId::Tune),
                 tone: value(p.tone, locks.tone, ParameterId::Tone),
                 snappy: 0.0,
@@ -68,7 +82,7 @@ impl Renderer {
         let Some(controls) = Self::drum_controls(t, locks, &self.lfo_offsets[track]) else {
             return;
         };
-        Self::start_drum_voice(&mut self.drums[track], track, controls, accent, self.sr);
+        Self::start_drum_voice(&mut self.drums[track], controls, accent, self.sr);
     }
     pub(super) fn trigger_preview_drum(
         &mut self,
@@ -80,13 +94,7 @@ impl Renderer {
         let Some(controls) = Self::drum_controls(t, locks, &self.preview_lfo_offsets[track]) else {
             return;
         };
-        Self::start_drum_voice(
-            &mut self.preview_drums[track],
-            track,
-            controls,
-            accent,
-            self.sr,
-        );
+        Self::start_drum_voice(&mut self.preview_drums[track], controls, accent, self.sr);
         let voice = &mut self.preview_drums[track];
         voice
             .level
@@ -102,69 +110,104 @@ impl Renderer {
     }
     pub(super) fn start_drum_voice(
         voice: &mut DrumVoice,
-        track: usize,
         controls: DrumControls,
         accent: bool,
         sr: f32,
     ) {
         let DrumControls {
+            kind,
             tune,
             tone,
             snappy,
             decay: decay_control,
             attack: attack_control,
         } = controls;
-        let decay = match track {
-            0 => 0.08 * (15.0_f32).powf(decay_control),
-            1 => 0.08 + snappy * 0.34,
-            2 => 0.025 * (32.0_f32).powf(decay_control),
-            3 => 0.09 * (8.888_889_f32).powf(decay_control),
-            _ => 0.08 * (22.5_f32).powf(decay_control),
+        let decay = match kind {
+            DrumVoiceKind::Kick => 0.08 * (15.0_f32).powf(decay_control),
+            DrumVoiceKind::Snare => 0.08 + snappy * 0.34,
+            DrumVoiceKind::Hat => 0.025 * (32.0_f32).powf(decay_control),
+            DrumVoiceKind::Tom => 0.09 * (8.888_889_f32).powf(decay_control),
+            DrumVoiceKind::Cymbal => 0.08 * (22.5_f32).powf(decay_control),
+            DrumVoiceKind::Rimshot => 0.09 * 16.0_f32.powf(decay_control - 0.5),
         };
-        let (attack, peak) = match track {
-            0 => (
+        let (attack, peak) = match kind {
+            DrumVoiceKind::Kick => (
                 0.0015 + attack_control * 0.0025,
                 if accent { 1.22 } else { 0.78 },
             ),
-            1 => (0.001, if accent { 1.08 } else { 0.68 }),
-            2 => (0.0007, if accent { 0.9 } else { 0.64 }),
-            3 => (0.0007, if accent { 1.05 } else { 0.72 }),
-            _ => (0.0007, if accent { 0.86 } else { 0.60 }),
+            DrumVoiceKind::Snare => (0.001, if accent { 1.08 } else { 0.68 }),
+            DrumVoiceKind::Hat => (0.0007, if accent { 0.9 } else { 0.64 }),
+            DrumVoiceKind::Tom => (0.0007, if accent { 1.05 } else { 0.72 }),
+            DrumVoiceKind::Cymbal => (0.0007, if accent { 0.86 } else { 0.60 }),
+            DrumVoiceKind::Rimshot => (0.0005, if accent { 1.413 } else { 1.0 }),
         };
+        voice.kind = kind;
         voice.tune = tune;
         voice.tone = tone;
-        voice.snappy = (snappy + if accent && track == 1 { 0.2 } else { 0.0 }).min(1.0);
+        voice.snappy = (snappy
+            + if accent && kind == DrumVoiceKind::Snare {
+                0.2
+            } else {
+                0.0
+            })
+        .min(1.0);
         voice.attack = attack_control;
         voice.accent = accent;
         voice.envelope.trigger(peak, attack, decay, sr);
-        match track {
-            0 => voice
-                .kick_pitch
-                .trigger((tune + attack_control * 0.15).min(1.0), decay, sr),
-            1 => {
+        match kind {
+            DrumVoiceKind::Kick => {
+                voice
+                    .kick_pitch
+                    .trigger((tune + attack_control * 0.15).min(1.0), decay, sr)
+            }
+            DrumVoiceKind::Snare => {
                 voice
                     .filter
                     .set_bandpass(900.0 + tone * 4_500.0, 0.8 + tone * 2.5, sr);
                 voice.filter2.set_highpass(450.0 + tone * 900.0, 0.8, sr);
             }
-            2 => {
+            DrumVoiceKind::Hat => {
                 voice.filter.set_highpass(4_000.0 + tune * 5_500.0, 0.9, sr);
                 voice
                     .filter2
                     .set_bandpass(6_000.0 + tune * 5_000.0, 1.2, sr);
             }
-            3 => {
+            DrumVoiceKind::Tom => {
                 voice.tom_pitch.trigger_tom(tune, tone, decay, sr);
                 voice
                     .filter
                     .set_bandpass(350.0 + tone * 1_900.0, 0.7 + tone * 1.4, sr);
                 voice.filter2.set_highpass(90.0 + tone * 260.0, 0.8, sr);
             }
-            _ => {
+            DrumVoiceKind::Cymbal => {
                 voice.filter.set_highpass(3_200.0 + tone * 4_800.0, 0.8, sr);
                 voice
                     .filter2
                     .set_bandpass(5_000.0 + tune * 5_500.0, 1.0 + tone * 1.2, sr);
+            }
+            DrumVoiceKind::Rimshot => {
+                let tune_multiplier = 2.0_f32.powf(tune * 2.0 - 1.0);
+                let decay_multiplier = 4.0_f32.powf(decay_control * 2.0 - 1.0);
+                let body = 1.25 - tone;
+                let crack = 0.25 + tone;
+                let mut gains = [0.5 * body, body, crack];
+                let reference_energy = 1.265_625_f32;
+                let energy = gains.iter().map(|gain| gain * gain).sum::<f32>();
+                let normalization = (reference_energy / energy.max(f32::EPSILON)).sqrt();
+                for gain in &mut gains {
+                    *gain *= normalization * peak;
+                }
+                if accent {
+                    gains[2] *= 1.2;
+                }
+                voice.rimshot_phases = [0.0; 3];
+                voice.rimshot_frequencies =
+                    [222.0, 500.0, 1_000.0].map(|frequency| frequency * tune_multiplier);
+                voice.rimshot_amplitudes = gains;
+                voice.rimshot_decay_coefficients = [0.045, 0.020, 0.005]
+                    .map(|seconds| (DRUM_SILENCE.ln() / (seconds * decay_multiplier * sr)).exp());
+                voice.rimshot_attack_samples = (attack * sr).round().max(1.0) as u32;
+                voice.filter.set_highpass(180.0, 0.707, sr);
             }
         }
     }

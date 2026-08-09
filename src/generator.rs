@@ -53,6 +53,22 @@ fn normalized_octave_range(config: Config) -> (u8, u8) {
     (low, high)
 }
 
+fn is_anchor(kind: TrackKind, step: usize, groove: Option<&[bool]>) -> bool {
+    match kind {
+        TrackKind::Kick => step % 16 == 0 || step % 16 == 7,
+        TrackKind::Snare => step % 16 == 4 || step % 16 == 12,
+        TrackKind::Hat => step % 2 == 0,
+        TrackKind::Tom => step % 16 == 10 || step % 16 == 14,
+        TrackKind::Cymbal => step % 16 == 0,
+        TrackKind::Rimshot => step % 16 == 4 || step % 16 == 12,
+        TrackKind::Bass => {
+            groove.is_some_and(|g| g.get(step).copied().unwrap_or(false)) || step % 4 == 0
+        }
+        TrackKind::Chord => step % 8 == 0,
+        TrackKind::Lead => step % 4 == 2,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Rng(u64);
 impl Rng {
@@ -95,6 +111,7 @@ pub fn generate(project: &Project, config: Config) -> Generated {
                     | TrackKind::Hat
                     | TrackKind::Tom
                     | TrackKind::Cymbal
+                    | TrackKind::Rimshot
             )
         {
             inserted += fill_track(
@@ -134,6 +151,7 @@ pub fn generate(project: &Project, config: Config) -> Generated {
                     | TrackKind::Hat
                     | TrackKind::Tom
                     | TrackKind::Cymbal
+                    | TrackKind::Rimshot
             )
         {
             continue;
@@ -179,18 +197,7 @@ fn fill_track(
         if slot.is_some() {
             continue;
         }
-        let anchor = match kind {
-            TrackKind::Kick => i % 16 == 0 || i % 16 == 7,
-            TrackKind::Snare => i % 16 == 4 || i % 16 == 12,
-            TrackKind::Hat => i % 2 == 0,
-            TrackKind::Tom => i % 16 == 10 || i % 16 == 14,
-            TrackKind::Cymbal => i % 16 == 0,
-            TrackKind::Bass => {
-                groove.is_some_and(|g| g.get(i).copied().unwrap_or(false)) || i % 4 == 0
-            }
-            TrackKind::Chord => i % 8 == 0,
-            TrackKind::Lead => i % 4 == 2,
-        };
+        let anchor = is_anchor(kind, i, groove);
         let probability = if anchor {
             density.saturating_add(22)
         } else {
@@ -205,7 +212,8 @@ fn fill_track(
             | TrackKind::Snare
             | TrackKind::Hat
             | TrackKind::Tom
-            | TrackKind::Cymbal => StepEvent::Trigger {
+            | TrackKind::Cymbal
+            | TrackKind::Rimshot => StepEvent::Trigger {
                 accent,
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
@@ -287,6 +295,14 @@ mod tests {
         c.density = Percent::new(80).unwrap();
         assert_eq!(a, b);
         assert_ne!(a, generate(&p, c));
+    }
+
+    #[test]
+    fn rimshot_anchors_the_two_backbeats() {
+        let anchors = (0..16)
+            .filter(|step| is_anchor(TrackKind::Rimshot, *step, None))
+            .collect::<Vec<_>>();
+        assert_eq!(anchors, vec![4, 12]);
     }
 
     #[test]

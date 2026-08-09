@@ -519,7 +519,7 @@ mod tests {
     use crate::model::{
         ArpeggioRate, ArpeggioType, ChordShape, ChordSpread, DistortionParameters,
         FlangerParameters, LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
-        PhaserParameters, TrackEffects,
+        PhaserParameters, RIMSHOT_TRACK_INDEX, TrackEffects,
     };
     use std::{fs, time::Instant};
 
@@ -1558,7 +1558,7 @@ mod tests {
     }
 
     #[test]
-    fn tom_and_cymbal_render_deterministically_and_finitely() {
+    fn tom_cymbal_and_rimshot_render_deterministically_and_finitely() {
         fn render_drum(track_index: usize) -> Vec<(f32, f32)> {
             let mut project = Project::new();
             for track in &mut project.tracks {
@@ -1576,13 +1576,61 @@ mod tests {
 
         let tom = render_drum(3);
         let cymbal = render_drum(4);
+        let rimshot = render_drum(RIMSHOT_TRACK_INDEX);
         assert_eq!(tom, render_drum(3));
         assert_eq!(cymbal, render_drum(4));
+        assert_eq!(rimshot, render_drum(RIMSHOT_TRACK_INDEX));
         assert!(tom.iter().all(|(l, r)| l.is_finite() && r.is_finite()));
         assert!(cymbal.iter().all(|(l, r)| l.is_finite() && r.is_finite()));
+        assert!(rimshot.iter().all(|(l, r)| l.is_finite() && r.is_finite()));
         assert!(tom.iter().any(|(l, _)| l.abs() > 0.001));
         assert!(cymbal.iter().any(|(l, _)| l.abs() > 0.001));
+        assert!(rimshot.iter().any(|(l, _)| l.abs() > 0.001));
         assert_ne!(tom, cymbal);
+        assert_ne!(cymbal, rimshot);
+    }
+
+    #[test]
+    fn rimshot_controls_scale_modes_and_accent_emphasizes_the_crack() {
+        fn triggered_voice(tune: u8, tone: u8, decay: u8, accent: bool) -> DrumVoice {
+            let mut project = Project::new();
+            let Instrument::Rimshot(parameters) =
+                &mut project.tracks[RIMSHOT_TRACK_INDEX].instrument
+            else {
+                panic!("expected rimshot")
+            };
+            parameters.tune = Percent::new(tune).unwrap();
+            parameters.tone = Percent::new(tone).unwrap();
+            parameters.decay = Percent::new(decay).unwrap();
+            project.patterns[0].tracks[RIMSHOT_TRACK_INDEX].steps[0] = Some(StepEvent::Trigger {
+                accent,
+                condition: Default::default(),
+                retrigger_count: 1,
+                locks: Default::default(),
+            });
+            let status = Arc::new(AudioStatus::default());
+            let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
+            renderer.boundary(0);
+            renderer.drums.into_iter().nth(RIMSHOT_TRACK_INDEX).unwrap()
+        }
+
+        let default = triggered_voice(50, 50, 50, false);
+        assert_eq!(default.rimshot_frequencies, [222.0, 500.0, 1_000.0]);
+
+        let high_tune = triggered_voice(100, 50, 50, false);
+        assert_eq!(high_tune.rimshot_frequencies, [444.0, 1_000.0, 2_000.0]);
+
+        let short = triggered_voice(50, 50, 0, false);
+        let long = triggered_voice(50, 50, 100, false);
+        assert!(long.rimshot_decay_coefficients[0] > short.rimshot_decay_coefficients[0]);
+
+        let dark = triggered_voice(50, 0, 50, false);
+        let bright = triggered_voice(50, 100, 50, false);
+        assert!(dark.rimshot_amplitudes[1] > bright.rimshot_amplitudes[1]);
+        assert!(bright.rimshot_amplitudes[2] > dark.rimshot_amplitudes[2]);
+
+        let accent = triggered_voice(50, 50, 50, true);
+        assert!(accent.rimshot_amplitudes[2] > default.rimshot_amplitudes[2]);
     }
 
     #[test]

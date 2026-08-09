@@ -82,7 +82,7 @@ const HELP_TEXT: &str =
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
 NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
-           ~ select global row · Shift+1..8 select track · Enter toggle/insert · Backspace/Delete clear
+           ~ select global row · Shift+1..9 select track · Enter toggle/insert · Backspace/Delete clear
            g pattern generator · o audition selected step
            Shift+Delete clear selected track
 EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
@@ -94,7 +94,7 @@ PARAMETERS  v level · n pan · y delay send · b reverb send
            EFFECTS: R rate · q delay · E depth · F feedback · N flanger mix
            Kick: u tune · d decay · a attack
            Snare: u tune · t tone · s snappy · Hat: u tune · d decay
-           Tom/Cymbal: u tune · t tone · d decay
+           Tom/Cymbal/Rimshot: u tune · t tone · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
            Chord/Lead: w osc mix · P pulse · u sub · i pitch LFO
            Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR
@@ -410,6 +410,7 @@ const TOM_PARAMETERS: [ParameterDescriptor; 7] = [
 ];
 
 const CYMBAL_PARAMETERS: [ParameterDescriptor; 7] = TOM_PARAMETERS;
+const RIMSHOT_PARAMETERS: [ParameterDescriptor; 7] = TOM_PARAMETERS;
 
 const BASS_PARAMETERS: [ParameterDescriptor; 9] = [
     COMMON_PARAMETERS[0],
@@ -583,6 +584,7 @@ pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescr
         TrackKind::Hat => &HAT_PARAMETERS,
         TrackKind::Tom => &TOM_PARAMETERS,
         TrackKind::Cymbal => &CYMBAL_PARAMETERS,
+        TrackKind::Rimshot => &RIMSHOT_PARAMETERS,
         TrackKind::Bass => &BASS_PARAMETERS,
         TrackKind::Chord => &CHORD_PARAMETERS,
         TrackKind::Lead => &LEAD_PARAMETERS,
@@ -867,6 +869,22 @@ pub(super) fn physical_parameter_readout(
                 }
                 (TrackKind::Cymbal, ParameterId::Decay) => {
                     format!("{:.0} ms", 80.0 * 22.5_f32.powf(value as f32 / 100.0))
+                }
+                (TrackKind::Rimshot, ParameterId::Tune) => {
+                    let multiplier = 2.0_f32.powf(value as f32 / 50.0 - 1.0);
+                    format!(
+                        "{:.0}/{:.0}/{:.0} Hz modes",
+                        222.0 * multiplier,
+                        500.0 * multiplier,
+                        1_000.0 * multiplier
+                    )
+                }
+                (TrackKind::Rimshot, ParameterId::Tone) => {
+                    format!("{}% body · {}% crack", 100 - value, value)
+                }
+                (TrackKind::Rimshot, ParameterId::Decay) => {
+                    let multiplier = 4.0_f32.powf(value as f32 / 50.0 - 1.0);
+                    format!("{:.0} ms longest mode", 45.0 * multiplier)
                 }
                 (TrackKind::Bass, ParameterId::Cutoff) => {
                     format!("{:.0} Hz", crate::dsp::exp_map(value, 80.0, 8_000.0))
@@ -1883,7 +1901,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             ""
         };
         status_lines.push(Line::from(format!(
-            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..8] track{percentage_hint}{lfo_hint}  [Enter/Esc] finish{removal_hint}",
+            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..9] track{percentage_hint}{lfo_hint}  [Enter/Esc] finish{removal_hint}",
             physical_parameter_readout(a, track, a.step, parameter),
         )));
     } else if matches!(a.mode, Mode::LfoEdit { .. }) {

@@ -5,11 +5,12 @@ pub const MIN_STEP_COUNT: usize = 1;
 pub const MAX_STEP_COUNT: usize = 64;
 pub const STEP_BANK_SIZE: usize = 16;
 pub const STEP_ROW_SIZE: usize = 32;
-pub const DRUM_TRACK_COUNT: usize = 5;
+pub const DRUM_TRACK_COUNT: usize = 6;
+pub const RIMSHOT_TRACK_INDEX: usize = DRUM_TRACK_COUNT - 1;
 pub const SYNTH_TRACK_START: usize = DRUM_TRACK_COUNT;
 pub const CHORD_TRACK_INDEX: usize = SYNTH_TRACK_START + 1;
 pub const LEAD_TRACK_INDEX: usize = SYNTH_TRACK_START + 2;
-pub const TRACK_COUNT: usize = 8;
+pub const TRACK_COUNT: usize = 9;
 pub const MIN_PATTERN_COUNT: usize = 1;
 pub const MAX_PATTERN_COUNT: usize = 100;
 
@@ -73,7 +74,7 @@ impl PatternIndexMap {
 pub enum ValidationError {
     #[error("unsupported format_version {0}")]
     Version(u32),
-    #[error("tracks: expected exactly eight tracks")]
+    #[error("tracks: expected exactly nine tracks")]
     TrackCount,
     #[error("patterns: expected between 1 and 100 patterns, got {0}")]
     PatternCount(usize),
@@ -539,6 +540,7 @@ pub enum TrackKind {
     Hat,
     Tom,
     Cymbal,
+    Rimshot,
     Bass,
     Chord,
     Lead,
@@ -809,6 +811,13 @@ pub struct CymbalParameters {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RimshotParameters {
+    pub tune: Percent,
+    pub tone: Percent,
+    pub decay: Percent,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BassParameters {
     pub waveform: Waveform,
     pub cutoff: Percent,
@@ -952,6 +961,7 @@ pub enum Instrument {
     Hat(HatParameters),
     Tom(TomParameters),
     Cymbal(CymbalParameters),
+    Rimshot(RimshotParameters),
     Bass(BassParameters),
     Chord(ChordParameters),
     Lead(LeadParameters),
@@ -1625,6 +1635,9 @@ impl<'de> Deserialize<'de> for Track {
             TrackKind::Cymbal => Instrument::Cymbal(
                 serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
             ),
+            TrackKind::Rimshot => Instrument::Rimshot(
+                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+            ),
             TrackKind::Bass => Instrument::Bass(
                 serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
             ),
@@ -1658,7 +1671,7 @@ impl<'de> Deserialize<'de> for Track {
     }
 }
 
-/// A pattern owns only its eight sequences. Instrument and mixer settings live
+/// A pattern owns only its nine sequences. Instrument and mixer settings live
 /// on the project tracks and are consequently shared by every pattern.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1788,7 +1801,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 17,
+            format_version: 18,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1833,6 +1846,15 @@ impl Project {
                         tune: p(50),
                         tone: p(55),
                         decay: p(30),
+                    }),
+                ),
+                track(
+                    TrackKind::Rimshot,
+                    "Rimshot",
+                    Instrument::Rimshot(RimshotParameters {
+                        tune: p(50),
+                        tone: p(50),
+                        decay: p(50),
                     }),
                 ),
                 synth(
@@ -1936,7 +1958,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 17 {
+        if self.format_version != 18 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -1948,6 +1970,7 @@ impl Project {
             (TrackKind::Hat, "Hi-hat"),
             (TrackKind::Tom, "Tom"),
             (TrackKind::Cymbal, "Cymbal"),
+            (TrackKind::Rimshot, "Rimshot"),
             (TrackKind::Bass, "Bass"),
             (TrackKind::Chord, "Chord"),
             (TrackKind::Lead, "Lead"),
@@ -1987,6 +2010,7 @@ impl Project {
                     | (TrackKind::Hat, Instrument::Hat(_))
                     | (TrackKind::Tom, Instrument::Tom(_))
                     | (TrackKind::Cymbal, Instrument::Cymbal(_))
+                    | (TrackKind::Rimshot, Instrument::Rimshot(_))
                     | (TrackKind::Bass, Instrument::Bass(_))
                     | (TrackKind::Chord, Instrument::Chord(_))
                     | (TrackKind::Lead, Instrument::Lead(_))
@@ -2041,7 +2065,8 @@ impl Project {
                                     | TrackKind::Snare
                                     | TrackKind::Hat
                                     | TrackKind::Tom
-                                    | TrackKind::Cymbal,
+                                    | TrackKind::Cymbal
+                                    | TrackKind::Rimshot,
                                 StepEvent::Trigger { .. }
                             ) | (TrackKind::Bass, StepEvent::BassNote { .. })
                                 | (TrackKind::Bass, StepEvent::Tie { .. })
@@ -2325,8 +2350,12 @@ impl ParameterId {
                     | TrackKind::Hat
                     | TrackKind::Tom
                     | TrackKind::Cymbal
+                    | TrackKind::Rimshot
             ),
-            Self::Tone => matches!(kind, TrackKind::Snare | TrackKind::Tom | TrackKind::Cymbal),
+            Self::Tone => matches!(
+                kind,
+                TrackKind::Snare | TrackKind::Tom | TrackKind::Cymbal | TrackKind::Rimshot
+            ),
             Self::Snappy => matches!(kind, TrackKind::Snare),
             Self::Decay => matches!(
                 kind,
@@ -2334,6 +2363,7 @@ impl ParameterId {
                     | TrackKind::Hat
                     | TrackKind::Tom
                     | TrackKind::Cymbal
+                    | TrackKind::Rimshot
                     | TrackKind::Bass
                     | TrackKind::Chord
                     | TrackKind::Lead
@@ -2486,12 +2516,14 @@ impl Track {
                 Instrument::Hat(p) => ParameterValue::Percent(p.tune),
                 Instrument::Tom(p) => ParameterValue::Percent(p.tune),
                 Instrument::Cymbal(p) => ParameterValue::Percent(p.tune),
+                Instrument::Rimshot(p) => ParameterValue::Percent(p.tune),
                 _ => return None,
             },
             ParameterId::Tone => match self.instrument {
                 Instrument::Snare(p) => ParameterValue::Percent(p.tone),
                 Instrument::Tom(p) => ParameterValue::Percent(p.tone),
                 Instrument::Cymbal(p) => ParameterValue::Percent(p.tone),
+                Instrument::Rimshot(p) => ParameterValue::Percent(p.tone),
                 _ => return None,
             },
             ParameterId::Snappy => match self.instrument {
@@ -2503,6 +2535,7 @@ impl Track {
                 Instrument::Hat(p) => ParameterValue::Percent(p.decay),
                 Instrument::Tom(p) => ParameterValue::Percent(p.decay),
                 Instrument::Cymbal(p) => ParameterValue::Percent(p.decay),
+                Instrument::Rimshot(p) => ParameterValue::Percent(p.decay),
                 Instrument::Bass(p) => ParameterValue::Percent(p.decay),
                 Instrument::Chord(p) => ParameterValue::Percent(p.decay),
                 Instrument::Lead(p) => ParameterValue::Percent(p.decay),
@@ -2664,12 +2697,14 @@ impl Track {
                 Instrument::Hat(p) => p.tune = v,
                 Instrument::Tom(p) => p.tune = v,
                 Instrument::Cymbal(p) => p.tune = v,
+                Instrument::Rimshot(p) => p.tune = v,
                 _ => return false,
             },
             (ParameterId::Tone, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Snare(p) => p.tone = v,
                 Instrument::Tom(p) => p.tone = v,
                 Instrument::Cymbal(p) => p.tone = v,
+                Instrument::Rimshot(p) => p.tone = v,
                 _ => return false,
             },
             (ParameterId::Snappy, ParameterValue::Percent(v)) => match &mut self.instrument {
@@ -2681,6 +2716,7 @@ impl Track {
                 Instrument::Hat(p) => p.decay = v,
                 Instrument::Tom(p) => p.decay = v,
                 Instrument::Cymbal(p) => p.decay = v,
+                Instrument::Rimshot(p) => p.decay = v,
                 Instrument::Bass(p) => p.decay = v,
                 Instrument::Chord(p) => p.decay = v,
                 Instrument::Lead(p) => p.decay = v,
@@ -2796,7 +2832,33 @@ mod tests {
     fn default_valid() {
         let project = Project::new();
         assert_eq!(project.patterns.len(), MIN_PATTERN_COUNT);
+        assert_eq!(project.tracks.len(), TRACK_COUNT);
+        assert_eq!(project.tracks[RIMSHOT_TRACK_INDEX].kind, TrackKind::Rimshot);
+        assert_eq!(project.tracks[RIMSHOT_TRACK_INDEX].name, "Rimshot");
+        assert!(matches!(
+            project.tracks[RIMSHOT_TRACK_INDEX].instrument,
+            Instrument::Rimshot(RimshotParameters {
+                tune: Percent(50),
+                tone: Percent(50),
+                decay: Percent(50),
+            })
+        ));
         project.validate().unwrap();
+    }
+
+    #[test]
+    fn rimshot_supports_only_its_documented_instrument_parameters() {
+        for parameter in [ParameterId::Tune, ParameterId::Tone, ParameterId::Decay] {
+            assert!(parameter.is_valid_for(TrackKind::Rimshot));
+            assert!(parameter.supports_lfo(TrackKind::Rimshot));
+        }
+        for parameter in [
+            ParameterId::Snappy,
+            ParameterId::Attack,
+            ParameterId::Cutoff,
+        ] {
+            assert!(!parameter.is_valid_for(TrackKind::Rimshot));
+        }
     }
     #[test]
     fn project_equality_ignores_transient_step_caches() {
@@ -2995,7 +3057,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 17);
+        assert_eq!(project.format_version, 18);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);

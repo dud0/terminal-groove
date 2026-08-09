@@ -44,7 +44,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if version != Some(17) {
+    if version != Some(18) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
@@ -55,13 +55,6 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             path: path.into(),
             source,
         })?;
-    // Format 17 briefly accepted these assignments even though the audio
-    // renderer never applied them. Preserve project compatibility while
-    // removing only the two inert assignments before strict validation.
-    for track in &mut project.tracks {
-        track.lfos.noise = None;
-        track.lfos.keyboard_tracking = None;
-    }
     project
         .validate()
         .map_err(|source| ProjectIoError::Validation {
@@ -212,6 +205,37 @@ mod tests {
             })
         ));
     }
+
+    #[test]
+    fn missing_rimshot_track_or_pattern_sequence_is_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("missing-rimshot.groove.json");
+
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["tracks"].as_array_mut().unwrap().remove(5);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            load(&path),
+            Err(ProjectIoError::Validation {
+                source: crate::model::ValidationError::TrackCount,
+                ..
+            })
+        ));
+
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["patterns"][0]["tracks"]
+            .as_array_mut()
+            .unwrap()
+            .remove(5);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            load(&path),
+            Err(ProjectIoError::Validation {
+                source: crate::model::ValidationError::TrackCount,
+                ..
+            })
+        ));
+    }
     #[test]
     fn reject_unsupported_schema() {
         let d = tempfile::tempdir().unwrap();
@@ -232,13 +256,13 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 17);
+        assert_eq!(value["format_version"], 18);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
         assert_eq!(value["globals"]["reverb_pre_delay_ms"], 20);
         assert_eq!(value["globals"]["reverb_return"], 30);
-        assert_eq!(value["tracks"].as_array().unwrap().len(), 8);
+        assert_eq!(value["tracks"].as_array().unwrap().len(), 9);
         assert_eq!(value["tracks"][0]["name"], "Kick");
         assert_eq!(value["tracks"][4]["kind"], "cymbal");
         assert_eq!(value["tracks"][4]["name"], "Cymbal");
@@ -247,16 +271,21 @@ mod tests {
         assert_eq!(value["tracks"][3]["instrument"]["tone"], 50);
         assert_eq!(value["tracks"][3]["instrument"]["decay"], 40);
         assert_eq!(value["tracks"][4]["instrument"]["tone"], 55);
-        assert_eq!(value["tracks"][6]["kind"], "chord");
-        assert_eq!(value["tracks"][6]["name"], "Chord");
-        assert_eq!(value["tracks"][6]["reverb_send"], 20);
-        assert_eq!(value["tracks"][6]["instrument"]["chorus"], "i");
-        assert_eq!(value["tracks"][6]["instrument"]["sub_oscillator"], 0);
+        assert_eq!(value["tracks"][5]["kind"], "rimshot");
+        assert_eq!(value["tracks"][5]["name"], "Rimshot");
+        assert_eq!(value["tracks"][5]["instrument"]["tune"], 50);
+        assert_eq!(value["tracks"][5]["instrument"]["tone"], 50);
+        assert_eq!(value["tracks"][5]["instrument"]["decay"], 50);
+        assert_eq!(value["tracks"][7]["kind"], "chord");
+        assert_eq!(value["tracks"][7]["name"], "Chord");
+        assert_eq!(value["tracks"][7]["reverb_send"], 20);
+        assert_eq!(value["tracks"][7]["instrument"]["chorus"], "i");
+        assert_eq!(value["tracks"][7]["instrument"]["sub_oscillator"], 0);
         assert_eq!(value["tracks"][0]["effects"]["flanger"]["rate"], 25);
         assert_eq!(value["tracks"][0]["effects"]["flanger"]["delay"], 18);
-        assert_eq!(value["tracks"][7]["kind"], "lead");
-        assert_eq!(value["tracks"][7]["name"], "Lead");
-        assert_eq!(value["tracks"][7]["reverb_send"], 20);
+        assert_eq!(value["tracks"][8]["kind"], "lead");
+        assert_eq!(value["tracks"][8]["name"], "Lead");
+        assert_eq!(value["tracks"][8]["reverb_send"], 20);
         assert_eq!(value["tracks"][0]["lfos"], serde_json::json!({}));
         assert!(value["tracks"][0].get("input_degree").is_none());
         assert_eq!(
@@ -362,15 +391,15 @@ mod tests {
     #[test]
     fn legacy_projects_are_rejected_after_the_format_bump() {
         for json in [
-            r#"{"format_version":15}"#,
-            r#"{"format_version":15,"globals":{},"tracks":[]}"#,
+            r#"{"format_version":17}"#,
+            r#"{"format_version":17,"globals":{},"tracks":[]}"#,
         ] {
             let path = tempfile::NamedTempFile::new().unwrap();
             fs::write(path.path(), json).unwrap();
             assert!(matches!(
                 load(path.path()),
                 Err(ProjectIoError::Validation {
-                    source: crate::model::ValidationError::Version(15),
+                    source: crate::model::ValidationError::Version(17),
                     ..
                 })
             ));
@@ -410,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn loading_strips_only_legacy_noise_and_keyboard_tracking_lfos() {
+    fn current_schema_rejects_incompatible_noise_and_keyboard_tracking_lfos() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("legacy-inert-lfos.groove.json");
         let mut value = serde_json::to_value(Project::new()).unwrap();
@@ -421,43 +450,13 @@ mod tests {
         value["tracks"][crate::model::LEAD_TRACK_INDEX]["lfos"]["cutoff"] = assignment;
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
 
-        let loaded = load(&path).unwrap();
-        assert!(
-            loaded.tracks[crate::model::CHORD_TRACK_INDEX]
-                .lfos
-                .noise
-                .is_none()
-        );
-        assert!(
-            loaded.tracks[crate::model::LEAD_TRACK_INDEX]
-                .lfos
-                .keyboard_tracking
-                .is_none()
-        );
-        assert!(
-            loaded.tracks[crate::model::LEAD_TRACK_INDEX]
-                .lfos
-                .cutoff
-                .is_some()
-        );
-
-        save_atomic(&path, &loaded).unwrap();
-        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert!(
-            saved["tracks"][crate::model::CHORD_TRACK_INDEX]["lfos"]
-                .get("noise")
-                .is_none()
-        );
-        assert!(
-            saved["tracks"][crate::model::LEAD_TRACK_INDEX]["lfos"]
-                .get("keyboard_tracking")
-                .is_none()
-        );
-        assert!(
-            saved["tracks"][crate::model::LEAD_TRACK_INDEX]["lfos"]
-                .get("cutoff")
-                .is_some()
-        );
+        assert!(matches!(
+            load(&path),
+            Err(ProjectIoError::Validation {
+                source: crate::model::ValidationError::Lfo(_, _),
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -588,7 +587,7 @@ mod tests {
             .remove("flanger");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 17);
+        assert_eq!(loaded.format_version, 18);
         assert_eq!(
             loaded.tracks[0].effects.flanger,
             crate::model::FlangerParameters::default()
