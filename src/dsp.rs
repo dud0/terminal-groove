@@ -1556,7 +1556,7 @@ struct CalibratedFourPole {
 struct FourPoleCalibration {
     cutoff_scale: f32,
     feedback_scale: f32,
-    resonance_loss: f32,
+    passband_compensation: f32,
 }
 
 impl CalibratedFourPole {
@@ -1602,7 +1602,10 @@ impl CalibratedFourPole {
         // still allowed to ring strongly, but extreme resonance remains
         // finite and does not turn the filter into an uncontrolled oscillator.
         let feedback = (resonance * calibration.feedback_scale).min(4.15);
-        let passband_gain = 1.0 / (1.0 + resonance * calibration.resonance_loss);
+        // Counter the pass-band loss inherent in the resonant feedback path.
+        // Each instrument has its own bounded calibration so increasing
+        // resonance emphasizes the cutoff region without self-oscillation.
+        let passband_gain = 1.0 + resonance * calibration.passband_compensation;
         if initialize {
             self.coefficient = coefficient;
             self.feedback = feedback;
@@ -1664,7 +1667,7 @@ impl JunoFilter {
             FourPoleCalibration {
                 cutoff_scale: 0.92,
                 feedback_scale: 3.45,
-                resonance_loss: 0.48,
+                passband_compensation: 1.25,
             },
         );
     }
@@ -1707,7 +1710,7 @@ impl Sh101Filter {
             FourPoleCalibration {
                 cutoff_scale: 1.06,
                 feedback_scale: 4.05,
-                resonance_loss: 0.22,
+                passband_compensation: 1.50,
             },
         );
     }
@@ -2649,6 +2652,114 @@ mod tests {
         }
         assert!((juno_energy - sh101_energy).abs() > 0.001);
         assert!(juno_energy.is_finite() && sh101_energy.is_finite());
+    }
+
+    #[test]
+    fn calibrated_four_pole_resonance_emphasizes_the_cutoff_without_losing_the_low_end() {
+        enum Filter {
+            Juno(JunoFilter),
+            Sh101(Sh101Filter),
+        }
+
+        impl Filter {
+            fn set_parameters(&mut self, cutoff: f32, resonance: f32, sample_rate: f32) {
+                match self {
+                    Self::Juno(filter) => {
+                        filter.set_parameters_smoothed(cutoff, resonance, sample_rate, 0)
+                    }
+                    Self::Sh101(filter) => {
+                        filter.set_parameters_smoothed(cutoff, resonance, sample_rate, 0)
+                    }
+                }
+            }
+
+            fn process(&mut self, input: f32) -> f32 {
+                match self {
+                    Self::Juno(filter) => filter.process(input),
+                    Self::Sh101(filter) => filter.process(input),
+                }
+            }
+        }
+
+        fn rms_at(kind: &str, resonance: f32, frequency: f32) -> f32 {
+            let sample_rate = 96_000.0;
+            let cutoff = 1_000.0;
+            let mut filter = match kind {
+                "Juno" => Filter::Juno(JunoFilter::new()),
+                "SH-101" => Filter::Sh101(Sh101Filter::new()),
+                _ => unreachable!(),
+            };
+            filter.set_parameters(cutoff, resonance, sample_rate);
+            let mut energy = 0.0;
+            let mut count = 0;
+            for sample in 0..96_000 {
+                let input = (std::f32::consts::TAU * frequency * sample as f32 / sample_rate).sin();
+                let output = filter.process(input);
+                assert!(output.is_finite(), "{kind} produced a non-finite output");
+                if sample >= 48_000 {
+                    energy += output * output;
+                    count += 1;
+                }
+            }
+            (energy / count as f32).sqrt()
+        }
+
+        for (kind, cutoff_region) in [("Juno", 920.0), ("SH-101", 1_060.0)] {
+            let low_at_zero = rms_at(kind, 0.0, 100.0);
+            let low_at_maximum = rms_at(kind, 1.0, 100.0);
+            let cutoff_at_zero = rms_at(kind, 0.0, cutoff_region);
+            let cutoff_at_maximum = rms_at(kind, 1.0, cutoff_region);
+            let high_at_maximum = rms_at(kind, 1.0, cutoff_region * 4.0);
+            let cutoff_boost_db = 20.0 * (cutoff_at_maximum / cutoff_at_zero).log10();
+            let low_change_db = 20.0 * (low_at_maximum / low_at_zero).log10();
+
+            assert!(
+                cutoff_boost_db >= 3.0,
+                "{kind} cutoff-region boost was {cutoff_boost_db:.1} dB"
+            );
+            assert!(
+                low_change_db >= -6.0,
+                "{kind} 100 Hz response changed by {low_change_db:.1} dB"
+            );
+            assert!(
+                cutoff_boost_db < 12.0,
+                "{kind} cutoff-region boost was unbounded at {cutoff_boost_db:.1} dB"
+            );
+            assert!(
+                high_at_maximum < low_at_maximum * 0.5,
+                "{kind} no longer has a four-pole high-frequency rolloff"
+            );
+        }
+    }
+
+    #[test]
+    fn calibrated_four_pole_maximum_resonance_decays_after_an_impulse() {
+        fn assert_impulse_decays(mut process: impl FnMut(f32) -> f32) {
+            let mut early_peak = 0.0_f32;
+            let mut tail_peak = 0.0_f32;
+            for sample in 0..48_000 {
+                let output = process(if sample == 0 { 1.0 } else { 0.0 });
+                assert!(output.is_finite());
+                if sample < 4_000 {
+                    early_peak = early_peak.max(output.abs());
+                } else if sample >= 44_000 {
+                    tail_peak = tail_peak.max(output.abs());
+                }
+            }
+            assert!(early_peak > 0.0);
+            assert!(
+                tail_peak < early_peak * 0.001,
+                "impulse tail did not decay: {early_peak:.6} -> {tail_peak:.6}"
+            );
+        }
+
+        let mut juno = JunoFilter::new();
+        juno.set_parameters_smoothed(1_000.0, 1.0, 96_000.0, 0);
+        assert_impulse_decays(|input| juno.process(input));
+
+        let mut filter = Sh101Filter::new();
+        filter.set_parameters_smoothed(1_000.0, 1.0, 96_000.0, 0);
+        assert_impulse_decays(|input| filter.process(input));
     }
     #[test]
     fn filter_finite() {

@@ -1728,6 +1728,87 @@ mod tests {
     }
 
     #[test]
+    fn rendered_chord_and_lead_resonance_emphasize_the_cutoff_region() {
+        fn cutoff_region_energy(track: usize, resonance: u8) -> f32 {
+            let mut project = Project::new();
+            for current in &mut project.tracks {
+                current.muted = true;
+            }
+            project.tracks[track].muted = false;
+            match &mut project.tracks[track].instrument {
+                Instrument::Chord(parameters) => {
+                    parameters.cutoff = Percent::new(27).unwrap();
+                    parameters.resonance = Percent::new(resonance).unwrap();
+                    parameters.filter_envelope = Percent::ZERO;
+                }
+                Instrument::Lead(parameters) => {
+                    parameters.cutoff = Percent::new(27).unwrap();
+                    parameters.resonance = Percent::new(resonance).unwrap();
+                    parameters.filter_envelope = Percent::ZERO;
+                    parameters.keyboard_tracking = Percent::ZERO;
+                }
+                _ => panic!("expected a pitched polyphonic instrument"),
+            }
+            project.patterns[0].tracks[track].steps[0] = Some(StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                chord_shape: None,
+                arpeggio: ArpeggioConfig::default(),
+                condition: Default::default(),
+                retrigger_count: 1,
+                locks: Default::default(),
+            });
+
+            let sample_rate = 48_000.0;
+            let status = Arc::new(AudioStatus::default());
+            let mut renderer = Renderer::new(
+                AudioProject::from_project(&project),
+                sample_rate as u32,
+                status,
+            );
+            renderer.boundary(0);
+            let mut sine = 0.0;
+            let mut cosine = 0.0;
+            let mut count = 0;
+            for sample in 0..12_000 {
+                let output = if track == CHORD_TRACK_INDEX {
+                    let index = renderer.chord.group * CHORD_GROUP_SIZE;
+                    Renderer::render_synth(
+                        &mut renderer.chord.voices[index],
+                        renderer.sr,
+                        &[0.0; ParameterId::ALL.len()],
+                    )
+                    .0
+                } else {
+                    Renderer::render_synth(
+                        &mut renderer.synth[track - SYNTH_TRACK_START],
+                        renderer.sr,
+                        &[0.0; ParameterId::ALL.len()],
+                    )
+                    .0
+                };
+                if sample >= 4_000 {
+                    let phase = std::f32::consts::TAU * 130.8128 * sample as f32 / sample_rate;
+                    sine += output * phase.sin();
+                    cosine += output * phase.cos();
+                    count += 1;
+                }
+            }
+            2.0 * (sine * sine + cosine * cosine).sqrt() / count as f32
+        }
+
+        for (name, track) in [("Chord", CHORD_TRACK_INDEX), ("Lead", LEAD_TRACK_INDEX)] {
+            let without_resonance = cutoff_region_energy(track, 0);
+            let with_resonance = cutoff_region_energy(track, 100);
+            assert!(
+                with_resonance > without_resonance,
+                "{name} resonance did not add cutoff-region energy: {without_resonance:.4} -> {with_resonance:.4}"
+            );
+        }
+    }
+
+    #[test]
     fn active_bass_keeps_latched_accent_through_ties_and_project_edits() {
         let mut project = Project::new();
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {

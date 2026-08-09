@@ -419,7 +419,7 @@ impl Renderer {
                 SynthVoiceKind::Bass => unreachable!(),
             };
         }
-        filtered *= 0.5 / (1.0 + resonance_percent * 0.0025);
+        filtered *= 0.5;
         let output_gain = if kind == SynthVoiceKind::Juno {
             1.15 * std::f32::consts::FRAC_1_SQRT_2
         } else {
