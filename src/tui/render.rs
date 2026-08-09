@@ -548,14 +548,6 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 19] = [
     CHORD_PARAMETERS[5],
     CHORD_PARAMETERS[6],
     CHORD_PARAMETERS[7],
-    CHORD_PARAMETERS[10],
-    CHORD_PARAMETERS[11],
-    CHORD_PARAMETERS[12],
-    CHORD_PARAMETERS[13],
-    CHORD_PARAMETERS[14],
-    CHORD_PARAMETERS[15],
-    CHORD_PARAMETERS[16],
-    CHORD_PARAMETERS[17],
     ParameterDescriptor {
         id: ParameterId::LeadSubMode,
         label: "Sub mode",
@@ -563,17 +555,25 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 19] = [
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
-        id: ParameterId::KeyboardTracking,
-        label: "KYBD",
-        shortcut: "k",
-        group: ParameterGroup::Filter,
-    },
-    ParameterDescriptor {
         id: ParameterId::PortamentoTime,
         label: "Porta",
         shortcut: "g",
         group: ParameterGroup::Instrument,
     },
+    CHORD_PARAMETERS[10],
+    CHORD_PARAMETERS[11],
+    CHORD_PARAMETERS[12],
+    CHORD_PARAMETERS[13],
+    ParameterDescriptor {
+        id: ParameterId::KeyboardTracking,
+        label: "KYBD",
+        shortcut: "k",
+        group: ParameterGroup::Filter,
+    },
+    CHORD_PARAMETERS[14],
+    CHORD_PARAMETERS[15],
+    CHORD_PARAMETERS[16],
+    CHORD_PARAMETERS[17],
 ];
 
 pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescriptor] {

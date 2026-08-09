@@ -246,22 +246,45 @@ mod tests {
                 ParameterId::PulseWidth,
                 ParameterId::SubOscillator,
                 ParameterId::Noise,
+                ParameterId::LeadSubMode,
+                ParameterId::PortamentoTime,
                 ParameterId::Pitch,
                 ParameterId::Cutoff,
                 ParameterId::Resonance,
                 ParameterId::FilterEnvelope,
+                ParameterId::KeyboardTracking,
                 ParameterId::Attack,
                 ParameterId::Decay,
                 ParameterId::Sustain,
                 ParameterId::Release,
-                ParameterId::LeadSubMode,
-                ParameterId::KeyboardTracking,
-                ParameterId::PortamentoTime,
             ]
         );
-        assert_eq!(lead[8].group, ParameterGroup::Instrument);
-        assert_eq!(lead[9].group, ParameterGroup::Filter);
-        assert_eq!(lead[12].group, ParameterGroup::Envelope);
+        assert_eq!(
+            lead.iter()
+                .map(|descriptor| descriptor.group)
+                .collect::<Vec<_>>(),
+            vec![
+                ParameterGroup::Mixer,
+                ParameterGroup::Mixer,
+                ParameterGroup::Mixer,
+                ParameterGroup::Mixer,
+                ParameterGroup::Instrument,
+                ParameterGroup::Instrument,
+                ParameterGroup::Instrument,
+                ParameterGroup::Instrument,
+                ParameterGroup::Instrument,
+                ParameterGroup::Instrument,
+                ParameterGroup::Instrument,
+                ParameterGroup::Filter,
+                ParameterGroup::Filter,
+                ParameterGroup::Filter,
+                ParameterGroup::Filter,
+                ParameterGroup::Envelope,
+                ParameterGroup::Envelope,
+                ParameterGroup::Envelope,
+                ParameterGroup::Envelope,
+            ]
+        );
         assert_ne!(
             ParameterGroup::Mixer.color(),
             ParameterGroup::Filter.color()
