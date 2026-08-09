@@ -1780,7 +1780,10 @@ impl Tb303Filter {
         // The conservative feedback ceiling, paired with the tanh stages,
         // keeps self-oscillation character finite at extreme controls.
         let feedback = resonance * 2.75;
-        let passband_gain = 1.0 / (1.0 + resonance * 0.32);
+        // The three-pole loop loses low-frequency gain as feedback rises.
+        // Compensate that loss here so resonance emphasizes the cutoff region
+        // instead of making the whole Bass voice thinner.
+        let passband_gain = 1.0 + resonance;
         let initialize = !self.cached_sr.is_finite() || samples == 0;
         self.cached_cutoff = cutoff;
         self.cached_resonance = resonance;
@@ -3516,6 +3519,39 @@ mod tests {
         assert!(
             attenuation_db < -15.0,
             "expected 18 dB/octave-like attenuation, got {attenuation_db:.1} dB"
+        );
+    }
+
+    #[test]
+    fn tb303_filter_resonance_preserves_bass_and_emphasizes_cutoff() {
+        fn rms_at(resonance: f32, frequency: f32) -> f32 {
+            let sample_rate = 48_000.0;
+            let mut filter = Tb303Filter::new();
+            filter.set_parameters_smoothed(250.0, resonance, sample_rate, 0);
+            let mut energy = 0.0;
+            let mut count = 0;
+            for sample in 0..48_000 {
+                let input = (std::f32::consts::TAU * frequency * sample as f32 / sample_rate).sin();
+                let output = filter.process(input);
+                if sample > 24_000 {
+                    energy += output * output;
+                    count += 1;
+                }
+            }
+            (energy / count as f32).sqrt()
+        }
+
+        let low_without_resonance = rms_at(0.0, 80.0);
+        let low_with_resonance = rms_at(1.0, 80.0);
+        let cutoff_without_resonance = rms_at(0.0, 250.0);
+        let cutoff_with_resonance = rms_at(1.0, 250.0);
+        assert!(
+            low_with_resonance >= low_without_resonance * 0.75,
+            "resonance removed too much bass: {low_without_resonance:.4} -> {low_with_resonance:.4}"
+        );
+        assert!(
+            cutoff_with_resonance >= cutoff_without_resonance * 1.4,
+            "resonance did not emphasize the cutoff: {cutoff_without_resonance:.4} -> {cutoff_with_resonance:.4}"
         );
     }
 }

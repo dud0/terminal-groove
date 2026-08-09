@@ -12,7 +12,7 @@ use rtrb::{Producer, RingBuffer};
 use std::f32::consts::TAU;
 use std::sync::{Arc, atomic::Ordering};
 
-const BASS_OUTPUT_GAIN: f32 = 1.8;
+const BASS_OUTPUT_GAIN: f32 = 0.8;
 
 /// The SH-101 filter is calibrated for 50% keyboard tracking around C3.  A
 /// reference-centered mapping keeps the existing cutoff control useful while
@@ -271,7 +271,7 @@ impl Renderer {
             };
             filtered += v.bass_filter.process((osc * 1.35).tanh());
         }
-        filtered *= 0.5 / (1.0 + resonance_percent * 0.0035);
+        filtered *= 0.5;
         (
             filtered * env * accent_gain * BASS_OUTPUT_GAIN,
             delay_send,

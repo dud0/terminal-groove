@@ -1679,6 +1679,55 @@ mod tests {
     }
 
     #[test]
+    fn rendered_bass_resonance_does_not_only_remove_low_end() {
+        fn bass_rms(resonance: u8) -> f32 {
+            let mut project = Project::new();
+            if let Instrument::Bass(parameters) = &mut project.tracks[SYNTH_TRACK_START].instrument
+            {
+                parameters.cutoff = Percent::new(25).unwrap();
+                parameters.resonance = Percent::new(resonance).unwrap();
+                parameters.filter_envelope = Percent::ZERO;
+            } else {
+                panic!("expected the first synth track to be Bass");
+            }
+            project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                slide: false,
+                condition: Default::default(),
+                retrigger_count: 1,
+                locks: Default::default(),
+            });
+            let status = Arc::new(AudioStatus::default());
+            let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
+            renderer.boundary(0);
+            let mut energy = 0.0;
+            let mut count = 0;
+            for sample in 0..4_096 {
+                let output = Renderer::render_synth(
+                    &mut renderer.synth[0],
+                    renderer.sr,
+                    &[0.0; ParameterId::ALL.len()],
+                )
+                .0;
+                if sample >= 1_024 {
+                    energy += output * output;
+                    count += 1;
+                }
+            }
+            (energy / count as f32).sqrt()
+        }
+
+        let without_resonance = bass_rms(0);
+        let with_resonance = bass_rms(100);
+        assert!(
+            with_resonance > without_resonance,
+            "Bass resonance reduced the rendered voice: {without_resonance:.4} -> {with_resonance:.4}"
+        );
+    }
+
+    #[test]
     fn active_bass_keeps_latched_accent_through_ties_and_project_edits() {
         let mut project = Project::new();
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
