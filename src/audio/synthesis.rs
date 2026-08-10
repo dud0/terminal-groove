@@ -29,17 +29,29 @@ impl Renderer {
         match track.instrument {
             Instrument::Kick(p) => Some(DrumControls {
                 kind: DrumVoiceKind::Kick,
-                tune: value(p.tune, locks.tune, ParameterId::Tune),
+                tune: value(p.tune, locks.percent(ParameterId::Tune), ParameterId::Tune),
                 tone: 0.5,
                 snappy: 0.0,
-                decay: value(p.decay, locks.decay, ParameterId::Decay),
-                attack: value(p.attack, locks.attack, ParameterId::Attack),
+                decay: value(
+                    p.decay,
+                    locks.percent(ParameterId::Decay),
+                    ParameterId::Decay,
+                ),
+                attack: value(
+                    p.attack,
+                    locks.percent(ParameterId::Attack),
+                    ParameterId::Attack,
+                ),
             }),
             Instrument::Snare(p) => Some(DrumControls {
                 kind: DrumVoiceKind::Snare,
-                tune: value(p.tune, locks.tune, ParameterId::Tune),
-                tone: value(p.tone, locks.tone, ParameterId::Tone),
-                snappy: value(p.snappy, locks.snappy, ParameterId::Snappy),
+                tune: value(p.tune, locks.percent(ParameterId::Tune), ParameterId::Tune),
+                tone: value(p.tone, locks.percent(ParameterId::Tone), ParameterId::Tone),
+                snappy: value(
+                    p.snappy,
+                    locks.percent(ParameterId::Snappy),
+                    ParameterId::Snappy,
+                ),
                 decay: 0.0,
                 attack: 0.0,
             }),
@@ -51,10 +63,10 @@ impl Renderer {
                 };
                 Some(DrumControls {
                     kind: DrumVoiceKind::Hat,
-                    tune: value(tune, locks.tune, ParameterId::Tune),
+                    tune: value(tune, locks.percent(ParameterId::Tune), ParameterId::Tune),
                     tone: 0.5,
                     snappy: 0.0,
-                    decay: value(decay, locks.decay, ParameterId::Decay),
+                    decay: value(decay, locks.percent(ParameterId::Decay), ParameterId::Decay),
                     attack: 0.0,
                 })
             }
@@ -66,27 +78,35 @@ impl Renderer {
                 };
                 Some(DrumControls {
                     kind: DrumVoiceKind::Tom,
-                    tune: value(tune, locks.tune, ParameterId::Tune),
-                    tone: value(tone, locks.tone, ParameterId::Tone),
+                    tune: value(tune, locks.percent(ParameterId::Tune), ParameterId::Tune),
+                    tone: value(tone, locks.percent(ParameterId::Tone), ParameterId::Tone),
                     snappy: 0.0,
-                    decay: value(decay, locks.decay, ParameterId::Decay),
+                    decay: value(decay, locks.percent(ParameterId::Decay), ParameterId::Decay),
                     attack: 0.0,
                 })
             }
             Instrument::Cymbal(p) => Some(DrumControls {
                 kind: DrumVoiceKind::Cymbal,
-                tune: value(p.tune, locks.tune, ParameterId::Tune),
-                tone: value(p.tone, locks.tone, ParameterId::Tone),
+                tune: value(p.tune, locks.percent(ParameterId::Tune), ParameterId::Tune),
+                tone: value(p.tone, locks.percent(ParameterId::Tone), ParameterId::Tone),
                 snappy: 0.0,
-                decay: value(p.decay, locks.decay, ParameterId::Decay),
+                decay: value(
+                    p.decay,
+                    locks.percent(ParameterId::Decay),
+                    ParameterId::Decay,
+                ),
                 attack: 0.0,
             }),
             Instrument::Rimshot(p) => Some(DrumControls {
                 kind: DrumVoiceKind::Rimshot,
-                tune: value(p.tune, locks.tune, ParameterId::Tune),
-                tone: value(p.tone, locks.tone, ParameterId::Tone),
+                tune: value(p.tune, locks.percent(ParameterId::Tune), ParameterId::Tune),
+                tone: value(p.tone, locks.percent(ParameterId::Tone), ParameterId::Tone),
                 snappy: 0.0,
-                decay: value(p.decay, locks.decay, ParameterId::Decay),
+                decay: value(
+                    p.decay,
+                    locks.percent(ParameterId::Decay),
+                    ParameterId::Decay,
+                ),
                 attack: 0.0,
             }),
             _ => None,
@@ -121,16 +141,28 @@ impl Renderer {
         };
         Self::start_drum_voice(&mut self.preview_drums[track], controls, accent, self.sr);
         let voice = &mut self.preview_drums[track];
-        voice
-            .level
-            .set(locks.level.unwrap_or(t.level).get() as f32, 0);
-        voice
-            .delay_send
-            .set(locks.delay_send.unwrap_or(t.delay_send).normalized(), 0);
-        voice
-            .reverb_send
-            .set(locks.reverb_send.unwrap_or(t.reverb_send).normalized(), 0);
-        voice.pan.set(locks.pan.unwrap_or(t.pan).get() as f32, 0);
+        voice.level.set(
+            locks.percent(ParameterId::Level).unwrap_or(t.level).get() as f32,
+            0,
+        );
+        voice.delay_send.set(
+            locks
+                .percent(ParameterId::DelaySend)
+                .unwrap_or(t.delay_send)
+                .normalized(),
+            0,
+        );
+        voice.reverb_send.set(
+            locks
+                .percent(ParameterId::ReverbSend)
+                .unwrap_or(t.reverb_send)
+                .normalized(),
+            0,
+        );
+        voice.pan.set(
+            locks.percent(ParameterId::Pan).unwrap_or(t.pan).get() as f32,
+            0,
+        );
         voice.locks = locks;
     }
     pub(super) fn start_drum_voice(
@@ -248,20 +280,31 @@ impl Renderer {
         locks: ParameterLocks,
         smoothing: u32,
     ) {
-        voice
-            .level
-            .set(locks.level.unwrap_or(track.level).get() as f32, smoothing);
+        voice.level.set(
+            locks
+                .percent(ParameterId::Level)
+                .unwrap_or(track.level)
+                .get() as f32,
+            smoothing,
+        );
         voice.delay_send.set(
-            locks.delay_send.unwrap_or(track.delay_send).normalized(),
+            locks
+                .percent(ParameterId::DelaySend)
+                .unwrap_or(track.delay_send)
+                .normalized(),
             smoothing,
         );
         voice.reverb_send.set(
-            locks.reverb_send.unwrap_or(track.reverb_send).normalized(),
+            locks
+                .percent(ParameterId::ReverbSend)
+                .unwrap_or(track.reverb_send)
+                .normalized(),
             smoothing,
         );
-        voice
-            .pan
-            .set(locks.pan.unwrap_or(track.pan).get() as f32, smoothing);
+        voice.pan.set(
+            locks.percent(ParameterId::Pan).unwrap_or(track.pan).get() as f32,
+            smoothing,
+        );
         voice.locks = locks;
     }
     pub(super) fn apply_synth_params_core(
@@ -278,10 +321,11 @@ impl Renderer {
                     voice.kind = SynthVoiceKind::Bass;
                     voice.sub_mode = crate::dsp::SubOscillatorMode::OneOctave;
                     voice.noise_level.set(0.0, smoothing);
-                    voice.wave = locks.waveform.unwrap_or(p.waveform);
-                    voice
-                        .bass_decay_percent
-                        .set(locks.decay.unwrap_or(p.decay).get() as f32, smoothing);
+                    voice.wave = locks.waveform().unwrap_or(p.waveform);
+                    voice.bass_decay_percent.set(
+                        locks.percent(ParameterId::Decay).unwrap_or(p.decay).get() as f32,
+                        smoothing,
+                    );
                     (
                         p.cutoff,
                         p.resonance,
@@ -296,20 +340,33 @@ impl Renderer {
                     voice.kind = SynthVoiceKind::Juno;
                     voice.sub_mode = crate::dsp::SubOscillatorMode::OneOctave;
                     voice.noise_level.set(
-                        locks.noise.unwrap_or(p.noise).normalized() * 0.35,
+                        locks
+                            .percent(ParameterId::Noise)
+                            .unwrap_or(p.noise)
+                            .normalized()
+                            * 0.35,
                         smoothing,
                     );
                     voice.env.set_profile(EnvelopeProfile::Juno);
                     voice.oscillator_mix.set(
-                        locks.oscillator_mix.unwrap_or(p.oscillator_mix).get() as f32,
+                        locks
+                            .percent(ParameterId::OscillatorMix)
+                            .unwrap_or(p.oscillator_mix)
+                            .get() as f32,
                         smoothing,
                     );
                     voice.pulse_width.set(
-                        locks.pulse_width.unwrap_or(p.pulse_width).get() as f32,
+                        locks
+                            .percent(ParameterId::PulseWidth)
+                            .unwrap_or(p.pulse_width)
+                            .get() as f32,
                         smoothing,
                     );
                     voice.sub_oscillator.set(
-                        locks.sub_oscillator.unwrap_or(p.sub_oscillator).get() as f32,
+                        locks
+                            .percent(ParameterId::SubOscillator)
+                            .unwrap_or(p.sub_oscillator)
+                            .get() as f32,
                         smoothing,
                     );
                     (
@@ -324,7 +381,7 @@ impl Renderer {
                 }
                 Instrument::Lead(p) => {
                     voice.kind = SynthVoiceKind::Sh101;
-                    voice.sub_mode = match locks.sub_mode.unwrap_or(p.sub_mode) {
+                    voice.sub_mode = match locks.lead_sub_mode().unwrap_or(p.sub_mode) {
                         crate::model::LeadSubMode::OneOctaveSquare => {
                             crate::dsp::SubOscillatorMode::OneOctave
                         }
@@ -335,22 +392,37 @@ impl Renderer {
                             crate::dsp::SubOscillatorMode::TwoOctavesNarrowPulse
                         }
                     };
-                    voice
-                        .noise_level
-                        .set(locks.noise.unwrap_or(p.noise).normalized(), smoothing);
-                    voice.keyboard_tracking =
-                        locks.keyboard_tracking.unwrap_or(p.keyboard_tracking).get() as f32;
+                    voice.noise_level.set(
+                        locks
+                            .percent(ParameterId::Noise)
+                            .unwrap_or(p.noise)
+                            .normalized(),
+                        smoothing,
+                    );
+                    voice.keyboard_tracking = locks
+                        .percent(ParameterId::KeyboardTracking)
+                        .unwrap_or(p.keyboard_tracking)
+                        .get() as f32;
                     voice.env.set_profile(EnvelopeProfile::Sh101);
                     voice.oscillator_mix.set(
-                        locks.oscillator_mix.unwrap_or(p.oscillator_mix).get() as f32,
+                        locks
+                            .percent(ParameterId::OscillatorMix)
+                            .unwrap_or(p.oscillator_mix)
+                            .get() as f32,
                         smoothing,
                     );
                     voice.pulse_width.set(
-                        locks.pulse_width.unwrap_or(p.pulse_width).get() as f32,
+                        locks
+                            .percent(ParameterId::PulseWidth)
+                            .unwrap_or(p.pulse_width)
+                            .get() as f32,
                         smoothing,
                     );
                     voice.sub_oscillator.set(
-                        locks.sub_oscillator.unwrap_or(p.sub_oscillator).get() as f32,
+                        locks
+                            .percent(ParameterId::SubOscillator)
+                            .unwrap_or(p.sub_oscillator)
+                            .get() as f32,
                         smoothing,
                     );
                     (
@@ -365,40 +437,56 @@ impl Renderer {
                 }
                 _ => return,
             };
-        voice
-            .cutoff_percent
-            .set(locks.cutoff.unwrap_or(cutoff).get() as f32, smoothing);
-        voice
-            .resonance_percent
-            .set(locks.resonance.unwrap_or(resonance).get() as f32, smoothing);
+        voice.cutoff_percent.set(
+            locks.percent(ParameterId::Cutoff).unwrap_or(cutoff).get() as f32,
+            smoothing,
+        );
+        voice.resonance_percent.set(
+            locks
+                .percent(ParameterId::Resonance)
+                .unwrap_or(resonance)
+                .get() as f32,
+            smoothing,
+        );
         voice.filter_env_percent.set(
-            locks.filter_envelope.unwrap_or(filter_envelope).get() as f32,
+            locks
+                .percent(ParameterId::FilterEnvelope)
+                .unwrap_or(filter_envelope)
+                .get() as f32,
             smoothing,
         );
         if voice.kind != SynthVoiceKind::Bass {
             voice.env.configure_percent(
-                locks.attack.unwrap_or(attack).get(),
-                locks.decay.unwrap_or(decay).get(),
-                locks.sustain.unwrap_or(sustain).get(),
-                locks.release.unwrap_or(release).get(),
+                locks.percent(ParameterId::Attack).unwrap_or(attack).get(),
+                locks.percent(ParameterId::Decay).unwrap_or(decay).get(),
+                locks.percent(ParameterId::Sustain).unwrap_or(sustain).get(),
+                locks.percent(ParameterId::Release).unwrap_or(release).get(),
                 smoothing,
             );
         }
-        voice
-            .level
-            .set(locks.level.unwrap_or(t.level).get() as f32, smoothing);
+        voice.level.set(
+            locks.percent(ParameterId::Level).unwrap_or(t.level).get() as f32,
+            smoothing,
+        );
         voice.delay_send.set(
-            locks.delay_send.unwrap_or(t.delay_send).normalized(),
+            locks
+                .percent(ParameterId::DelaySend)
+                .unwrap_or(t.delay_send)
+                .normalized(),
             smoothing,
         );
         voice.reverb_send.set(
-            locks.reverb_send.unwrap_or(t.reverb_send).normalized(),
+            locks
+                .percent(ParameterId::ReverbSend)
+                .unwrap_or(t.reverb_send)
+                .normalized(),
             smoothing,
         );
         if !(voice.kind == SynthVoiceKind::Juno && voice.active) {
-            voice
-                .pan
-                .set(locks.pan.unwrap_or(t.pan).get() as f32, smoothing);
+            voice.pan.set(
+                locks.percent(ParameterId::Pan).unwrap_or(t.pan).get() as f32,
+                smoothing,
+            );
         }
         voice.locks = locks;
     }
@@ -411,7 +499,7 @@ impl Renderer {
         let Instrument::Chord(parameters) = track.instrument else {
             return;
         };
-        let mode = locks.chorus.unwrap_or(parameters.chorus);
+        let mode = locks.chorus().unwrap_or(parameters.chorus);
         chorus.configure(match mode {
             ChorusMode::Off => 0,
             ChorusMode::I => 1,
@@ -449,7 +537,7 @@ impl Renderer {
         let lead_time = match project.tracks[track].instrument {
             Instrument::Lead(p) => voice
                 .locks
-                .portamento_time
+                .percent(ParameterId::PortamentoTime)
                 .unwrap_or(p.portamento_time)
                 .get(),
             _ => 0,
@@ -617,7 +705,7 @@ impl Renderer {
         pool.group_voice_counts[pool.group] = voice_count;
         let spread =
             locks
-                .spread
+                .spread()
                 .unwrap_or_else(|| match project.tracks[CHORD_TRACK_INDEX].instrument {
                     Instrument::Chord(p) => p.spread,
                     _ => crate::model::ChordSpread::Off,
@@ -630,7 +718,7 @@ impl Renderer {
         };
         for (index, offset) in offsets.into_iter().take(voice_count).enumerate() {
             let target = locks
-                .pan
+                .percent(ParameterId::Pan)
                 .unwrap_or(project.tracks[CHORD_TRACK_INDEX].pan)
                 .get() as f32
                 + offset * spread.percent().normalized();
@@ -668,7 +756,7 @@ impl Renderer {
             pool.arpeggio_locks,
             voice,
         );
-        let spread = pool.arpeggio_locks.spread.unwrap_or_else(|| {
+        let spread = pool.arpeggio_locks.spread().unwrap_or_else(|| {
             match project.tracks[CHORD_TRACK_INDEX].instrument {
                 Instrument::Chord(p) => p.spread,
                 _ => crate::model::ChordSpread::Off,
@@ -683,7 +771,7 @@ impl Renderer {
         voice.pan.set(
             (pool
                 .arpeggio_locks
-                .pan
+                .percent(ParameterId::Pan)
                 .unwrap_or(project.tracks[CHORD_TRACK_INDEX].pan)
                 .get() as f32
                 + offsets[index.min(3)] * spread.percent().normalized())

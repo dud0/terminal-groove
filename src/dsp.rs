@@ -1,6 +1,8 @@
 use std::f32::consts::PI;
 
-use crate::model::{LfoConfig, LfoWaveform, ParameterLocks, SidechainParameters, TrackEffects};
+use crate::model::{
+    LfoConfig, LfoWaveform, ParameterId, ParameterLocks, SidechainParameters, TrackEffects,
+};
 
 pub fn exp_map(percent: u8, min: f32, max: f32) -> f32 {
     if percent == 0 {
@@ -457,62 +459,86 @@ impl TrackEffectChain {
             || self.flanger_mix.current > 0.0;
         self.distortion_drive.set(
             locks
-                .distortion_drive
+                .percent(ParameterId::DistortionDrive)
                 .unwrap_or(effects.distortion.drive)
                 .get() as f32,
             samples,
         );
         self.distortion_tone.set(
             locks
-                .distortion_tone
+                .percent(ParameterId::DistortionTone)
                 .unwrap_or(effects.distortion.tone)
                 .get() as f32,
             samples,
         );
         self.distortion_mix.set(
-            locks.distortion_mix.unwrap_or(effects.distortion.mix).get() as f32,
+            locks
+                .percent(ParameterId::DistortionMix)
+                .unwrap_or(effects.distortion.mix)
+                .get() as f32,
             samples,
         );
         self.phaser_rate.set(
-            locks.phaser_rate.unwrap_or(effects.phaser.rate).get() as f32,
+            locks
+                .percent(ParameterId::PhaserRate)
+                .unwrap_or(effects.phaser.rate)
+                .get() as f32,
             samples,
         );
         self.phaser_depth.set(
-            locks.phaser_depth.unwrap_or(effects.phaser.depth).get() as f32,
+            locks
+                .percent(ParameterId::PhaserDepth)
+                .unwrap_or(effects.phaser.depth)
+                .get() as f32,
             samples,
         );
         self.phaser_feedback.set(
             locks
-                .phaser_feedback
+                .percent(ParameterId::PhaserFeedback)
                 .unwrap_or(effects.phaser.feedback)
                 .get() as f32,
             samples,
         );
         self.phaser_mix.set(
-            locks.phaser_mix.unwrap_or(effects.phaser.mix).get() as f32,
+            locks
+                .percent(ParameterId::PhaserMix)
+                .unwrap_or(effects.phaser.mix)
+                .get() as f32,
             samples,
         );
         self.flanger_rate.set(
-            locks.flanger_rate.unwrap_or(effects.flanger.rate).get() as f32,
+            locks
+                .percent(ParameterId::FlangerRate)
+                .unwrap_or(effects.flanger.rate)
+                .get() as f32,
             samples,
         );
         self.flanger_delay.set(
-            locks.flanger_delay.unwrap_or(effects.flanger.delay).get() as f32,
+            locks
+                .percent(ParameterId::FlangerDelay)
+                .unwrap_or(effects.flanger.delay)
+                .get() as f32,
             samples,
         );
         self.flanger_depth.set(
-            locks.flanger_depth.unwrap_or(effects.flanger.depth).get() as f32,
+            locks
+                .percent(ParameterId::FlangerDepth)
+                .unwrap_or(effects.flanger.depth)
+                .get() as f32,
             samples,
         );
         self.flanger_feedback.set(
             locks
-                .flanger_feedback
+                .percent(ParameterId::FlangerFeedback)
                 .unwrap_or(effects.flanger.feedback)
                 .get() as f32,
             samples,
         );
         self.flanger_mix.set(
-            locks.flanger_mix.unwrap_or(effects.flanger.mix).get() as f32,
+            locks
+                .percent(ParameterId::FlangerMix)
+                .unwrap_or(effects.flanger.mix)
+                .get() as f32,
             samples,
         );
         self.processing = was_processing
@@ -2613,12 +2639,6 @@ mod tests {
         assert!(pulse > 0.0 && saw > 0.0);
         assert_eq!(additive_source_gains(0.0), (1.0, 0.0));
         assert_eq!(additive_source_gains(1.0), (0.0, 1.0));
-    }
-
-    #[test]
-    fn sub_oscillator_modes_have_the_documented_dividers() {
-        assert_eq!(SubOscillatorMode::OneOctave.ratio(), 0.5);
-        assert_eq!(SubOscillatorMode::TwoOctaves.ratio(), 0.25);
     }
 
     #[test]

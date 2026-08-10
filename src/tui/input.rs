@@ -288,7 +288,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             if apply(a, audio, |e| e.toggle_event(track, step))
                 && sync_project(a, audio)
                 && !a.playing
-                && a.editor.project.tracks[track].steps[step].is_some()
+                && a.editor.active_steps(track).unwrap()[step].is_some()
             {
                 let _ = audio.send(AudioCommand::AutoAudition {
                     track: track as u8,
@@ -318,7 +318,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 a.status = "Audio command queue full; edit rejected".into();
                 return Ok(());
             }
-            let _ = a.editor.edit(None, |p| {
+            let _ = a.editor.edit(None, |p, _| {
                 p.tracks[ti].muted = !p.tracks[ti].muted;
                 Ok(())
             });
@@ -419,7 +419,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
 
 pub(super) fn move_step(a: &mut App, forward: bool) {
     let track = a.row - 1;
-    let length = a.editor.project.tracks[track].steps.len();
+    let length = a.editor.active_steps(track).unwrap().len();
     a.step = if forward {
         (a.step + 1) % length
     } else {
@@ -474,7 +474,7 @@ pub(super) fn select_global(a: &mut App) {
 pub(super) fn select_track(a: &mut App, track: usize) {
     a.editor.end_coalescing();
     a.row = track + 1;
-    a.step = a.step.min(a.editor.project.tracks[track].steps.len() - 1);
+    a.step = a.step.min(a.editor.active_steps(track).unwrap().len() - 1);
     if a.parameter_recipe.get() > a.editor.project.tracks[track].drum_recipe_count() {
         a.parameter_recipe = DrumRecipeSlot::ONE;
     }
@@ -789,7 +789,7 @@ fn refresh_lock_recipe(a: &mut App) {
 
 pub(super) fn move_step_bank(a: &mut App, forward: bool) {
     let track = a.row - 1;
-    let length = a.editor.project.tracks[track].steps.len();
+    let length = a.editor.active_steps(track).unwrap().len();
     let banks = length.div_ceil(STEP_BANK_SIZE);
     if banks <= 1 {
         return;
@@ -818,14 +818,14 @@ pub(super) fn move_step_vertical(a: &mut App, down: bool) {
     let track = a.row - 1;
     let step_row = a.step / STEP_ROW_SIZE;
     let column = a.step % STEP_ROW_SIZE;
-    let length = a.editor.project.tracks[track].steps.len();
+    let length = a.editor.active_steps(track).unwrap().len();
     if down {
         if step_row + 1 < length.div_ceil(STEP_ROW_SIZE) {
             a.step = ((step_row + 1) * STEP_ROW_SIZE + column).min(length - 1);
         } else if track + 1 < TRACK_COUNT {
             let destination = track + 1;
             a.row = destination + 1;
-            a.step = column.min(a.editor.project.tracks[destination].steps.len() - 1);
+            a.step = column.min(a.editor.active_steps(destination).unwrap().len() - 1);
         }
     } else if step_row > 0 {
         a.step -= STEP_ROW_SIZE;
@@ -834,7 +834,7 @@ pub(super) fn move_step_vertical(a: &mut App, down: bool) {
         a.scope = Scope::Base;
     } else {
         let destination = track - 1;
-        let destination_length = a.editor.project.tracks[destination].steps.len();
+        let destination_length = a.editor.active_steps(destination).unwrap().len();
         a.row = destination + 1;
         a.step = ((destination_length - 1) / STEP_ROW_SIZE * STEP_ROW_SIZE + column)
             .min(destination_length - 1);
@@ -848,7 +848,7 @@ pub(super) fn normalize_cursor(a: &mut App) {
     if a.row > 0 {
         a.step = a
             .step
-            .min(a.editor.project.tracks[a.row - 1].steps.len() - 1);
+            .min(a.editor.active_steps(a.row - 1).unwrap().len() - 1);
     }
 }
 
@@ -863,9 +863,11 @@ pub(super) fn set_selected_track_length(
         return;
     }
     let track = a.row - 1;
-    let old_length = a.editor.project.tracks[track].steps.len();
-    let old_events = a.editor.project.tracks[track]
-        .steps
+    let old_length = a.editor.active_steps(track).unwrap().len();
+    let old_events = a
+        .editor
+        .active_steps(track)
+        .unwrap()
         .iter()
         .flatten()
         .count();
@@ -874,8 +876,10 @@ pub(super) fn set_selected_track_length(
         Ok(true) => {
             normalize_cursor(a);
             if sync_project(a, audio) {
-                let new_events = a.editor.project.tracks[track]
-                    .steps
+                let new_events = a
+                    .editor
+                    .active_steps(track)
+                    .unwrap()
                     .iter()
                     .flatten()
                     .count();
@@ -904,7 +908,7 @@ pub(super) fn duplicate_selected_track(a: &mut App, audio: &mut Audio) {
         return;
     }
     let track = a.row - 1;
-    let old_length = a.editor.project.tracks[track].steps.len();
+    let old_length = a.editor.active_steps(track).unwrap().len();
     match a.editor.duplicate_track(track) {
         Ok(true) if sync_project(a, audio) => {
             a.status = format!(
@@ -968,7 +972,7 @@ pub(super) fn handle_track_length_input(a: &mut App, audio: &mut Audio, k: KeyEv
             } else {
                 1
             };
-            let current = a.editor.project.tracks[a.row - 1].steps.len();
+            let current = a.editor.active_steps(a.row - 1).unwrap().len();
             let next = if k.code == KeyCode::Up {
                 current.saturating_add(delta).min(MAX_STEP_COUNT)
             } else {
@@ -1225,10 +1229,7 @@ pub(super) fn clamp_parameter_percentage(parameter: ParameterId, value: Percent)
 }
 
 pub(super) const fn parameter_upper_bound(parameter: ParameterId) -> u8 {
-    match parameter {
-        ParameterId::PhaserFeedback | ParameterId::FlangerFeedback => 90,
-        _ => 100,
-    }
+    parameter.upper_bound()
 }
 
 pub(super) fn parameter_edit_passthrough(key: KeyCode) -> bool {
@@ -1281,7 +1282,8 @@ pub(super) fn open_chord_editor(a: &mut App) {
         return;
     }
     let track = &a.editor.project.tracks[CHORD_TRACK_INDEX];
-    let shape = match track.steps[a.step].as_ref() {
+    let steps = a.editor.active_steps(CHORD_TRACK_INDEX).unwrap();
+    let shape = match steps[a.step].as_ref() {
         Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or_default(),
         Some(StepEvent::Tie { .. }) => {
             selected_chord_shape(a, CHORD_TRACK_INDEX).unwrap_or_default()
@@ -1295,9 +1297,9 @@ pub(super) fn open_chord_editor(a: &mut App) {
         .unwrap_or(shape);
     a.chord_field = ChordField::Shape;
     a.mode = Mode::ChordEdit { shape };
-    a.status = if matches!(track.steps[a.step], Some(StepEvent::Tie { .. })) {
+    a.status = if matches!(steps[a.step], Some(StepEvent::Tie { .. })) {
         "Chord settings are inherited; edit the note trigger".into()
-    } else if track.steps[a.step].is_none() {
+    } else if steps[a.step].is_none() {
         "Editing Chord input defaults".into()
     } else {
         "Editing Chord trigger settings".into()
@@ -1311,7 +1313,7 @@ pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
     let field = a.chord_field;
     let track = a.row.saturating_sub(1);
     let read_only = matches!(
-        a.editor.project.tracks[track].steps[a.step],
+        a.editor.active_steps(track).unwrap()[a.step],
         Some(StepEvent::Tie { .. })
     );
     match k.code {
@@ -2111,7 +2113,7 @@ fn paste_selected_step(a: &mut App, audio: &mut Audio) {
         Ok(true) if sync_project(a, audio) => {
             a.mode = Mode::Navigation;
             a.status = format!("Pasted step {}", step + 1);
-            if !a.playing && a.editor.project.tracks[track].steps[step].is_some() {
+            if !a.playing && a.editor.active_steps(track).unwrap()[step].is_some() {
                 let _ = audio.send(AudioCommand::AutoAudition {
                     track: track as u8,
                     step: step as u8,

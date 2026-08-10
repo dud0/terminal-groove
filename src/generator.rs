@@ -125,9 +125,17 @@ impl Rng {
 }
 
 pub fn generate(project: &Project, config: Config) -> Generated {
+    generate_for_pattern(project, 0, config)
+}
+
+pub fn generate_for_pattern(project: &Project, pattern: usize, config: Config) -> Generated {
     let mut rng = Rng(config.seed);
     let (range_low, range_high) = normalized_octave_range(config);
-    let mut tracks: Vec<Vec<Step>> = project.tracks.iter().map(|t| t.steps.clone()).collect();
+    let mut tracks: Vec<Vec<Step>> = project.patterns[pattern]
+        .tracks
+        .iter()
+        .map(|track| track.steps.clone())
+        .collect();
     let mut inserted = 0;
     let selected = |index: usize| {
         matches!(config.target, Target::WholePattern) || config.target == Target::Track(index)
@@ -484,7 +492,7 @@ mod tests {
     #[test]
     fn chord_roots_are_randomized_within_the_configured_range() {
         let mut p = Project::new();
-        p.tracks[crate::model::CHORD_TRACK_INDEX]
+        p.patterns[0].tracks[crate::model::CHORD_TRACK_INDEX]
             .steps
             .resize(64, None);
         let result = generate(
@@ -552,7 +560,7 @@ mod tests {
     fn chord_shape_pools_generate_only_their_documented_shapes() {
         let mut p = Project::new();
         let track = crate::model::CHORD_TRACK_INDEX;
-        p.tracks[track].steps.resize(64, None);
+        p.patterns[0].tracks[track].steps.resize(64, None);
         let shapes_for = |chord_shapes| {
             generate(
                 &p,
@@ -613,13 +621,12 @@ mod tests {
             },
         );
 
-        for (track, steps) in project.tracks.iter_mut().zip(generated.tracks) {
+        for (track, steps) in project.patterns[0].tracks.iter_mut().zip(generated.tracks) {
             track.steps = steps;
         }
-        assert!(project.store_active_pattern(0));
         project.validate().unwrap();
         assert!(
-            project.tracks[crate::model::LEAD_TRACK_INDEX]
+            project.patterns[0].tracks[crate::model::LEAD_TRACK_INDEX]
                 .steps
                 .iter()
                 .any(|event| matches!(event, Some(StepEvent::LeadNote { .. })))

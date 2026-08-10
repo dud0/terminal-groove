@@ -1,4 +1,8 @@
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{Error as _, MapAccess, Visitor},
+    ser::SerializeMap,
+};
 use std::{fmt, str::FromStr};
 
 pub const MIN_STEP_COUNT: usize = 1;
@@ -1028,376 +1032,242 @@ pub enum Instrument {
     Lead(LeadParameters),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+const PARAMETER_COUNT: usize = 37;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParameterLocks {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pan: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub level: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delay_send: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reverb_send: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distortion_drive: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distortion_tone: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distortion_mix: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub phaser_rate: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub phaser_depth: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub phaser_feedback: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub phaser_mix: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flanger_rate: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flanger_delay: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flanger_depth: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flanger_feedback: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flanger_mix: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tune: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tone: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snappy: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub decay: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub waveform: Option<Waveform>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oscillator_mix: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pulse_width: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sub_oscillator: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub noise: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sub_mode: Option<LeadSubMode>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub keyboard_tracking: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub portamento_time: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chorus: Option<ChorusMode>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub spread: Option<ChordSpread>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cutoff: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resonance: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filter_envelope: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attack: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sustain: Option<Percent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub release: Option<Percent>,
+    values: [Option<ParameterValue>; PARAMETER_COUNT],
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+impl Default for ParameterLocks {
+    fn default() -> Self {
+        Self {
+            values: [None; PARAMETER_COUNT],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LfoAssignments {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pan: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub level: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tune: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tone: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snappy: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub decay: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oscillator_mix: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pulse_width: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sub_oscillator: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub noise: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub keyboard_tracking: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cutoff: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resonance: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filter_envelope: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attack: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sustain: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub release: Option<LfoConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pitch: Option<LfoConfig>,
+    values: [Option<LfoConfig>; PARAMETER_COUNT],
+}
+
+impl Default for LfoAssignments {
+    fn default() -> Self {
+        Self {
+            values: [None; PARAMETER_COUNT],
+        }
+    }
 }
 
 impl LfoAssignments {
     pub fn get(&self, parameter: ParameterId) -> Option<LfoConfig> {
-        match parameter {
-            ParameterId::Pan => self.pan,
-            ParameterId::Level => self.level,
-            ParameterId::Tune => self.tune,
-            ParameterId::Tone => self.tone,
-            ParameterId::Snappy => self.snappy,
-            ParameterId::Decay => self.decay,
-            ParameterId::OscillatorMix => self.oscillator_mix,
-            ParameterId::PulseWidth => self.pulse_width,
-            ParameterId::SubOscillator => self.sub_oscillator,
-            ParameterId::Noise => self.noise,
-            ParameterId::KeyboardTracking => self.keyboard_tracking,
-            ParameterId::Cutoff => self.cutoff,
-            ParameterId::Resonance => self.resonance,
-            ParameterId::FilterEnvelope => self.filter_envelope,
-            ParameterId::Attack => self.attack,
-            ParameterId::Sustain => self.sustain,
-            ParameterId::Release => self.release,
-            ParameterId::Pitch => self.pitch,
-            ParameterId::DelaySend
-            | ParameterId::ReverbSend
-            | ParameterId::DistortionDrive
-            | ParameterId::DistortionTone
-            | ParameterId::DistortionMix
-            | ParameterId::PhaserRate
-            | ParameterId::PhaserDepth
-            | ParameterId::PhaserFeedback
-            | ParameterId::PhaserMix
-            | ParameterId::FlangerRate
-            | ParameterId::FlangerDelay
-            | ParameterId::FlangerDepth
-            | ParameterId::FlangerFeedback
-            | ParameterId::FlangerMix
-            | ParameterId::Waveform
-            | ParameterId::Chorus
-            | ParameterId::Spread => None,
-            ParameterId::LeadSubMode | ParameterId::PortamentoTime => None,
-        }
+        self.values[parameter as usize]
     }
 
     pub fn set(&mut self, parameter: ParameterId, config: Option<LfoConfig>) -> bool {
-        let slot = match parameter {
-            ParameterId::Pan => &mut self.pan,
-            ParameterId::Level => &mut self.level,
-            ParameterId::Tune => &mut self.tune,
-            ParameterId::Tone => &mut self.tone,
-            ParameterId::Snappy => &mut self.snappy,
-            ParameterId::Decay => &mut self.decay,
-            ParameterId::OscillatorMix => &mut self.oscillator_mix,
-            ParameterId::PulseWidth => &mut self.pulse_width,
-            ParameterId::SubOscillator => &mut self.sub_oscillator,
-            ParameterId::Noise => &mut self.noise,
-            ParameterId::KeyboardTracking => &mut self.keyboard_tracking,
-            ParameterId::Cutoff => &mut self.cutoff,
-            ParameterId::Resonance => &mut self.resonance,
-            ParameterId::FilterEnvelope => &mut self.filter_envelope,
-            ParameterId::Attack => &mut self.attack,
-            ParameterId::Sustain => &mut self.sustain,
-            ParameterId::Release => &mut self.release,
-            ParameterId::Pitch => &mut self.pitch,
-            ParameterId::DelaySend
-            | ParameterId::ReverbSend
-            | ParameterId::DistortionDrive
-            | ParameterId::DistortionTone
-            | ParameterId::DistortionMix
-            | ParameterId::PhaserRate
-            | ParameterId::PhaserDepth
-            | ParameterId::PhaserFeedback
-            | ParameterId::PhaserMix
-            | ParameterId::FlangerRate
-            | ParameterId::FlangerDelay
-            | ParameterId::FlangerDepth
-            | ParameterId::FlangerFeedback
-            | ParameterId::FlangerMix
-            | ParameterId::Waveform
-            | ParameterId::Chorus
-            | ParameterId::Spread => {
-                return false;
-            }
-            ParameterId::LeadSubMode | ParameterId::PortamentoTime => return false,
-        };
-        *slot = config;
+        if !parameter.is_lfo_assignable() {
+            return false;
+        }
+        self.values[parameter as usize] = config;
         true
     }
 }
 impl ParameterLocks {
     pub fn is_empty(&self) -> bool {
-        self == &Self::default()
+        self.values.iter().all(Option::is_none)
     }
 
     pub fn get(&self, parameter: ParameterId) -> Option<ParameterValue> {
-        match parameter {
-            ParameterId::Pan => self.pan.map(ParameterValue::Percent),
-            ParameterId::Level => self.level.map(ParameterValue::Percent),
-            ParameterId::DelaySend => self.delay_send.map(ParameterValue::Percent),
-            ParameterId::ReverbSend => self.reverb_send.map(ParameterValue::Percent),
-            ParameterId::DistortionDrive => self.distortion_drive.map(ParameterValue::Percent),
-            ParameterId::DistortionTone => self.distortion_tone.map(ParameterValue::Percent),
-            ParameterId::DistortionMix => self.distortion_mix.map(ParameterValue::Percent),
-            ParameterId::PhaserRate => self.phaser_rate.map(ParameterValue::Percent),
-            ParameterId::PhaserDepth => self.phaser_depth.map(ParameterValue::Percent),
-            ParameterId::PhaserFeedback => self.phaser_feedback.map(ParameterValue::Percent),
-            ParameterId::PhaserMix => self.phaser_mix.map(ParameterValue::Percent),
-            ParameterId::FlangerRate => self.flanger_rate.map(ParameterValue::Percent),
-            ParameterId::FlangerDelay => self.flanger_delay.map(ParameterValue::Percent),
-            ParameterId::FlangerDepth => self.flanger_depth.map(ParameterValue::Percent),
-            ParameterId::FlangerFeedback => self.flanger_feedback.map(ParameterValue::Percent),
-            ParameterId::FlangerMix => self.flanger_mix.map(ParameterValue::Percent),
-            ParameterId::Tune => self.tune.map(ParameterValue::Percent),
-            ParameterId::Tone => self.tone.map(ParameterValue::Percent),
-            ParameterId::Snappy => self.snappy.map(ParameterValue::Percent),
-            ParameterId::Decay => self.decay.map(ParameterValue::Percent),
-            ParameterId::Waveform => self.waveform.map(ParameterValue::Waveform),
-            ParameterId::OscillatorMix => self.oscillator_mix.map(ParameterValue::Percent),
-            ParameterId::PulseWidth => self.pulse_width.map(ParameterValue::Percent),
-            ParameterId::SubOscillator => self.sub_oscillator.map(ParameterValue::Percent),
-            ParameterId::Noise => self.noise.map(ParameterValue::Percent),
-            ParameterId::LeadSubMode => self.sub_mode.map(ParameterValue::LeadSubMode),
-            ParameterId::KeyboardTracking => self.keyboard_tracking.map(ParameterValue::Percent),
-            ParameterId::PortamentoTime => self.portamento_time.map(ParameterValue::Percent),
-            ParameterId::Chorus => self.chorus.map(ParameterValue::Chorus),
-            ParameterId::Spread => self.spread.map(ParameterValue::Spread),
-            ParameterId::Cutoff => self.cutoff.map(ParameterValue::Percent),
-            ParameterId::Resonance => self.resonance.map(ParameterValue::Percent),
-            ParameterId::FilterEnvelope => self.filter_envelope.map(ParameterValue::Percent),
-            ParameterId::Attack => self.attack.map(ParameterValue::Percent),
-            ParameterId::Sustain => self.sustain.map(ParameterValue::Percent),
-            ParameterId::Release => self.release.map(ParameterValue::Percent),
-            ParameterId::Pitch => None,
+        self.values[parameter as usize]
+    }
+
+    pub fn percent(&self, parameter: ParameterId) -> Option<Percent> {
+        match self.get(parameter) {
+            Some(ParameterValue::Percent(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn waveform(&self) -> Option<Waveform> {
+        match self.get(ParameterId::Waveform) {
+            Some(ParameterValue::Waveform(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn chorus(&self) -> Option<ChorusMode> {
+        match self.get(ParameterId::Chorus) {
+            Some(ParameterValue::Chorus(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn spread(&self) -> Option<ChordSpread> {
+        match self.get(ParameterId::Spread) {
+            Some(ParameterValue::Spread(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn lead_sub_mode(&self) -> Option<LeadSubMode> {
+        match self.get(ParameterId::LeadSubMode) {
+            Some(ParameterValue::LeadSubMode(value)) => Some(value),
+            _ => None,
         }
     }
 
     pub fn set(&mut self, parameter: ParameterId, value: ParameterValue) -> bool {
-        match (parameter, value) {
-            (ParameterId::Pan, ParameterValue::Percent(v)) => self.pan = Some(v),
-            (ParameterId::Level, ParameterValue::Percent(v)) => self.level = Some(v),
-            (ParameterId::DelaySend, ParameterValue::Percent(v)) => self.delay_send = Some(v),
-            (ParameterId::ReverbSend, ParameterValue::Percent(v)) => self.reverb_send = Some(v),
-            (ParameterId::DistortionDrive, ParameterValue::Percent(v)) => {
-                self.distortion_drive = Some(v)
-            }
-            (ParameterId::DistortionTone, ParameterValue::Percent(v)) => {
-                self.distortion_tone = Some(v)
-            }
-            (ParameterId::DistortionMix, ParameterValue::Percent(v)) => {
-                self.distortion_mix = Some(v)
-            }
-            (ParameterId::PhaserRate, ParameterValue::Percent(v)) => self.phaser_rate = Some(v),
-            (ParameterId::PhaserDepth, ParameterValue::Percent(v)) => self.phaser_depth = Some(v),
-            (ParameterId::PhaserFeedback, ParameterValue::Percent(v)) => {
-                if v.get() > 90 {
-                    return false;
-                }
-                self.phaser_feedback = Some(v)
-            }
-            (ParameterId::PhaserMix, ParameterValue::Percent(v)) => self.phaser_mix = Some(v),
-            (ParameterId::FlangerRate, ParameterValue::Percent(v)) => self.flanger_rate = Some(v),
-            (ParameterId::FlangerDelay, ParameterValue::Percent(v)) => self.flanger_delay = Some(v),
-            (ParameterId::FlangerDepth, ParameterValue::Percent(v)) => self.flanger_depth = Some(v),
-            (ParameterId::FlangerFeedback, ParameterValue::Percent(v)) => {
-                if v.get() > 90 {
-                    return false;
-                }
-                self.flanger_feedback = Some(v)
-            }
-            (ParameterId::FlangerMix, ParameterValue::Percent(v)) => self.flanger_mix = Some(v),
-            (ParameterId::Tune, ParameterValue::Percent(v)) => self.tune = Some(v),
-            (ParameterId::Tone, ParameterValue::Percent(v)) => self.tone = Some(v),
-            (ParameterId::Snappy, ParameterValue::Percent(v)) => self.snappy = Some(v),
-            (ParameterId::Decay, ParameterValue::Percent(v)) => self.decay = Some(v),
-            (ParameterId::Waveform, ParameterValue::Waveform(v)) => self.waveform = Some(v),
-            (ParameterId::OscillatorMix, ParameterValue::Percent(v)) => {
-                self.oscillator_mix = Some(v)
-            }
-            (ParameterId::PulseWidth, ParameterValue::Percent(v)) => self.pulse_width = Some(v),
-            (ParameterId::SubOscillator, ParameterValue::Percent(v)) => {
-                self.sub_oscillator = Some(v)
-            }
-            (ParameterId::Noise, ParameterValue::Percent(v)) => self.noise = Some(v),
-            (ParameterId::LeadSubMode, ParameterValue::LeadSubMode(v)) => self.sub_mode = Some(v),
-            (ParameterId::KeyboardTracking, ParameterValue::Percent(v)) => {
-                self.keyboard_tracking = Some(v)
-            }
-            (ParameterId::PortamentoTime, ParameterValue::Percent(v)) => {
-                self.portamento_time = Some(v)
-            }
-            (ParameterId::Chorus, ParameterValue::Chorus(v)) => self.chorus = Some(v),
-            (ParameterId::Spread, ParameterValue::Spread(v)) => self.spread = Some(v),
-            (ParameterId::Cutoff, ParameterValue::Percent(v)) => self.cutoff = Some(v),
-            (ParameterId::Resonance, ParameterValue::Percent(v)) => self.resonance = Some(v),
-            (ParameterId::FilterEnvelope, ParameterValue::Percent(v)) => {
-                self.filter_envelope = Some(v)
-            }
-            (ParameterId::Attack, ParameterValue::Percent(v)) => self.attack = Some(v),
-            (ParameterId::Sustain, ParameterValue::Percent(v)) => self.sustain = Some(v),
-            (ParameterId::Release, ParameterValue::Percent(v)) => self.release = Some(v),
-            _ => return false,
+        if !parameter.accepts_lock_value(value) {
+            return false;
         }
+        self.values[parameter as usize] = Some(value);
         true
     }
 
     pub fn clear(&mut self, parameter: ParameterId) {
-        match parameter {
-            ParameterId::Pan => self.pan = None,
-            ParameterId::Level => self.level = None,
-            ParameterId::DelaySend => self.delay_send = None,
-            ParameterId::ReverbSend => self.reverb_send = None,
-            ParameterId::DistortionDrive => self.distortion_drive = None,
-            ParameterId::DistortionTone => self.distortion_tone = None,
-            ParameterId::DistortionMix => self.distortion_mix = None,
-            ParameterId::PhaserRate => self.phaser_rate = None,
-            ParameterId::PhaserDepth => self.phaser_depth = None,
-            ParameterId::PhaserFeedback => self.phaser_feedback = None,
-            ParameterId::PhaserMix => self.phaser_mix = None,
-            ParameterId::FlangerRate => self.flanger_rate = None,
-            ParameterId::FlangerDelay => self.flanger_delay = None,
-            ParameterId::FlangerDepth => self.flanger_depth = None,
-            ParameterId::FlangerFeedback => self.flanger_feedback = None,
-            ParameterId::FlangerMix => self.flanger_mix = None,
-            ParameterId::Tune => self.tune = None,
-            ParameterId::Tone => self.tone = None,
-            ParameterId::Snappy => self.snappy = None,
-            ParameterId::Decay => self.decay = None,
-            ParameterId::Waveform => self.waveform = None,
-            ParameterId::OscillatorMix => self.oscillator_mix = None,
-            ParameterId::PulseWidth => self.pulse_width = None,
-            ParameterId::SubOscillator => self.sub_oscillator = None,
-            ParameterId::Noise => self.noise = None,
-            ParameterId::LeadSubMode => self.sub_mode = None,
-            ParameterId::KeyboardTracking => self.keyboard_tracking = None,
-            ParameterId::PortamentoTime => self.portamento_time = None,
-            ParameterId::Chorus => self.chorus = None,
-            ParameterId::Spread => self.spread = None,
-            ParameterId::Cutoff => self.cutoff = None,
-            ParameterId::Resonance => self.resonance = None,
-            ParameterId::FilterEnvelope => self.filter_envelope = None,
-            ParameterId::Attack => self.attack = None,
-            ParameterId::Sustain => self.sustain = None,
-            ParameterId::Release => self.release = None,
-            ParameterId::Pitch => {}
-        }
+        self.values[parameter as usize] = None;
     }
 
     pub fn overlay(&mut self, overlay: Self) {
         for parameter in ParameterId::ALL {
             if let Some(value) = overlay.get(parameter) {
-                let set = self.set(parameter, value);
-                debug_assert!(set);
+                self.values[parameter as usize] = Some(value);
             }
         }
+    }
+
+    pub fn from_pairs<const N: usize>(pairs: [(ParameterId, ParameterValue); N]) -> Self {
+        let mut locks = Self::default();
+        for (parameter, value) in pairs {
+            assert!(locks.set(parameter, value), "invalid parameter lock");
+        }
+        locks
+    }
+}
+
+impl Serialize for ParameterLocks {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        for parameter in ParameterId::ALL {
+            if let Some(value) = self.get(parameter) {
+                match value {
+                    ParameterValue::Percent(value) => {
+                        map.serialize_entry(parameter.name(), &value)?
+                    }
+                    ParameterValue::Waveform(value) => {
+                        map.serialize_entry(parameter.name(), &value)?
+                    }
+                    ParameterValue::Chorus(value) => {
+                        map.serialize_entry(parameter.name(), &value)?
+                    }
+                    ParameterValue::Spread(value) => {
+                        map.serialize_entry(parameter.name(), &value)?
+                    }
+                    ParameterValue::LeadSubMode(value) => {
+                        map.serialize_entry(parameter.name(), &value)?
+                    }
+                }
+            }
+        }
+        map.end()
+    }
+}
+
+struct ParameterLocksVisitor;
+
+impl<'de> Visitor<'de> for ParameterLocksVisitor {
+    type Value = ParameterLocks;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a parameter-lock object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut locks = ParameterLocks::default();
+        let mut seen = [false; PARAMETER_COUNT];
+        while let Some(name) = map.next_key::<String>()? {
+            let parameter = ParameterId::from_name(&name)
+                .filter(|parameter| parameter.is_lockable())
+                .ok_or_else(|| A::Error::custom(format_args!("unknown parameter lock `{name}`")))?;
+            let index = parameter as usize;
+            if std::mem::replace(&mut seen[index], true) {
+                return Err(A::Error::duplicate_field(parameter.name()));
+            }
+            let value = match parameter.value_kind() {
+                ParameterValueKind::Percent => map
+                    .next_value::<Option<Percent>>()?
+                    .map(ParameterValue::Percent),
+                ParameterValueKind::Waveform => map
+                    .next_value::<Option<Waveform>>()?
+                    .map(ParameterValue::Waveform),
+                ParameterValueKind::Chorus => map
+                    .next_value::<Option<ChorusMode>>()?
+                    .map(ParameterValue::Chorus),
+                ParameterValueKind::Spread => map
+                    .next_value::<Option<ChordSpread>>()?
+                    .map(ParameterValue::Spread),
+                ParameterValueKind::LeadSubMode => map
+                    .next_value::<Option<LeadSubMode>>()?
+                    .map(ParameterValue::LeadSubMode),
+            };
+            if let Some(value) = value
+                && !locks.set(parameter, value)
+            {
+                return Err(A::Error::custom(format_args!("invalid value for `{name}`")));
+            }
+        }
+        Ok(locks)
+    }
+}
+
+impl<'de> Deserialize<'de> for ParameterLocks {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(ParameterLocksVisitor)
+    }
+}
+
+impl Serialize for LfoAssignments {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        for parameter in ParameterId::ALL {
+            if let Some(config) = self.get(parameter) {
+                map.serialize_entry(parameter.name(), &config)?;
+            }
+        }
+        map.end()
+    }
+}
+
+struct LfoAssignmentsVisitor;
+
+impl<'de> Visitor<'de> for LfoAssignmentsVisitor {
+    type Value = LfoAssignments;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an LFO-assignment object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut assignments = LfoAssignments::default();
+        let mut seen = [false; PARAMETER_COUNT];
+        while let Some(name) = map.next_key::<String>()? {
+            let parameter = ParameterId::from_name(&name)
+                .filter(|parameter| parameter.is_lfo_assignable())
+                .ok_or_else(|| A::Error::custom(format_args!("unknown LFO assignment `{name}`")))?;
+            let index = parameter as usize;
+            if std::mem::replace(&mut seen[index], true) {
+                return Err(A::Error::duplicate_field(parameter.name()));
+            }
+            assignments.values[index] = map.next_value()?;
+        }
+        Ok(assignments)
+    }
+}
+
+impl<'de> Deserialize<'de> for LfoAssignments {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(LfoAssignmentsVisitor)
     }
 }
 
@@ -1644,10 +1514,6 @@ pub struct Track {
     #[serde(default)]
     pub effects: TrackEffects,
     pub lfos: LfoAssignments,
-    /// Transient editor cache for the selected pattern.  It is deliberately
-    /// excluded from project JSON; canonical sequence data is `patterns`.
-    #[serde(skip, default = "default_step_cache")]
-    pub steps: Vec<Step>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_degree: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1679,8 +1545,6 @@ struct TrackWire {
     #[serde(default)]
     effects: TrackEffects,
     lfos: LfoAssignments,
-    #[serde(skip, default = "default_step_cache")]
-    steps: Vec<Step>,
     #[serde(skip_serializing_if = "Option::is_none")]
     input_degree: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1738,7 +1602,6 @@ impl<'de> Deserialize<'de> for Track {
             instrument,
             effects: wire.effects,
             lfos: wire.lfos,
-            steps: wire.steps,
             input_degree: wire.input_degree,
             input_octave: wire.input_octave,
             input_accent: wire.input_accent,
@@ -1770,7 +1633,7 @@ pub struct SongEntry {
     pub bars: u8,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub format_version: u32,
@@ -1782,35 +1645,6 @@ pub struct Project {
     pub song: Vec<SongEntry>,
 }
 
-impl PartialEq for Project {
-    fn eq(&self, other: &Self) -> bool {
-        self.format_version == other.format_version
-            && self.globals == other.globals
-            && self.tracks.len() == other.tracks.len()
-            && self.tracks.iter().zip(&other.tracks).all(|(left, right)| {
-                left.kind == right.kind
-                    && left.name == right.name
-                    && left.level == right.level
-                    && left.pan == right.pan
-                    && left.muted == right.muted
-                    && left.delay_send == right.delay_send
-                    && left.reverb_send == right.reverb_send
-                    && left.swing == right.swing
-                    && left.probability == right.probability
-                    && left.instrument == right.instrument
-                    && left.effects == right.effects
-                    && left.lfos == right.lfos
-                    && left.input_degree == right.input_degree
-                    && left.input_octave == right.input_octave
-                    && left.input_accent == right.input_accent
-                    && left.input_chord_shape == right.input_chord_shape
-                    && left.input_chord_arpeggio == right.input_chord_arpeggio
-            })
-            && self.patterns == other.patterns
-            && self.song == other.song
-    }
-}
-
 fn p(n: u8) -> Percent {
     Percent(n)
 }
@@ -1819,9 +1653,6 @@ fn default_pan() -> Percent {
 }
 fn default_probability() -> Percent {
     Percent(100)
-}
-fn default_step_cache() -> Vec<Step> {
-    vec![None; STEP_BANK_SIZE]
 }
 fn bool_is_false(value: &bool) -> bool {
     !*value
@@ -1847,7 +1678,6 @@ impl Project {
             instrument,
             effects: TrackEffects::default(),
             lfos: LfoAssignments::default(),
-            steps: vec![None; STEP_BANK_SIZE],
             input_degree: None,
             input_octave: None,
             input_accent: false,
@@ -1870,7 +1700,6 @@ impl Project {
             instrument,
             effects: TrackEffects::default(),
             lfos: LfoAssignments::default(),
-            steps: vec![None; STEP_BANK_SIZE],
             input_degree: Some(1),
             input_octave: Some(3),
             input_accent: false,
@@ -2018,34 +1847,6 @@ impl Project {
             .tracks
             .get(track)
             .map(|track| track.steps.as_slice())
-    }
-
-    /// Synchronize the non-persisted editor cache from a canonical pattern.
-    pub fn activate_pattern(&mut self, pattern: usize) -> bool {
-        let Some(source) = self.patterns.get(pattern) else {
-            return false;
-        };
-        if source.tracks.len() != TRACK_COUNT {
-            return false;
-        }
-        for (track, sequence) in self.tracks.iter_mut().zip(&source.tracks) {
-            track.steps.clone_from(&sequence.steps);
-        }
-        true
-    }
-
-    /// Commit the transient editor cache to canonical sequence ownership.
-    pub fn store_active_pattern(&mut self, pattern: usize) -> bool {
-        let Some(destination) = self.patterns.get_mut(pattern) else {
-            return false;
-        };
-        if destination.tracks.len() != TRACK_COUNT {
-            return false;
-        }
-        for (sequence, track) in destination.tracks.iter_mut().zip(&self.tracks) {
-            sequence.steps.clone_from(&track.steps);
-        }
-        true
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
@@ -2281,10 +2082,14 @@ fn validate_locks(
     kind: TrackKind,
     l: &ParameterLocks,
 ) -> Result<(), ValidationError> {
-    if l.phaser_feedback.is_some_and(|value| value.get() > 90) {
+    if l.percent(ParameterId::PhaserFeedback)
+        .is_some_and(|value| value.get() > 90)
+    {
         return Err(ValidationError::Lock(ti, si, "phaser_feedback"));
     }
-    if l.flanger_feedback.is_some_and(|value| value.get() > 90) {
+    if l.percent(ParameterId::FlangerFeedback)
+        .is_some_and(|value| value.get() > 90)
+    {
         return Err(ValidationError::Lock(ti, si, "flanger_feedback"));
     }
     let bad = ParameterId::ALL.into_iter().find_map(|parameter| {
@@ -2385,6 +2190,15 @@ pub enum ParameterValue {
     LeadSubMode(LeadSubMode),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParameterValueKind {
+    Percent,
+    Waveform,
+    Chorus,
+    Spread,
+    LeadSubMode,
+}
+
 impl ParameterId {
     pub const ALL: [Self; 37] = [
         Self::Level,
@@ -2425,6 +2239,73 @@ impl ParameterId {
         Self::FlangerFeedback,
         Self::FlangerMix,
     ];
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|parameter| parameter.name() == name)
+    }
+
+    pub const fn value_kind(self) -> ParameterValueKind {
+        match self {
+            Self::Waveform => ParameterValueKind::Waveform,
+            Self::Chorus => ParameterValueKind::Chorus,
+            Self::Spread => ParameterValueKind::Spread,
+            Self::LeadSubMode => ParameterValueKind::LeadSubMode,
+            _ => ParameterValueKind::Percent,
+        }
+    }
+
+    pub const fn upper_bound(self) -> u8 {
+        match self {
+            Self::PhaserFeedback | Self::FlangerFeedback => 90,
+            _ => 100,
+        }
+    }
+
+    pub const fn is_lockable(self) -> bool {
+        !matches!(self, Self::Pitch)
+    }
+
+    pub const fn is_lfo_assignable(self) -> bool {
+        matches!(
+            self,
+            Self::Pan
+                | Self::Level
+                | Self::Tune
+                | Self::Tone
+                | Self::Snappy
+                | Self::Decay
+                | Self::OscillatorMix
+                | Self::PulseWidth
+                | Self::SubOscillator
+                | Self::Noise
+                | Self::KeyboardTracking
+                | Self::Cutoff
+                | Self::Resonance
+                | Self::FilterEnvelope
+                | Self::Attack
+                | Self::Sustain
+                | Self::Release
+                | Self::Pitch
+        )
+    }
+
+    pub const fn accepts_lock_value(self, value: ParameterValue) -> bool {
+        if !self.is_lockable() {
+            return false;
+        }
+        match (self.value_kind(), value) {
+            (ParameterValueKind::Percent, ParameterValue::Percent(value)) => {
+                value.get() <= self.upper_bound()
+            }
+            (ParameterValueKind::Waveform, ParameterValue::Waveform(_))
+            | (ParameterValueKind::Chorus, ParameterValue::Chorus(_))
+            | (ParameterValueKind::Spread, ParameterValue::Spread(_))
+            | (ParameterValueKind::LeadSubMode, ParameterValue::LeadSubMode(_)) => true,
+            _ => false,
+        }
+    }
 
     pub const fn is_valid_for(self, kind: TrackKind) -> bool {
         match self {
@@ -3033,35 +2914,6 @@ mod tests {
         }
     }
     #[test]
-    fn project_equality_ignores_transient_step_caches() {
-        let mut left = Project::new();
-        let mut right = left.clone();
-        left.tracks[0].steps[0] = Some(StepEvent::Trigger {
-            accent: false,
-            recipe: crate::model::DrumRecipeSlot::ONE,
-            condition: Default::default(),
-            retrigger_count: 1,
-            locks: Default::default(),
-        });
-        right.tracks[0].steps[0] = Some(StepEvent::Trigger {
-            accent: true,
-            recipe: crate::model::DrumRecipeSlot::ONE,
-            condition: Default::default(),
-            retrigger_count: 1,
-            locks: Default::default(),
-        });
-        assert_eq!(left, right);
-
-        right.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
-            accent: true,
-            recipe: crate::model::DrumRecipeSlot::ONE,
-            condition: Default::default(),
-            retrigger_count: 1,
-            locks: Default::default(),
-        });
-        assert_ne!(left, right);
-    }
-    #[test]
     fn song_entries_accept_pattern_100_and_reject_pattern_101() {
         let mut project = Project::new();
         project.patterns.resize_with(100, || Pattern {
@@ -3253,13 +3105,13 @@ mod tests {
             Some(ParameterValue::Percent(p(80)))
         );
         assert!(locks.set(ParameterId::PhaserFeedback, ParameterValue::Percent(p(90))));
-        assert_eq!(locks.phaser_feedback, Some(p(90)));
+        assert_eq!(locks.percent(ParameterId::PhaserFeedback), Some(p(90)));
         assert!(!locks.set(ParameterId::PhaserFeedback, ParameterValue::Percent(p(91))));
-        assert_eq!(locks.phaser_feedback, Some(p(90)));
+        assert_eq!(locks.percent(ParameterId::PhaserFeedback), Some(p(90)));
         assert!(locks.set(ParameterId::FlangerFeedback, ParameterValue::Percent(p(90))));
-        assert_eq!(locks.flanger_feedback, Some(p(90)));
+        assert_eq!(locks.percent(ParameterId::FlangerFeedback), Some(p(90)));
         assert!(!locks.set(ParameterId::FlangerFeedback, ParameterValue::Percent(p(91))));
-        assert_eq!(locks.flanger_feedback, Some(p(90)));
+        assert_eq!(locks.percent(ParameterId::FlangerFeedback), Some(p(90)));
 
         let mut track = project.tracks[0].clone();
         assert!(track.set_parameter(ParameterId::PhaserFeedback, ParameterValue::Percent(p(90))));
@@ -3342,10 +3194,10 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
-            locks: ParameterLocks {
-                cutoff: Percent::new(50),
-                ..Default::default()
-            },
+            locks: ParameterLocks::from_pairs([(
+                ParameterId::Cutoff,
+                ParameterValue::Percent(Percent::new(50).unwrap()),
+            )]),
         });
         assert!(matches!(
             drum.validate(),
@@ -3361,10 +3213,10 @@ mod tests {
             arpeggio: ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
-            locks: ParameterLocks {
-                tone: Percent::new(50),
-                ..Default::default()
-            },
+            locks: ParameterLocks::from_pairs([(
+                ParameterId::Tone,
+                ParameterValue::Percent(Percent::new(50).unwrap()),
+            )]),
         });
         assert!(matches!(
             synth.validate(),
@@ -3492,16 +3344,24 @@ mod tests {
         );
 
         let mut project = Project::new();
-        project.tracks[0].lfos.cutoff = Some(LfoConfig::default());
+        project.tracks[0]
+            .lfos
+            .set(ParameterId::Cutoff, Some(LfoConfig::default()));
         assert_eq!(project.validate(), Err(ValidationError::Lfo(0, "cutoff")));
-        project.tracks[0].lfos.cutoff = None;
-        project.tracks[SYNTH_TRACK_START].lfos.tone = Some(LfoConfig::default());
+        project.tracks[0].lfos.set(ParameterId::Cutoff, None);
+        project.tracks[SYNTH_TRACK_START]
+            .lfos
+            .set(ParameterId::Tone, Some(LfoConfig::default()));
         assert_eq!(
             project.validate(),
             Err(ValidationError::Lfo(SYNTH_TRACK_START, "tone"))
         );
-        project.tracks[SYNTH_TRACK_START].lfos.tone = None;
-        project.tracks[CHORD_TRACK_INDEX].lfos.release = Some(LfoConfig::default());
+        project.tracks[SYNTH_TRACK_START]
+            .lfos
+            .set(ParameterId::Tone, None);
+        project.tracks[CHORD_TRACK_INDEX]
+            .lfos
+            .set(ParameterId::Release, Some(LfoConfig::default()));
         project.validate().unwrap();
         assert!(ParameterId::Pitch.supports_lfo(TrackKind::Chord));
         assert!(ParameterId::Pitch.supports_lfo(TrackKind::Lead));
@@ -3509,18 +3369,26 @@ mod tests {
         assert!(!ParameterId::Noise.supports_lfo(TrackKind::Chord));
         assert!(!ParameterId::Noise.supports_lfo(TrackKind::Lead));
         assert!(!ParameterId::KeyboardTracking.supports_lfo(TrackKind::Lead));
-        project.tracks[CHORD_TRACK_INDEX].lfos.noise = Some(LfoConfig::default());
+        project.tracks[CHORD_TRACK_INDEX]
+            .lfos
+            .set(ParameterId::Noise, Some(LfoConfig::default()));
         assert_eq!(
             project.validate(),
             Err(ValidationError::Lfo(CHORD_TRACK_INDEX, "noise"))
         );
-        project.tracks[CHORD_TRACK_INDEX].lfos.noise = None;
-        project.tracks[LEAD_TRACK_INDEX].lfos.keyboard_tracking = Some(LfoConfig::default());
+        project.tracks[CHORD_TRACK_INDEX]
+            .lfos
+            .set(ParameterId::Noise, None);
+        project.tracks[LEAD_TRACK_INDEX]
+            .lfos
+            .set(ParameterId::KeyboardTracking, Some(LfoConfig::default()));
         assert_eq!(
             project.validate(),
             Err(ValidationError::Lfo(LEAD_TRACK_INDEX, "keyboard_tracking"))
         );
-        project.tracks[LEAD_TRACK_INDEX].lfos.keyboard_tracking = None;
+        project.tracks[LEAD_TRACK_INDEX]
+            .lfos
+            .set(ParameterId::KeyboardTracking, None);
         assert!(!ParameterId::Pitch.is_valid_for(TrackKind::Chord));
         assert!(!project.tracks[CHORD_TRACK_INDEX].set_parameter(
             ParameterId::Pitch,
@@ -3530,9 +3398,13 @@ mod tests {
             ParameterId::Pitch,
             ParameterValue::Percent(Percent::new(50).unwrap())
         ));
-        project.tracks[CHORD_TRACK_INDEX].lfos.pitch = Some(LfoConfig::default());
+        project.tracks[CHORD_TRACK_INDEX]
+            .lfos
+            .set(ParameterId::Pitch, Some(LfoConfig::default()));
         project.validate().unwrap();
-        project.tracks[SYNTH_TRACK_START].lfos.pitch = Some(LfoConfig::default());
+        project.tracks[SYNTH_TRACK_START]
+            .lfos
+            .set(ParameterId::Pitch, Some(LfoConfig::default()));
         assert_eq!(
             project.validate(),
             Err(ValidationError::Lfo(SYNTH_TRACK_START, "pitch"))
@@ -3557,16 +3429,16 @@ mod tests {
 
     #[test]
     fn ordinary_locks_overlay_and_chord_articulation_is_not_a_lock() {
-        let mut locks = ParameterLocks {
-            cutoff: Some(Percent::new(20).unwrap()),
-            ..Default::default()
-        };
-        let overlay = ParameterLocks {
-            cutoff: Some(Percent::new(30).unwrap()),
-            ..Default::default()
-        };
+        let mut locks = ParameterLocks::from_pairs([(
+            ParameterId::Cutoff,
+            ParameterValue::Percent(Percent::new(20).unwrap()),
+        )]);
+        let overlay = ParameterLocks::from_pairs([(
+            ParameterId::Cutoff,
+            ParameterValue::Percent(Percent::new(30).unwrap()),
+        )]);
         locks.overlay(overlay);
-        assert_eq!(locks.cutoff, Some(Percent::new(30).unwrap()));
+        assert_eq!(locks.percent(ParameterId::Cutoff), Percent::new(30));
 
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
@@ -3579,6 +3451,39 @@ mod tests {
         assert_eq!(
             project.validate(),
             Err(ValidationError::Lock(0, 0, "cutoff"))
+        );
+    }
+
+    #[test]
+    fn indexed_parameter_storage_preserves_strict_json_schema() {
+        let locks = ParameterLocks::from_pairs([
+            (ParameterId::Cutoff, ParameterValue::Percent(p(42))),
+            (
+                ParameterId::Waveform,
+                ParameterValue::Waveform(Waveform::Saw),
+            ),
+            (ParameterId::Chorus, ParameterValue::Chorus(ChorusMode::Ii)),
+            (
+                ParameterId::Spread,
+                ParameterValue::Spread(ChordSpread::Wide),
+            ),
+            (
+                ParameterId::LeadSubMode,
+                ParameterValue::LeadSubMode(LeadSubMode::TwoOctaveSquare),
+            ),
+        ]);
+        let json = serde_json::to_string(&locks).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ParameterLocks>(&json).unwrap(),
+            locks
+        );
+        assert!(serde_json::from_str::<ParameterLocks>(r#"{"cutoff":20,"cutoff":30}"#).is_err());
+        assert!(serde_json::from_str::<ParameterLocks>(r#"{"unknown":20}"#).is_err());
+
+        let lfo = serde_json::to_string(&LfoAssignments::default()).unwrap();
+        assert_eq!(lfo, "{}");
+        assert!(
+            serde_json::from_str::<LfoAssignments>(r#"{"cutoff":null,"cutoff":null}"#).is_err()
         );
     }
 

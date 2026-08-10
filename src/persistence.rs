@@ -50,7 +50,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
         });
     }
-    let mut project: Project =
+    let project: Project =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
@@ -61,12 +61,6 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             path: path.into(),
             source,
         })?;
-    if !project.activate_pattern(0) {
-        return Err(ProjectIoError::Validation {
-            path: path.into(),
-            source: crate::model::ValidationError::TrackCount,
-        });
-    }
     Ok(project)
 }
 
@@ -180,8 +174,6 @@ mod tests {
             retrigger_count: 1,
             locks: Default::default(),
         });
-        project.activate_pattern(1);
-
         save_atomic(&path, &project).unwrap();
         let loaded = load(&path).unwrap();
 
@@ -386,7 +378,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("mixed.groove.json");
         let mut project = Project::new();
-        for (track, length) in project.tracks.iter_mut().zip([1, 7, 16, 31, 32, 64]) {
+        for (track, length) in project.patterns[0]
+            .tracks
+            .iter_mut()
+            .zip([1, 7, 16, 31, 32, 64])
+        {
             track.steps.resize(length, None);
         }
         save_atomic(&f, &project).unwrap();
@@ -413,25 +409,34 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("lfos.groove.json");
         let mut project = Project::new();
-        project.tracks[0].lfos.tune = Some(crate::model::LfoConfig {
-            waveform: crate::model::LfoWaveform::SampleAndHold,
-            reset_on_trigger: true,
-            start_phase: crate::model::Percent::new(25).unwrap(),
-            rate: crate::model::LfoRate::Free {
-                rate_percent: crate::model::Percent::new(75).unwrap(),
-            },
-            depth: crate::model::Percent::new(40).unwrap(),
-            enabled: true,
-        });
-        project.tracks[crate::model::SYNTH_TRACK_START].lfos.cutoff =
-            Some(crate::model::LfoConfig::default());
-        project.tracks[crate::model::CHORD_TRACK_INDEX].lfos.pitch =
+        project.tracks[0].lfos.set(
+            crate::model::ParameterId::Tune,
+            Some(crate::model::LfoConfig {
+                waveform: crate::model::LfoWaveform::SampleAndHold,
+                reset_on_trigger: true,
+                start_phase: crate::model::Percent::new(25).unwrap(),
+                rate: crate::model::LfoRate::Free {
+                    rate_percent: crate::model::Percent::new(75).unwrap(),
+                },
+                depth: crate::model::Percent::new(40).unwrap(),
+                enabled: true,
+            }),
+        );
+        project.tracks[crate::model::SYNTH_TRACK_START].lfos.set(
+            crate::model::ParameterId::Cutoff,
+            Some(crate::model::LfoConfig::default()),
+        );
+        project.tracks[crate::model::CHORD_TRACK_INDEX].lfos.set(
+            crate::model::ParameterId::Pitch,
             Some(crate::model::LfoConfig {
                 depth: crate::model::Percent::new(100).unwrap(),
                 ..Default::default()
-            });
-        project.tracks[crate::model::LEAD_TRACK_INDEX].lfos.pitch =
-            Some(crate::model::LfoConfig::default());
+            }),
+        );
+        project.tracks[crate::model::LEAD_TRACK_INDEX].lfos.set(
+            crate::model::ParameterId::Pitch,
+            Some(crate::model::LfoConfig::default()),
+        );
         save_atomic(&path, &project).unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded, project);
@@ -476,7 +481,10 @@ mod tests {
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
 
         let mut project = Project::new();
-        project.tracks[0].lfos.tune = Some(crate::model::LfoConfig::default());
+        project.tracks[0].lfos.set(
+            crate::model::ParameterId::Tune,
+            Some(crate::model::LfoConfig::default()),
+        );
         let mut value = serde_json::to_value(project).unwrap();
         value["tracks"][0]["lfos"]["tune"]
             .as_object_mut()
@@ -537,7 +545,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
         assert!(matches!(
-            loaded.tracks[crate::model::CHORD_TRACK_INDEX].steps[0],
+            loaded.patterns[0].tracks[crate::model::CHORD_TRACK_INDEX].steps[0],
             Some(crate::model::StepEvent::Note {
                 chord_shape: None,
                 ..

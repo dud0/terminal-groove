@@ -283,7 +283,7 @@ pub(super) fn render_chord_popup(
     let popup_area = lfo_popup_rect(area);
     f.render_widget(Clear, popup_area);
     let track = a.row.saturating_sub(1);
-    let origin = match a.editor.project.tracks[track].steps[step] {
+    let origin = match a.editor.active_steps(track).unwrap()[step] {
         Some(StepEvent::Note { .. }) => "TRIGGER",
         Some(StepEvent::Tie { .. }) => "INHERITED",
         None => "INPUT",

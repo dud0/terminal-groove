@@ -105,9 +105,4 @@ impl Audio {
             pattern_map,
         }
     }
-
-    #[cfg(test)]
-    pub fn snapshot_for_pattern(project: &Project, _active_pattern: usize) -> AudioCommand {
-        Self::snapshot(project)
-    }
 }

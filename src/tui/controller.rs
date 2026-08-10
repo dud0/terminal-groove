@@ -116,10 +116,9 @@ pub(super) fn sync_project_with_smoothing(
         ParameterSmoothing::Default
     };
     let pattern_map = a.editor.take_pattern_map();
-    let project = a.editor.synchronized_project();
     if audio
         .send(Audio::snapshot_with_smoothing_and_map(
-            &project,
+            a.editor.project(),
             smoothing,
             pattern_map,
         ))
@@ -145,7 +144,7 @@ pub(super) fn change_octave(a: &mut App, audio: &mut Audio, d: i8) {
         a.status = "Audio command queue full; edit rejected".into();
         return;
     }
-    let changed = a.editor.edit(None, |p| {
+    let changed = a.editor.edit(None, |p, _| {
         p.tracks[ti].input_octave = Some(new);
         Ok(())
     });
@@ -167,8 +166,7 @@ pub(super) fn enter_error(a: &mut App, message: impl Into<String>) {
 
 pub(super) fn save(a: &mut App) -> Result<()> {
     if let Some(path) = a.path.clone() {
-        let project = a.editor.synchronized_project();
-        match persistence::save_atomic(&path, &project) {
+        match persistence::save_atomic(&path, a.editor.project()) {
             Ok(()) => {
                 a.editor.mark_saved();
                 a.status = format!("Saved {}", path.display())
@@ -208,8 +206,7 @@ pub(super) fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
                     return Ok(());
                 }
             };
-            let project = a.editor.synchronized_project();
-            match persistence::save_atomic(&path, &project) {
+            match persistence::save_atomic(&path, a.editor.project()) {
                 Ok(()) => {
                     a.path = Some(path.clone());
                     a.editor.mark_saved();
@@ -457,7 +454,7 @@ pub(super) fn edit_global<F: FnOnce(&mut crate::model::Globals)>(
         .editor
         .edit(
             Some(crate::reducer::CoalesceKey(usize::MAX, 0, id as u8)),
-            |p| {
+            |p, _| {
                 f(&mut p.globals);
                 Ok(())
             },
@@ -696,7 +693,7 @@ pub(super) fn refresh_audio_status(a: &mut App, audio: &mut Audio) {
     for track in 0..TRACK_COUNT {
         let step = audio.status.playheads[track].load(Ordering::Acquire);
         a.playheads[track] =
-            (step < a.editor.project.tracks[track].steps.len() as u8).then_some(step as usize);
+            (step < a.editor.active_steps(track).unwrap().len() as u8).then_some(step as usize);
     }
     a.callback_overruns = audio.status.callback_overruns.load(Ordering::Relaxed);
     a.max_callback_duration_ns = audio

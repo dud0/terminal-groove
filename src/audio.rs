@@ -519,9 +519,18 @@ mod tests {
     use crate::model::{
         ArpeggioRate, ArpeggioType, ChordShape, ChordSpread, DistortionParameters,
         FlangerParameters, LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
-        PhaserParameters, RIMSHOT_TRACK_INDEX, TrackEffects,
+        ParameterValue, PhaserParameters, RIMSHOT_TRACK_INDEX, TrackEffects,
     };
     use std::{fs, time::Instant};
+
+    fn parameter_locks<const N: usize>(pairs: [(ParameterId, u8); N]) -> ParameterLocks {
+        ParameterLocks::from_pairs(pairs.map(|(parameter, value)| {
+            (
+                parameter,
+                ParameterValue::Percent(Percent::new(value).unwrap()),
+            )
+        }))
+    }
 
     fn performance_project() -> Project {
         let mut project = Project::new();
@@ -1032,37 +1041,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_uses_the_editor_workspace_only_for_the_committed_pattern() {
-        let mut project = Project::new();
-        project.patterns.push(project.patterns[0].clone());
-        project.patterns[1].tracks[0].steps[1] = Some(StepEvent::Trigger {
-            accent: true,
-            recipe: crate::model::DrumRecipeSlot::ONE,
-            condition: Default::default(),
-            retrigger_count: 1,
-            locks: Default::default(),
-        });
-        project.activate_pattern(1);
-
-        let AudioCommand::ReplaceProject {
-            project: snapshot, ..
-        } = Audio::snapshot_for_pattern(&project, 1)
-        else {
-            panic!()
-        };
-        assert!(
-            snapshot.patterns[0].tracks[0]
-                .steps
-                .iter()
-                .all(Option::is_none)
-        );
-        assert!(matches!(
-            snapshot.patterns[1].tracks[0].steps[1],
-            Some(StepEvent::Trigger { accent: true, .. })
-        ));
-    }
-
-    #[test]
     fn renderer_reports_independent_track_playheads() {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps.resize(3, None);
@@ -1552,10 +1530,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
-            locks: ParameterLocks {
-                pan: Percent::new(25),
-                ..Default::default()
-            },
+            locks: parameter_locks([(ParameterId::Pan, 25)]),
         });
         renderer.command(Audio::snapshot(&project));
         renderer.audition_once(0, 0);
@@ -2068,10 +2043,7 @@ mod tests {
                 slide,
                 condition: Default::default(),
                 retrigger_count: 1,
-                locks: ParameterLocks {
-                    portamento_time: Percent::new(portamento),
-                    ..Default::default()
-                },
+                locks: parameter_locks([(ParameterId::PortamentoTime, portamento)]),
             }
         }
 
@@ -2089,10 +2061,7 @@ mod tests {
         assert!(first > source && first < source * 1.01);
 
         project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[1] = Some(StepEvent::Tie {
-            locks: ParameterLocks {
-                portamento_time: Percent::new(0),
-                ..Default::default()
-            },
+            locks: parameter_locks([(ParameterId::PortamentoTime, 0)]),
         });
         project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[2] = Some(note(8, false, 100));
         let status = Arc::new(AudioStatus::default());
@@ -2357,10 +2326,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
-            locks: ParameterLocks {
-                level: Some(Percent::ZERO),
-                ..Default::default()
-            },
+            locks: parameter_locks([(ParameterId::Level, 0)]),
         });
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
@@ -2389,16 +2355,16 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
-            locks: ParameterLocks {
-                cutoff: Percent::new(20),
-                ..Default::default()
-            },
+            locks: parameter_locks([(ParameterId::Cutoff, 20)]),
         });
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
         renderer.command(AudioCommand::PlayPause);
         renderer.boundary(0);
-        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            Percent::new(20)
+        );
 
         let mut edited = project.clone();
         let Some(StepEvent::BassNote { locks, .. }) =
@@ -2406,12 +2372,21 @@ mod tests {
         else {
             panic!("expected Bass note")
         };
-        locks.cutoff = Percent::new(80);
+        locks.set(
+            ParameterId::Cutoff,
+            ParameterValue::Percent(Percent::new(80).unwrap()),
+        );
         renderer.command(Audio::snapshot(&edited));
-        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            Percent::new(20)
+        );
 
         renderer.boundary(0);
-        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(80));
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            Percent::new(80)
+        );
     }
 
     #[test]
@@ -2424,17 +2399,10 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
-            locks: ParameterLocks {
-                level: Percent::new(30),
-                cutoff: Percent::new(20),
-                ..Default::default()
-            },
+            locks: parameter_locks([(ParameterId::Level, 30), (ParameterId::Cutoff, 20)]),
         });
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Tie {
-            locks: ParameterLocks {
-                resonance: Percent::new(70),
-                ..Default::default()
-            },
+            locks: parameter_locks([(ParameterId::Resonance, 70)]),
         });
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[2] = Some(StepEvent::Tie {
             locks: Default::default(),
@@ -2443,19 +2411,46 @@ mod tests {
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
 
         renderer.boundary(0);
-        assert_eq!(renderer.synth[0].locks.level, Percent::new(30));
-        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
-        assert_eq!(renderer.synth[0].locks.resonance, None);
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Level),
+            Percent::new(30)
+        );
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            Percent::new(20)
+        );
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Resonance),
+            None
+        );
 
         renderer.boundary(0);
-        assert_eq!(renderer.synth[0].locks.level, Percent::new(30));
-        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
-        assert_eq!(renderer.synth[0].locks.resonance, Percent::new(70));
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Level),
+            Percent::new(30)
+        );
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            Percent::new(20)
+        );
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Resonance),
+            Percent::new(70)
+        );
 
         renderer.boundary(0);
-        assert_eq!(renderer.synth[0].locks.level, Percent::new(30));
-        assert_eq!(renderer.synth[0].locks.cutoff, Percent::new(20));
-        assert_eq!(renderer.synth[0].locks.resonance, Percent::new(70));
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Level),
+            Percent::new(30)
+        );
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            Percent::new(20)
+        );
+        assert_eq!(
+            renderer.synth[0].locks.percent(ParameterId::Resonance),
+            Percent::new(70)
+        );
     }
 
     #[test]
@@ -2474,16 +2469,15 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
-            locks: ParameterLocks {
-                cutoff: Percent::new(25),
-                ..Default::default()
-            },
+            locks: parameter_locks([(ParameterId::Cutoff, 25)]),
         });
         let status = Arc::new(AudioStatus::default());
         let renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
 
         assert_eq!(
-            renderer.locks_at(SYNTH_TRACK_START, 0).cutoff,
+            renderer
+                .locks_at(SYNTH_TRACK_START, 0)
+                .percent(ParameterId::Cutoff),
             Percent::new(25)
         );
     }
@@ -2516,11 +2510,7 @@ mod tests {
     fn synth_filter_mappings_match_the_specified_limits() {
         let project = AudioProject::from_project(&Project::new());
         let mut voice = SynthVoice::new(48_000.0);
-        let mut locks = ParameterLocks {
-            cutoff: Percent::new(0),
-            resonance: Percent::new(0),
-            ..Default::default()
-        };
+        let mut locks = parameter_locks([(ParameterId::Cutoff, 0), (ParameterId::Resonance, 0)]);
         Renderer::apply_synth_params(
             &project,
             48_000.0,
@@ -2540,8 +2530,14 @@ mod tests {
             (0.707 + voice.resonance_percent.next_value() / 100.0 * (10.0 - 0.707) - 0.707).abs()
                 < 0.001
         );
-        locks.cutoff = Percent::new(100);
-        locks.resonance = Percent::new(100);
+        locks.set(
+            ParameterId::Cutoff,
+            ParameterValue::Percent(Percent::new(100).unwrap()),
+        );
+        locks.set(
+            ParameterId::Resonance,
+            ParameterValue::Percent(Percent::new(100).unwrap()),
+        );
         Renderer::apply_synth_params(
             &project,
             48_000.0,
@@ -2567,10 +2563,7 @@ mod tests {
     #[test]
     fn juno_and_sh101_noise_controls_use_instrument_specific_source_ranges() {
         let project = AudioProject::from_project(&Project::new());
-        let locks = ParameterLocks {
-            noise: Percent::new(100),
-            ..Default::default()
-        };
+        let locks = parameter_locks([(ParameterId::Noise, 100)]);
         let mut juno = SynthVoice::new(48_000.0);
         Renderer::apply_synth_params(&project, 48_000.0, CHORD_TRACK_INDEX, locks, &mut juno, 0);
         let mut sh101 = SynthVoice::new(48_000.0);
@@ -2592,16 +2585,10 @@ mod tests {
             arpeggio: ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
-            locks: ParameterLocks {
-                cutoff: Percent::new(20),
-                ..Default::default()
-            },
+            locks: parameter_locks([(ParameterId::Cutoff, 20)]),
         });
         project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[1] = Some(StepEvent::Tie {
-            locks: ParameterLocks {
-                resonance: Percent::new(70),
-                ..Default::default()
-            },
+            locks: parameter_locks([(ParameterId::Resonance, 70)]),
         });
         project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[2] = Some(StepEvent::Note {
             degree: 4,
@@ -2630,7 +2617,7 @@ mod tests {
         for voice in &renderer.chord.voices
             [first_group * CHORD_GROUP_SIZE..first_group * CHORD_GROUP_SIZE + 3]
         {
-            assert_eq!(voice.locks.cutoff, Percent::new(20));
+            assert_eq!(voice.locks.percent(ParameterId::Cutoff), Percent::new(20));
         }
 
         renderer.boundary(0);
@@ -2638,8 +2625,11 @@ mod tests {
         for voice in &renderer.chord.voices
             [first_group * CHORD_GROUP_SIZE..first_group * CHORD_GROUP_SIZE + 3]
         {
-            assert_eq!(voice.locks.cutoff, Percent::new(20));
-            assert_eq!(voice.locks.resonance, Percent::new(70));
+            assert_eq!(voice.locks.percent(ParameterId::Cutoff), Percent::new(20));
+            assert_eq!(
+                voice.locks.percent(ParameterId::Resonance),
+                Percent::new(70)
+            );
         }
         renderer.boundary(0);
         assert_ne!(renderer.chord.group, first_group);
@@ -2924,13 +2914,16 @@ mod tests {
     #[test]
     fn sequence_lfo_freezes_on_pause_and_resets_on_stop() {
         let mut project = Project::new();
-        project.tracks[0].lfos.level = Some(crate::model::LfoConfig {
-            rate: crate::model::LfoRate::Free {
-                rate_percent: Percent::new(100).unwrap(),
-            },
-            depth: Percent::new(50).unwrap(),
-            ..Default::default()
-        });
+        project.tracks[0].lfos.set(
+            ParameterId::Level,
+            Some(crate::model::LfoConfig {
+                rate: crate::model::LfoRate::Free {
+                    rate_percent: Percent::new(100).unwrap(),
+                },
+                depth: Percent::new(50).unwrap(),
+                ..Default::default()
+            }),
+        );
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 1_000, status);
         renderer.command(AudioCommand::PlayPause);
@@ -2951,16 +2944,19 @@ mod tests {
     #[test]
     fn trigger_reset_applies_exact_phase_before_drum_sampling() {
         let mut project = Project::new();
-        project.tracks[0].lfos.tune = Some(LfoConfig {
-            waveform: LfoWaveform::Square,
-            reset_on_trigger: true,
-            start_phase: Percent::new(75).unwrap(),
-            rate: LfoRate::Free {
-                rate_percent: Percent::new(100).unwrap(),
-            },
-            depth: Percent::new(50).unwrap(),
-            ..Default::default()
-        });
+        project.tracks[0].lfos.set(
+            ParameterId::Tune,
+            Some(LfoConfig {
+                waveform: LfoWaveform::Square,
+                reset_on_trigger: true,
+                start_phase: Percent::new(75).unwrap(),
+                rate: LfoRate::Free {
+                    rate_percent: Percent::new(100).unwrap(),
+                },
+                depth: Percent::new(50).unwrap(),
+                ..Default::default()
+            }),
+        );
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
             recipe: crate::model::DrumRecipeSlot::ONE,
@@ -2999,16 +2995,19 @@ mod tests {
     fn held_ties_do_not_reset_lfos_but_cold_ties_do() {
         let track = SYNTH_TRACK_START;
         let mut project = Project::new();
-        project.tracks[track].lfos.level = Some(LfoConfig {
-            waveform: LfoWaveform::Sine,
-            reset_on_trigger: true,
-            start_phase: Percent::new(25).unwrap(),
-            rate: LfoRate::Free {
-                rate_percent: Percent::new(100).unwrap(),
-            },
-            depth: Percent::new(40).unwrap(),
-            ..Default::default()
-        });
+        project.tracks[track].lfos.set(
+            ParameterId::Level,
+            Some(LfoConfig {
+                waveform: LfoWaveform::Sine,
+                reset_on_trigger: true,
+                start_phase: Percent::new(25).unwrap(),
+                rate: LfoRate::Free {
+                    rate_percent: Percent::new(100).unwrap(),
+                },
+                depth: Percent::new(40).unwrap(),
+                ..Default::default()
+            }),
+        );
         project.patterns[0].tracks[track].steps[0] = Some(StepEvent::BassNote {
             degree: 1,
             octave: 3,
@@ -3045,16 +3044,19 @@ mod tests {
     fn chord_arpeggio_substeps_do_not_reset_lfos() {
         let track = CHORD_TRACK_INDEX;
         let mut project = Project::new();
-        project.tracks[track].lfos.level = Some(LfoConfig {
-            waveform: LfoWaveform::Sine,
-            reset_on_trigger: true,
-            start_phase: Percent::new(25).unwrap(),
-            rate: LfoRate::Free {
-                rate_percent: Percent::new(100).unwrap(),
-            },
-            depth: Percent::new(40).unwrap(),
-            ..Default::default()
-        });
+        project.tracks[track].lfos.set(
+            ParameterId::Level,
+            Some(LfoConfig {
+                waveform: LfoWaveform::Sine,
+                reset_on_trigger: true,
+                start_phase: Percent::new(25).unwrap(),
+                rate: LfoRate::Free {
+                    rate_percent: Percent::new(100).unwrap(),
+                },
+                depth: Percent::new(40).unwrap(),
+                ..Default::default()
+            }),
+        );
         project.patterns[0].tracks[track].steps[0] = Some(StepEvent::Note {
             degree: 1,
             octave: 3,
@@ -3207,10 +3209,7 @@ mod tests {
         let tom = Renderer::drum_controls(
             project.tracks[3],
             crate::model::DrumRecipeSlot::THREE,
-            ParameterLocks {
-                decay: Percent::new(12),
-                ..Default::default()
-            },
+            parameter_locks([(ParameterId::Decay, 12)]),
             &offsets,
         )
         .unwrap();

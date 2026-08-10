@@ -192,14 +192,15 @@ pub(super) fn step_cell(event: Option<&StepEvent>) -> String {
 
 pub(super) fn selected_accent(a: &App, track: usize) -> Option<(bool, Option<usize>)> {
     let t = a.editor.project.tracks.get(track)?;
-    let Some(event) = t.steps[a.step].as_ref() else {
+    let steps = a.editor.active_steps(track)?;
+    let Some(event) = steps[a.step].as_ref() else {
         return Some((t.input_accent, None));
     };
     if let Some(accent) = event.accent() {
         return Some((accent, None));
     }
-    let source = crate::model::tie_source(&a.editor.project.tracks[track].steps, a.step)?;
-    a.editor.project.tracks[track].steps[source]
+    let source = crate::model::tie_source(steps, a.step)?;
+    steps[source]
         .as_ref()?
         .accent()
         .map(|accent| (accent, Some(source)))
@@ -208,22 +209,21 @@ pub(super) fn selected_accent(a: &App, track: usize) -> Option<(bool, Option<usi
 pub(super) fn articulation_title(a: &App, track: usize) -> String {
     match selected_accent(a, track) {
         Some((accent, None)) => {
-            let is_default = a.editor.project.tracks[track].steps[a.step].is_none();
+            let steps = a.editor.active_steps(track).unwrap();
+            let is_default = steps[a.step].is_none();
             let mut text = format!(
                 "Accent {}{}",
                 if is_default { "default " } else { "" },
                 if accent { "on" } else { "off" }
             );
             if let Some(StepEvent::BassNote { slide, .. } | StepEvent::LeadNote { slide, .. }) =
-                a.editor.project.tracks[track].steps[a.step]
+                steps[a.step]
             {
                 text.push_str(&format!(" · Slide {}", if slide { "on" } else { "off" }));
             }
             let kind = a.editor.project.tracks[track].kind;
             if matches!(kind, TrackKind::Hat | TrackKind::Tom)
-                && let Some(recipe) = a.editor.project.tracks[track].steps[a.step]
-                    .as_ref()
-                    .and_then(StepEvent::drum_recipe)
+                && let Some(recipe) = steps[a.step].as_ref().and_then(StepEvent::drum_recipe)
             {
                 text.push_str(" · ");
                 text.push_str(recipe_label(kind, recipe));
@@ -245,18 +245,15 @@ pub(super) fn selected_chord_shape(a: &App, track: usize) -> Option<ChordShape> 
     if a.editor.project.tracks.get(track)?.kind != TrackKind::Chord {
         return None;
     }
-    match a.editor.project.tracks[track].steps[a.step].as_ref() {
+    let steps = a.editor.active_steps(track)?;
+    match steps[a.step].as_ref() {
         Some(StepEvent::Note { chord_shape, .. }) => Some(chord_shape.unwrap_or_default()),
-        Some(StepEvent::Tie { .. }) => {
-            crate::model::tie_source(&a.editor.project.tracks[track].steps, a.step).and_then(
-                |source| match a.editor.project.tracks[track].steps[source].as_ref() {
-                    Some(StepEvent::Note { chord_shape, .. }) => {
-                        Some(chord_shape.unwrap_or_default())
-                    }
-                    _ => None,
-                },
-            )
-        }
+        Some(StepEvent::Tie { .. }) => crate::model::tie_source(steps, a.step).and_then(|source| {
+            match steps[source].as_ref() {
+                Some(StepEvent::Note { chord_shape, .. }) => Some(chord_shape.unwrap_or_default()),
+                _ => None,
+            }
+        }),
         None => Some(
             a.editor.project.tracks[track]
                 .input_chord_shape
@@ -793,8 +790,9 @@ pub(super) fn recipe_label(kind: TrackKind, recipe: crate::model::DrumRecipeSlot
 }
 
 pub(super) fn selected_drum_recipe(a: &App, track: usize) -> crate::model::DrumRecipeSlot {
-    a.editor.project.tracks[track]
-        .steps
+    a.editor
+        .active_steps(track)
+        .unwrap()
         .get(a.step)
         .and_then(Option::as_ref)
         .and_then(StepEvent::drum_recipe)
@@ -854,10 +852,8 @@ pub(super) fn displayed_parameter_for_recipe(
     }
     let locked = a
         .editor
-        .project
-        .tracks
-        .get(track)
-        .and_then(|t| t.steps.get(step))
+        .active_steps(track)
+        .and_then(|steps| steps.get(step))
         .and_then(Option::as_ref)
         .is_some_and(|event| lock_has_parameter(event, parameter));
     if recipe_parameter && selected_drum_recipe(a, track) != recipe {
@@ -1889,9 +1885,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         chunks[1],
     );
     let available_rows = chunks[2].height.saturating_sub(3) as usize;
-    let heights = a
-        .editor
-        .project
+    let heights = a.editor.project.patterns[a.editor.pattern()]
         .tracks
         .iter()
         .map(|track| track.steps.len().div_ceil(STEP_ROW_SIZE))
@@ -1916,7 +1910,8 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         .skip(first_track)
     {
         let track = &a.editor.project.tracks[ti];
-        let length = track.steps.len();
+        let steps = a.editor.active_steps(ti).unwrap();
+        let length = steps.len();
         for line_index in 0..track_height {
             let line_start = line_index * STEP_ROW_SIZE;
             let line_end = (line_start + STEP_ROW_SIZE).min(length);
@@ -1950,7 +1945,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                     style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
                 }
                 if matches!(
-                    track.steps[step],
+                    steps[step],
                     Some(
                         StepEvent::BassNote { slide: true, .. }
                             | StepEvent::LeadNote { slide: true, .. }
@@ -1959,7 +1954,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                     style = style.add_modifier(Modifier::UNDERLINED);
                 }
                 if matches!(
-                    track.steps[step].as_ref(),
+                    steps[step].as_ref(),
                     Some(StepEvent::BassNote {
                         condition,
                         retrigger_count,
@@ -1974,8 +1969,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                     style = style.fg(Color::Magenta).add_modifier(Modifier::BOLD);
                 }
                 cells.push(
-                    ratatui::widgets::Cell::from(step_cell(track.steps[step].as_ref()))
-                        .style(style),
+                    ratatui::widgets::Cell::from(step_cell(steps[step].as_ref())).style(style),
                 );
             }
             rows.push(Row::new(cells));
@@ -2001,7 +1995,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     header_cells.extend(((STEP_BANK_SIZE + 1)..=STEP_ROW_SIZE).map(|n| format!(" {n:02}").into()));
     let trigger_summary = if a.row > 0 {
         let track = a.row - 1;
-        a.editor.project.tracks[track].steps[a.step]
+        a.editor.active_steps(track).unwrap()[a.step]
             .as_ref()
             .and_then(|event| event.condition().zip(event.retrigger_count()))
             .map(|(condition, count)| format!(" · {condition}, x{count}"))
@@ -2195,7 +2189,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             ),
         ),
         Mode::TrackLengthInput(input) => {
-            let current = a.editor.project.tracks[a.row - 1].steps.len();
+            let current = a.editor.active_steps(a.row - 1).unwrap().len();
             popup(
                 f,
                 area,

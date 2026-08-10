@@ -7,6 +7,7 @@ use crate::model::{
 };
 use std::{
     collections::VecDeque,
+    ops::{Deref, DerefMut},
     time::{Duration, Instant},
 };
 
@@ -65,20 +66,88 @@ impl std::fmt::Display for EditError {
 
 #[derive(Clone)]
 struct Revision {
-    before: Project,
-    after: Project,
-    before_pattern: usize,
-    after_pattern: usize,
+    delta: ProjectDelta,
+    pattern: usize,
     coalesce: Option<CoalesceKey>,
     at: Instant,
     pattern_map: PatternIndexMap,
     inverse_pattern_map: PatternIndexMap,
 }
+
+#[derive(Clone, Default)]
+struct ProjectDelta {
+    globals: Option<crate::model::Globals>,
+    tracks: Vec<(usize, crate::model::Track)>,
+    sequences: Vec<(usize, usize, Vec<Step>)>,
+    patterns: Option<Vec<Pattern>>,
+    song: Option<Vec<crate::model::SongEntry>>,
+}
+
+impl ProjectDelta {
+    fn between(before: Project, after: &Project) -> Self {
+        let globals = (before.globals != after.globals).then_some(before.globals);
+        let tracks = before
+            .tracks
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, track)| (track != after.tracks[index]).then_some((index, track)))
+            .collect();
+        let structural = before.patterns.len() != after.patterns.len()
+            || before
+                .patterns
+                .iter()
+                .zip(&after.patterns)
+                .any(|(left, right)| left.tracks.len() != right.tracks.len());
+        let (patterns, sequences) = if structural {
+            (Some(before.patterns), Vec::new())
+        } else {
+            let mut sequences = Vec::new();
+            for (pattern, (left, right)) in
+                before.patterns.into_iter().zip(&after.patterns).enumerate()
+            {
+                for (track, (left, right)) in left.tracks.into_iter().zip(&right.tracks).enumerate()
+                {
+                    if left.steps != right.steps {
+                        sequences.push((pattern, track, left.steps));
+                    }
+                }
+            }
+            (None, sequences)
+        };
+        let song = (before.song != after.song).then_some(before.song);
+        Self {
+            globals,
+            tracks,
+            sequences,
+            patterns,
+            song,
+        }
+    }
+
+    fn swap(&mut self, project: &mut Project) {
+        if let Some(globals) = &mut self.globals {
+            std::mem::swap(globals, &mut project.globals);
+        }
+        for (index, track) in &mut self.tracks {
+            std::mem::swap(track, &mut project.tracks[*index]);
+        }
+        if let Some(patterns) = &mut self.patterns {
+            std::mem::swap(patterns, &mut project.patterns);
+        } else {
+            for (pattern, track, steps) in &mut self.sequences {
+                std::mem::swap(steps, &mut project.patterns[*pattern].tracks[*track].steps);
+            }
+        }
+        if let Some(song) = &mut self.song {
+            std::mem::swap(song, &mut project.song);
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoalesceKey(pub usize, pub usize, pub u8);
 
 pub struct Editor {
-    pub project: Project,
+    pub(crate) project: Project,
     pattern: usize,
     saved: Project,
     undo: VecDeque<Revision>,
@@ -94,8 +163,81 @@ struct StepClipboard {
     step: Step,
 }
 
+struct ActiveTrack<'a> {
+    track: &'a crate::model::Track,
+    steps: &'a Vec<Step>,
+}
+
+impl Deref for ActiveTrack<'_> {
+    type Target = crate::model::Track;
+    fn deref(&self) -> &Self::Target {
+        self.track
+    }
+}
+
+struct ActiveTrackMut<'a> {
+    track: &'a mut crate::model::Track,
+    steps: &'a mut Vec<Step>,
+}
+
+impl Deref for ActiveTrackMut<'_> {
+    type Target = crate::model::Track;
+    fn deref(&self) -> &Self::Target {
+        self.track
+    }
+}
+
+impl DerefMut for ActiveTrackMut<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.track
+    }
+}
+
+fn active_track(
+    project: &Project,
+    pattern: usize,
+    track: usize,
+) -> Result<ActiveTrack<'_>, EditError> {
+    let track_data = project.tracks.get(track).ok_or(EditError::InvalidTrack)?;
+    let steps = &project
+        .patterns
+        .get(pattern)
+        .ok_or(EditError::InvalidStep)?
+        .tracks
+        .get(track)
+        .ok_or(EditError::InvalidTrack)?
+        .steps;
+    Ok(ActiveTrack {
+        track: track_data,
+        steps,
+    })
+}
+
+fn active_track_mut(
+    project: &mut Project,
+    pattern: usize,
+    track: usize,
+) -> Result<ActiveTrackMut<'_>, EditError> {
+    let track_data = project
+        .tracks
+        .get_mut(track)
+        .ok_or(EditError::InvalidTrack)?;
+    let steps = &mut project
+        .patterns
+        .get_mut(pattern)
+        .ok_or(EditError::InvalidStep)?
+        .tracks
+        .get_mut(track)
+        .ok_or(EditError::InvalidTrack)?
+        .steps;
+    Ok(ActiveTrackMut {
+        track: track_data,
+        steps,
+    })
+}
+
 fn read_parameter(
-    track: &crate::model::Track,
+    track: &ActiveTrack<'_>,
     step: usize,
     scope: Scope,
     parameter: ParameterId,
@@ -118,7 +260,7 @@ fn read_parameter(
 }
 
 fn write_parameter(
-    track: &mut crate::model::Track,
+    track: &mut ActiveTrackMut<'_>,
     step: usize,
     scope: Scope,
     parameter: ParameterId,
@@ -149,7 +291,7 @@ fn write_parameter(
 }
 
 fn clear_parameter_lock(
-    track: &mut crate::model::Track,
+    track: &mut ActiveTrackMut<'_>,
     step: usize,
     parameter: ParameterId,
 ) -> Result<(), EditError> {
@@ -167,8 +309,7 @@ fn clear_parameter_lock(
 }
 
 impl Editor {
-    pub fn new(mut project: Project) -> Self {
-        project.activate_pattern(0);
+    pub fn new(project: Project) -> Self {
         Self {
             saved: project.clone(),
             project,
@@ -184,7 +325,6 @@ impl Editor {
         self.project != self.saved
     }
     pub fn mark_saved(&mut self) {
-        self.commit_active_pattern();
         self.saved = self.project.clone();
     }
     pub fn end_coalescing(&mut self) {
@@ -193,8 +333,6 @@ impl Editor {
         }
     }
     pub fn replace_loaded(&mut self, p: Project) {
-        let mut p = p;
-        p.activate_pattern(0);
         self.project = p.clone();
         self.saved = p;
         self.undo.clear();
@@ -214,28 +352,17 @@ impl Editor {
         if pattern >= self.project.patterns.len() {
             return false;
         }
-        self.commit_active_pattern();
-        if !self.project.activate_pattern(pattern) {
-            return false;
-        }
         self.pattern = pattern;
         true
     }
 
-    /// Return a project snapshot with the active transient workspace committed
-    /// to its canonical pattern.  Audio and persistence callers should use
-    /// this boundary instead of cloning `project` directly.
-    pub fn synchronized_project(&mut self) -> Project {
-        self.commit_active_pattern();
-        self.project.clone()
+    pub fn project(&self) -> &Project {
+        &self.project
     }
 
     /// Read-only access to the active editor workspace.
     pub fn active_steps(&self, track: usize) -> Option<&[crate::model::Step]> {
-        self.project
-            .tracks
-            .get(track)
-            .map(|track| track.steps.as_slice())
+        self.project.pattern_steps(self.pattern, track)
     }
 
     /// Read one active workspace step without exposing a mutable dual-state
@@ -244,15 +371,6 @@ impl Editor {
         self.active_steps(track)?.get(step).copied()
     }
 
-    fn commit_active_pattern(&mut self) {
-        debug_assert!(self.pattern < self.project.patterns.len());
-        let _ = self.project.store_active_pattern(self.pattern);
-    }
-
-    fn activate_current_pattern(&mut self) {
-        debug_assert!(self.pattern < self.project.patterns.len());
-        let _ = self.project.activate_pattern(self.pattern);
-    }
     fn empty_pattern() -> Pattern {
         Pattern {
             tracks: (0..crate::model::TRACK_COUNT)
@@ -263,33 +381,21 @@ impl Editor {
         }
     }
     fn current_pattern(&self) -> Pattern {
-        let mut pattern = self.project.patterns[self.pattern].clone();
-        for (dst, track) in pattern.tracks.iter_mut().zip(&self.project.tracks) {
-            dst.steps = track.steps.clone();
-        }
-        pattern
+        self.project.patterns[self.pattern].clone()
     }
     fn pattern_structure_edit<F>(&mut self, f: F) -> Result<bool, EditError>
     where
         F: FnOnce(&mut Project, usize) -> Result<usize, EditError>,
     {
-        self.commit_active_pattern();
         let before = self.project.clone();
         let before_count = before.patterns.len();
         let before_pattern = self.pattern;
         let next_pattern = f(&mut self.project, self.pattern)?;
         self.pattern = next_pattern;
-        self.activate_current_pattern();
         if before == self.project {
             return Ok(false);
         }
-        self.push_revision(
-            before,
-            before_pattern,
-            self.project.clone(),
-            self.pattern,
-            None,
-        );
+        self.push_revision(before, before_pattern, None);
         if self.project.patterns.len() == before_count + 1 {
             self.record_pattern_map(
                 PatternIndexMap::insert(before_pattern),
@@ -315,23 +421,15 @@ impl Editor {
         if cursor >= self.project.patterns.len() {
             return Ok((false, self.pattern));
         }
-        self.commit_active_pattern();
         let before = self.project.clone();
         let before_count = before.patterns.len();
         let before_pattern = self.pattern;
         let (next_cursor, next_active) = f(&mut self.project, cursor, before_pattern)?;
         self.pattern = next_active;
-        self.activate_current_pattern();
         if before == self.project {
             return Ok((false, next_cursor));
         }
-        self.push_revision(
-            before,
-            before_pattern,
-            self.project.clone(),
-            self.pattern,
-            None,
-        );
+        self.push_revision(before, before_pattern, None);
         if self.project.patterns.len() == before_count + 1 {
             self.record_pattern_map(
                 PatternIndexMap::insert(cursor),
@@ -349,18 +447,14 @@ impl Editor {
         &mut self,
         before: Project,
         before_pattern: usize,
-        after: Project,
-        after_pattern: usize,
         coalesce: Option<CoalesceKey>,
     ) {
         if self.undo.len() == 256 {
             self.undo.pop_front();
         }
         self.undo.push_back(Revision {
-            before,
-            after,
-            before_pattern,
-            after_pattern,
+            delta: ProjectDelta::between(before, &self.project),
+            pattern: before_pattern,
             coalesce,
             at: Instant::now(),
             pattern_map: PatternIndexMap::identity(),
@@ -499,11 +593,7 @@ impl Editor {
     }
 
     pub fn copy_step(&mut self, track: usize, step: usize) -> Result<(), EditError> {
-        let track = self
-            .project
-            .tracks
-            .get(track)
-            .ok_or(EditError::InvalidTrack)?;
+        let track = active_track(&self.project, self.pattern, track)?;
         let copied = *track.steps.get(step).ok_or(EditError::InvalidStep)?;
         self.step_clipboard = Some(StepClipboard {
             kind: track.kind,
@@ -519,11 +609,8 @@ impl Editor {
 
     pub fn paste_step(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
         let clipboard = self.step_clipboard.ok_or(EditError::EmptyStepClipboard)?;
-        self.edit(None, move |project| {
-            let destination = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |project, pattern| {
+            let destination = active_track_mut(project, pattern, track)?;
             if destination.kind != clipboard.kind {
                 return Err(EditError::IncompatibleStepClipboard);
             }
@@ -531,15 +618,15 @@ impl Editor {
                 return Err(EditError::InvalidStep);
             }
 
-            let mut candidate = destination.clone();
-            candidate.steps[step] = clipboard.step;
+            let mut candidate = destination.steps.clone();
+            candidate[step] = clipboard.step;
             if matches!(clipboard.step, Some(StepEvent::Tie { .. }))
-                && tie_source(&candidate.steps, step).is_none()
+                && tie_source(&candidate, step).is_none()
             {
                 return Err(EditError::InvalidTie);
             }
             cleanup_invalid_ties(&mut candidate);
-            *destination = candidate;
+            *destination.steps = candidate;
             Ok(())
         })
     }
@@ -597,12 +684,10 @@ impl Editor {
     }
     pub fn edit<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
     where
-        F: FnOnce(&mut Project) -> Result<(), EditError>,
+        F: FnOnce(&mut Project, usize) -> Result<(), EditError>,
     {
-        self.commit_active_pattern();
         let before = self.project.clone();
-        f(&mut self.project)?;
-        self.commit_active_pattern();
+        f(&mut self.project, self.pattern)?;
         if before == self.project {
             return Ok(false);
         }
@@ -613,18 +698,14 @@ impl Editor {
             });
         if merge {
             let r = self.undo.back_mut().unwrap();
-            r.after = self.project.clone();
-            r.after_pattern = self.pattern;
             r.at = now;
         } else {
             if self.undo.len() == 256 {
                 self.undo.pop_front();
             }
             self.undo.push_back(Revision {
-                before,
-                after: self.project.clone(),
-                before_pattern: self.pattern,
-                after_pattern: self.pattern,
+                delta: ProjectDelta::between(before, &self.project),
+                pattern: self.pattern,
                 coalesce: key,
                 at: now,
                 pattern_map: PatternIndexMap::identity(),
@@ -635,12 +716,11 @@ impl Editor {
         Ok(true)
     }
     pub fn undo(&mut self) -> bool {
-        self.commit_active_pattern();
-        if let Some(r) = self.undo.pop_back() {
-            self.project = r.before.clone();
-            self.pattern = r.before_pattern;
-            self.activate_current_pattern();
+        if let Some(mut r) = self.undo.pop_back() {
+            r.delta.swap(&mut self.project);
+            std::mem::swap(&mut r.pattern, &mut self.pattern);
             self.pending_pattern_map = r.inverse_pattern_map;
+            std::mem::swap(&mut r.pattern_map, &mut r.inverse_pattern_map);
             self.redo.push(r);
             true
         } else {
@@ -648,12 +728,11 @@ impl Editor {
         }
     }
     pub fn redo(&mut self) -> bool {
-        self.commit_active_pattern();
-        if let Some(r) = self.redo.pop() {
-            self.project = r.after.clone();
-            self.pattern = r.after_pattern;
-            self.activate_current_pattern();
-            self.pending_pattern_map = r.pattern_map;
+        if let Some(mut r) = self.redo.pop() {
+            r.delta.swap(&mut self.project);
+            std::mem::swap(&mut r.pattern, &mut self.pattern);
+            self.pending_pattern_map = r.inverse_pattern_map;
+            std::mem::swap(&mut r.pattern_map, &mut r.inverse_pattern_map);
             self.undo.push_back(r);
             true
         } else {
@@ -663,29 +742,31 @@ impl Editor {
 
     /// Fill empty cells in the active pattern as one undoable revision.
     pub fn generate_pattern(&mut self, config: GeneratorConfig) -> Result<usize, EditError> {
-        let generated = generator::generate(&self.project, config);
+        let generated = generator::generate_for_pattern(&self.project, self.pattern, config);
         if generated.inserted == 0 {
             return Ok(0);
         }
-        self.edit(None, |project| {
+        self.edit(None, |project, pattern| {
             for (index, steps) in generated.tracks.iter().enumerate() {
                 if matches!(config.target, GeneratorTarget::Track(track) if track != index) {
                     continue;
                 }
-                project.tracks[index].steps.clone_from(steps);
+                project.patterns[pattern].tracks[index]
+                    .steps
+                    .clone_from(steps);
             }
             Ok(())
         })?;
         Ok(generated.inserted)
     }
     pub fn toggle_event(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.edit(None, move |p| {
-            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |p, pattern| {
+            let t = active_track_mut(p, pattern, track)?;
             if step >= t.steps.len() {
                 return Err(EditError::InvalidStep);
             }
             if t.steps[step].is_some() {
-                clear_with_ties(t, step);
+                clear_with_ties(t.steps, step);
                 return Ok(());
             }
             t.steps[step] = Some(if t.kind == TrackKind::Bass {
@@ -739,11 +820,7 @@ impl Editor {
         track: usize,
         step: usize,
     ) -> Result<DrumRecipeSlot, EditError> {
-        let track = self
-            .project
-            .tracks
-            .get(track)
-            .ok_or(EditError::InvalidTrack)?;
+        let track = active_track(&self.project, self.pattern, track)?;
         track
             .steps
             .get(step)
@@ -759,20 +836,19 @@ impl Editor {
         step: usize,
         recipe: DrumRecipeSlot,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project| {
-            let track = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |project, pattern| {
+            let track = active_track_mut(project, pattern, track)?;
             if !matches!(track.kind, TrackKind::Hat | TrackKind::Tom)
                 || recipe.get() > track.drum_recipe_count()
             {
                 return Err(EditError::InvalidDrumRecipe);
             }
+            let input_accent = track.input_accent;
+            let kind = track.kind;
             let event = track.steps.get_mut(step).ok_or(EditError::InvalidStep)?;
             if event.is_none() {
                 *event = Some(StepEvent::Trigger {
-                    accent: track.input_accent,
+                    accent: input_accent,
                     recipe,
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
@@ -784,7 +860,7 @@ impl Editor {
             *trigger
                 .drum_recipe_mut()
                 .ok_or(EditError::InvalidDrumRecipe)? = recipe;
-            clear_drum_sound_locks(trigger.locks_mut(), track.kind);
+            clear_drum_sound_locks(trigger.locks_mut(), kind);
             Ok(())
         })
     }
@@ -794,14 +870,12 @@ impl Editor {
         track: usize,
         step: usize,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project| {
-            let track = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |project, pattern| {
+            let track = active_track_mut(project, pattern, track)?;
             if !matches!(track.kind, TrackKind::Hat | TrackKind::Tom) {
                 return Err(EditError::InvalidDrumRecipe);
             }
+            let kind = track.kind;
             let trigger = track
                 .steps
                 .get_mut(step)
@@ -811,13 +885,13 @@ impl Editor {
             if trigger.drum_recipe().is_none() {
                 return Err(EditError::InvalidDrumRecipe);
             }
-            clear_drum_sound_locks(trigger.locks_mut(), track.kind);
+            clear_drum_sound_locks(trigger.locks_mut(), kind);
             Ok(())
         })
     }
     pub fn set_note(&mut self, track: usize, step: usize, degree: u8) -> Result<bool, EditError> {
-        self.edit(None, move |p| {
-            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |p, pattern| {
+            let mut t = active_track_mut(p, pattern, track)?;
             if !matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
                 return Err(EditError::NotSynth);
             }
@@ -958,7 +1032,7 @@ impl Editor {
                     locks,
                 }
             });
-            cleanup_invalid_ties(t);
+            cleanup_invalid_ties(t.steps);
             Ok(())
         })
     }
@@ -969,11 +1043,8 @@ impl Editor {
         step: usize,
         shape: ChordShape,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project| {
-            let t = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |project, pattern| {
+            let mut t = active_track_mut(project, pattern, track)?;
             if t.kind != TrackKind::Chord {
                 return Err(EditError::NoChordShape);
             }
@@ -989,18 +1060,14 @@ impl Editor {
     }
 
     pub fn chord_shape_value(&self, track: usize, step: usize) -> Result<ChordShape, EditError> {
-        let t = self
-            .project
-            .tracks
-            .get(track)
-            .ok_or(EditError::InvalidTrack)?;
+        let t = active_track(&self.project, self.pattern, track)?;
         if t.kind != TrackKind::Chord {
             return Err(EditError::NoChordShape);
         }
         let base = match t.steps.get(step).ok_or(EditError::InvalidStep)?.as_ref() {
             Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or_default(),
             Some(StepEvent::Tie { .. }) => {
-                let source = tie_source(&t.steps, step).ok_or(EditError::InvalidTie)?;
+                let source = tie_source(t.steps, step).ok_or(EditError::InvalidTie)?;
                 match t.steps[source] {
                     Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or_default(),
                     _ => return Err(EditError::NoChordShape),
@@ -1017,18 +1084,14 @@ impl Editor {
         track: usize,
         step: usize,
     ) -> Result<ArpeggioConfig, EditError> {
-        let t = self
-            .project
-            .tracks
-            .get(track)
-            .ok_or(EditError::InvalidTrack)?;
+        let t = active_track(&self.project, self.pattern, track)?;
         if t.kind != TrackKind::Chord {
             return Err(EditError::InvalidParameter);
         }
         match t.steps.get(step).ok_or(EditError::InvalidStep)?.as_ref() {
             Some(StepEvent::Note { arpeggio, .. }) => Ok(*arpeggio),
             Some(StepEvent::Tie { .. }) => {
-                let source = tie_source(&t.steps, step).ok_or(EditError::InvalidTie)?;
+                let source = tie_source(t.steps, step).ok_or(EditError::InvalidTie)?;
                 match t.steps[source] {
                     Some(StepEvent::Note { arpeggio, .. }) => Ok(arpeggio),
                     _ => Err(EditError::InvalidParameter),
@@ -1045,11 +1108,8 @@ impl Editor {
         step: usize,
         value: bool,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project| {
-            let t = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |project, pattern| {
+            let mut t = active_track_mut(project, pattern, track)?;
             if t.kind != TrackKind::Chord {
                 return Err(EditError::InvalidParameter);
             }
@@ -1072,11 +1132,8 @@ impl Editor {
         step: usize,
         value: ArpeggioType,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project| {
-            let t = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |project, pattern| {
+            let mut t = active_track_mut(project, pattern, track)?;
             if t.kind != TrackKind::Chord {
                 return Err(EditError::InvalidParameter);
             }
@@ -1099,11 +1156,8 @@ impl Editor {
         step: usize,
         value: ArpeggioRate,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project| {
-            let t = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |project, pattern| {
+            let mut t = active_track_mut(project, pattern, track)?;
             if t.kind != TrackKind::Chord {
                 return Err(EditError::InvalidParameter);
             }
@@ -1120,8 +1174,8 @@ impl Editor {
         })
     }
     pub fn toggle_tie(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.edit(None, move |p| {
-            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |p, pattern| {
+            let t = active_track_mut(p, pattern, track)?;
             if !matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
                 return Err(EditError::NotSynth);
             }
@@ -1130,13 +1184,13 @@ impl Editor {
             }
             match t.steps[step].take() {
                 Some(StepEvent::Tie { .. }) => {
-                    cleanup_invalid_ties(t);
+                    cleanup_invalid_ties(t.steps);
                     Ok(())
                 }
                 old => {
                     let locks = old.as_ref().map(|x| *x.locks()).unwrap_or_default();
                     t.steps[step] = Some(StepEvent::Tie { locks });
-                    if tie_source(&t.steps, step).is_none() {
+                    if tie_source(t.steps, step).is_none() {
                         t.steps[step] = old;
                         return Err(EditError::InvalidTie);
                     }
@@ -1146,12 +1200,12 @@ impl Editor {
         })
     }
     pub fn clear(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.edit(None, move |p| {
-            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |p, pattern| {
+            let t = active_track_mut(p, pattern, track)?;
             if step >= t.steps.len() {
                 return Err(EditError::InvalidStep);
             }
-            clear_with_ties(t, step);
+            clear_with_ties(t.steps, step);
             Ok(())
         })
     }
@@ -1162,8 +1216,8 @@ impl Editor {
     /// whole operation is recorded as one undoable edit.
     pub fn clear_track(&mut self, track: usize) -> Result<usize, EditError> {
         let mut cleared = 0;
-        self.edit(None, |p| {
-            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
+        self.edit(None, |p, pattern| {
+            let t = active_track_mut(p, pattern, track)?;
             cleared = t.steps.iter().filter(|step| step.is_some()).count();
             t.steps.fill(None);
             Ok(())
@@ -1180,17 +1234,17 @@ impl Editor {
         if !(MIN_STEP_COUNT..=MAX_STEP_COUNT).contains(&length) {
             return Err(EditError::InvalidLength);
         }
-        self.edit(key, move |p| {
-            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
+        self.edit(key, move |p, pattern| {
+            let t = active_track_mut(p, pattern, track)?;
             t.steps.resize(length, None);
-            cleanup_invalid_ties(t);
+            cleanup_invalid_ties(t.steps);
             Ok(())
         })
     }
 
     pub fn duplicate_track(&mut self, track: usize) -> Result<bool, EditError> {
-        self.edit(None, move |p| {
-            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |p, pattern| {
+            let t = active_track_mut(p, pattern, track)?;
             if t.steps.len() > MAX_STEP_COUNT / 2 {
                 return Err(EditError::CannotDouble);
             }
@@ -1236,11 +1290,7 @@ impl Editor {
     }
 
     pub fn accent_value(&self, track: usize, step: usize) -> Result<bool, EditError> {
-        let t = self
-            .project
-            .tracks
-            .get(track)
-            .ok_or(EditError::InvalidTrack)?;
+        let t = active_track(&self.project, self.pattern, track)?;
         match t.steps.get(step).ok_or(EditError::InvalidStep)?.as_ref() {
             Some(event) => event.accent().ok_or(EditError::NoAccent),
             None => Ok(t.input_accent),
@@ -1248,11 +1298,8 @@ impl Editor {
     }
 
     pub fn toggle_accent(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.edit(None, move |project| {
-            let t = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |project, pattern| {
+            let mut t = active_track_mut(project, pattern, track)?;
             match t.steps.get_mut(step).ok_or(EditError::InvalidStep)? {
                 Some(event) => {
                     let accent = event.accent_mut().ok_or(EditError::NoAccent)?;
@@ -1265,11 +1312,8 @@ impl Editor {
     }
 
     pub fn toggle_slide(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.edit(None, move |project| {
-            let t = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?;
+        self.edit(None, move |project, pattern| {
+            let t = active_track_mut(project, pattern, track)?;
             if !matches!(t.kind, TrackKind::Bass | TrackKind::Lead) {
                 return Err(EditError::NoSlide);
             }
@@ -1290,10 +1334,7 @@ impl Editor {
         track: usize,
         step: usize,
     ) -> Result<TriggerCondition, EditError> {
-        self.project
-            .tracks
-            .get(track)
-            .ok_or(EditError::InvalidTrack)?
+        active_track(&self.project, self.pattern, track)?
             .steps
             .get(step)
             .ok_or(EditError::InvalidStep)?
@@ -1303,10 +1344,7 @@ impl Editor {
     }
 
     pub fn retrigger_count_value(&self, track: usize, step: usize) -> Result<u8, EditError> {
-        self.project
-            .tracks
-            .get(track)
-            .ok_or(EditError::InvalidTrack)?
+        active_track(&self.project, self.pattern, track)?
             .steps
             .get(step)
             .ok_or(EditError::InvalidStep)?
@@ -1324,11 +1362,8 @@ impl Editor {
         if !condition.valid() {
             return Err(EditError::NoTriggerSettings);
         }
-        self.edit(None, move |project| {
-            let event = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?
+        self.edit(None, move |project, pattern| {
+            let event = active_track_mut(project, pattern, track)?
                 .steps
                 .get_mut(step)
                 .ok_or(EditError::InvalidStep)?
@@ -1348,11 +1383,8 @@ impl Editor {
         if !(1..=4).contains(&count) {
             return Err(EditError::NoTriggerSettings);
         }
-        self.edit(None, move |project| {
-            let event = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?
+        self.edit(None, move |project, pattern| {
+            let event = active_track_mut(project, pattern, track)?
                 .steps
                 .get_mut(step)
                 .ok_or(EditError::InvalidStep)?
@@ -1374,7 +1406,7 @@ impl Editor {
         if value.get() > 75 {
             return Err(EditError::InvalidParameter);
         }
-        self.edit(key, move |project| {
+        self.edit(key, move |project, _pattern| {
             project
                 .tracks
                 .get_mut(track)
@@ -1390,7 +1422,7 @@ impl Editor {
         value: Percent,
         key: Option<CoalesceKey>,
     ) -> Result<bool, EditError> {
-        self.edit(key, move |project| {
+        self.edit(key, move |project, _pattern| {
             project
                 .tracks
                 .get_mut(track)
@@ -1409,9 +1441,9 @@ impl Editor {
         value: ParameterValue,
         key: Option<CoalesceKey>,
     ) -> Result<bool, EditError> {
-        self.edit(key, move |p| {
-            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
-            write_parameter(t, step, scope, parameter, value)
+        self.edit(key, move |p, pattern| {
+            let mut t = active_track_mut(p, pattern, track)?;
+            write_parameter(&mut t, step, scope, parameter, value)
         })
     }
 
@@ -1425,11 +1457,8 @@ impl Editor {
         key: Option<CoalesceKey>,
     ) -> Result<bool, EditError> {
         let (recipe, parameter) = recipe_parameter;
-        self.edit(key, move |project| {
-            let track = project
-                .tracks
-                .get_mut(track)
-                .ok_or(EditError::InvalidTrack)?;
+        self.edit(key, move |project, pattern| {
+            let mut track = active_track_mut(project, pattern, track)?;
             if recipe.get() > track.drum_recipe_count()
                 || !matches!(
                     parameter,
@@ -1471,11 +1500,7 @@ impl Editor {
         recipe: DrumRecipeSlot,
         parameter: ParameterId,
     ) -> Result<ParameterValue, EditError> {
-        let track = self
-            .project
-            .tracks
-            .get(track)
-            .ok_or(EditError::InvalidTrack)?;
+        let track = active_track(&self.project, self.pattern, track)?;
         let base = track
             .drum_recipe_parameter(recipe, parameter)
             .ok_or(EditError::InvalidParameter)?;
@@ -1501,12 +1526,8 @@ impl Editor {
         scope: Scope,
         parameter: ParameterId,
     ) -> Result<ParameterValue, EditError> {
-        let t = self
-            .project
-            .tracks
-            .get(track)
-            .ok_or(EditError::InvalidTrack)?;
-        read_parameter(t, step, scope, parameter)
+        let t = active_track(&self.project, self.pattern, track)?;
+        read_parameter(&t, step, scope, parameter)
     }
 
     pub fn clear_parameter_lock(
@@ -1515,9 +1536,9 @@ impl Editor {
         step: usize,
         parameter: ParameterId,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |p| {
-            let t = p.tracks.get_mut(track).ok_or(EditError::InvalidTrack)?;
-            clear_parameter_lock(t, step, parameter)
+        self.edit(None, move |p, pattern| {
+            let mut t = active_track_mut(p, pattern, track)?;
+            clear_parameter_lock(&mut t, step, parameter)
         })
     }
 
@@ -1570,7 +1591,7 @@ impl Editor {
         config: Option<LfoConfig>,
         key: Option<CoalesceKey>,
     ) -> Result<bool, EditError> {
-        self.edit(key, move |project| {
+        self.edit(key, move |project, _pattern| {
             let track = project
                 .tracks
                 .get_mut(track)
@@ -1582,26 +1603,26 @@ impl Editor {
         })
     }
 }
-fn clear_with_ties(t: &mut crate::model::Track, step: usize) {
-    t.steps[step] = None;
-    cleanup_invalid_ties(t)
+fn clear_with_ties(steps: &mut [Step], step: usize) {
+    steps[step] = None;
+    cleanup_invalid_ties(steps)
 }
 
 fn clear_drum_sound_locks(locks: &mut crate::model::ParameterLocks, kind: TrackKind) {
-    locks.tune = None;
-    locks.decay = None;
+    locks.clear(ParameterId::Tune);
+    locks.clear(ParameterId::Decay);
     if kind == TrackKind::Tom {
-        locks.tone = None;
+        locks.clear(ParameterId::Tone);
     }
 }
 
-fn cleanup_invalid_ties(t: &mut crate::model::Track) {
+fn cleanup_invalid_ties(steps: &mut [Step]) {
     loop {
-        let bad = (0..t.steps.len()).find(|&i| {
-            matches!(t.steps[i], Some(StepEvent::Tie { .. })) && tie_source(&t.steps, i).is_none()
+        let bad = (0..steps.len()).find(|&i| {
+            matches!(steps[i], Some(StepEvent::Tie { .. })) && tie_source(steps, i).is_none()
         });
         if let Some(i) = bad {
-            t.steps[i] = None
+            steps[i] = None
         } else {
             break;
         }
@@ -1651,25 +1672,6 @@ mod tests {
     }
 
     #[test]
-    fn editor_initialization_does_not_copy_nonzero_cache_into_pattern_zero() {
-        let mut project = Project::new();
-        project.patterns.push(project.patterns[0].clone());
-        project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
-            accent: true,
-            recipe: crate::model::DrumRecipeSlot::ONE,
-            condition: Default::default(),
-            retrigger_count: 1,
-            locks: Default::default(),
-        });
-        project.activate_pattern(1);
-
-        let editor = Editor::new(project);
-
-        assert!(editor.project.patterns[0].tracks[0].steps[0].is_none());
-        assert!(editor.project.patterns[1].tracks[0].steps[0].is_some());
-    }
-
-    #[test]
     fn dynamic_pattern_operations_shift_cursor_and_are_undoable() {
         let mut editor = Editor::new(Project::new());
         editor.toggle_event(0, 0).unwrap();
@@ -1699,13 +1701,13 @@ mod tests {
         editor.copy_pattern();
         editor.clear_pattern().unwrap();
         assert!(editor.paste_pattern().unwrap());
-        assert!(editor.project.tracks[0].steps[0].is_some());
+        assert!(editor.active_steps(0).unwrap()[0].is_some());
         assert!(editor.cut_pattern().unwrap());
         assert_eq!(editor.project.patterns.len(), 1);
-        assert!(editor.project.tracks[0].steps.iter().all(Option::is_none));
+        assert!(editor.active_steps(0).unwrap().iter().all(Option::is_none));
         assert!(!editor.delete_pattern().unwrap());
         assert_eq!(editor.project.patterns.len(), 1);
-        assert!(editor.project.tracks[0].steps.iter().all(Option::is_none));
+        assert!(editor.active_steps(0).unwrap().iter().all(Option::is_none));
     }
 
     #[test]
@@ -1720,7 +1722,7 @@ mod tests {
         assert!(changed);
         assert_eq!(cursor, 2);
         assert_eq!(editor.pattern(), 0);
-        assert!(editor.project.tracks[0].steps[0].is_some());
+        assert!(editor.active_steps(0).unwrap()[0].is_some());
         assert_eq!(editor.project.patterns.len(), 4);
 
         let (changed, cursor) = editor.delete_pattern_at(cursor).unwrap();
@@ -1766,10 +1768,10 @@ mod tests {
         e.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
         e.toggle_tie(SYNTH_TRACK_START, 2).unwrap();
         e.clear(SYNTH_TRACK_START, 0).unwrap();
-        assert!(e.project.tracks[SYNTH_TRACK_START].steps[1].is_none());
+        assert!(e.active_steps(SYNTH_TRACK_START).unwrap()[1].is_none());
         e.undo();
         assert!(matches!(
-            e.project.tracks[SYNTH_TRACK_START].steps[2],
+            e.active_steps(SYNTH_TRACK_START).unwrap()[2],
             Some(StepEvent::Tie { .. })
         ));
     }
@@ -1791,24 +1793,29 @@ mod tests {
         editor.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
         editor.toggle_event(0, 0).unwrap();
         let before = editor.project.clone();
-        let length = editor.project.tracks[SYNTH_TRACK_START].steps.len();
+        let length = editor.active_steps(SYNTH_TRACK_START).unwrap().len();
 
         assert_eq!(editor.clear_track(SYNTH_TRACK_START).unwrap(), 2);
         assert!(
-            editor.project.tracks[SYNTH_TRACK_START]
-                .steps
+            editor
+                .active_steps(SYNTH_TRACK_START)
+                .unwrap()
                 .iter()
                 .all(Option::is_none)
         );
-        assert_eq!(editor.project.tracks[SYNTH_TRACK_START].steps.len(), length);
-        assert!(editor.project.tracks[0].steps[0].is_some());
+        assert_eq!(
+            editor.active_steps(SYNTH_TRACK_START).unwrap().len(),
+            length
+        );
+        assert!(editor.active_steps(0).unwrap()[0].is_some());
 
         assert!(editor.undo());
         assert_eq!(editor.project, before);
         assert!(editor.redo());
         assert!(
-            editor.project.tracks[SYNTH_TRACK_START]
-                .steps
+            editor
+                .active_steps(SYNTH_TRACK_START)
+                .unwrap()
                 .iter()
                 .all(Option::is_none)
         );
@@ -1823,9 +1830,62 @@ mod tests {
     }
 
     #[test]
-    fn direct_percent() {
-        assert_eq!(percentage_key('`').unwrap().get(), 0);
-        assert_eq!(percentage_key('0').unwrap().get(), 100);
+    fn direct_percentage_keys_cover_the_complete_mapping() {
+        for (key, expected) in [
+            ('`', 0),
+            ('1', 10),
+            ('2', 20),
+            ('3', 30),
+            ('4', 40),
+            ('5', 50),
+            ('6', 60),
+            ('7', 70),
+            ('8', 80),
+            ('9', 90),
+            ('0', 100),
+        ] {
+            assert_eq!(percentage_key(key).map(Percent::get), Some(expected));
+        }
+        for key in ['-', '=', 'a', ' '] {
+            assert_eq!(percentage_key(key), None);
+        }
+    }
+
+    #[test]
+    fn undo_history_records_only_the_changed_project_regions() {
+        let mut editor = Editor::new(Project::new());
+
+        editor.toggle_event(0, 0).unwrap();
+        let delta = &editor.undo.back().unwrap().delta;
+        assert_eq!(delta.sequences.len(), 1);
+        assert!(delta.globals.is_none());
+        assert!(delta.tracks.is_empty());
+        assert!(delta.patterns.is_none());
+        assert!(delta.song.is_none());
+
+        editor
+            .set_track_swing(0, Percent::new(25).unwrap(), None)
+            .unwrap();
+        let delta = &editor.undo.back().unwrap().delta;
+        assert_eq!(delta.tracks.len(), 1);
+        assert!(delta.sequences.is_empty());
+        assert!(delta.patterns.is_none());
+
+        editor
+            .edit(None, |project, _| {
+                project.globals.tempo_bpm = 121;
+                Ok(())
+            })
+            .unwrap();
+        let delta = &editor.undo.back().unwrap().delta;
+        assert!(delta.globals.is_some());
+        assert!(delta.tracks.is_empty());
+        assert!(delta.sequences.is_empty());
+
+        editor.insert_pattern().unwrap();
+        let delta = &editor.undo.back().unwrap().delta;
+        assert!(delta.patterns.is_some());
+        assert!(delta.sequences.is_empty());
     }
 
     #[test]
@@ -1842,7 +1902,7 @@ mod tests {
         editor.toggle_accent(SYNTH_TRACK_START, 0).unwrap();
         editor.toggle_event(SYNTH_TRACK_START, 0).unwrap();
         assert!(matches!(
-            editor.project.tracks[SYNTH_TRACK_START].steps[0],
+            editor.active_steps(SYNTH_TRACK_START).unwrap()[0],
             Some(StepEvent::BassNote {
                 accent: true,
                 slide: false,
@@ -1855,7 +1915,7 @@ mod tests {
         assert_eq!(editor.accent_value(SYNTH_TRACK_START, 0), Ok(true));
         editor.set_note(SYNTH_TRACK_START, 1, 2).unwrap();
         assert!(matches!(
-            editor.project.tracks[SYNTH_TRACK_START].steps[1],
+            editor.active_steps(SYNTH_TRACK_START).unwrap()[1],
             Some(StepEvent::BassNote { accent: true, .. })
         ));
     }
@@ -1876,7 +1936,7 @@ mod tests {
         editor.set_note(SYNTH_TRACK_START, 0, 5).unwrap();
         assert_eq!(editor.accent_value(SYNTH_TRACK_START, 0), Ok(true));
         assert!(matches!(
-            editor.project.tracks[SYNTH_TRACK_START].steps[0],
+            editor.active_steps(SYNTH_TRACK_START).unwrap()[0],
             Some(StepEvent::BassNote { slide: true, .. })
         ));
         editor.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
@@ -1899,12 +1959,12 @@ mod tests {
 
         assert!(editor.toggle_slide(lead, 0).unwrap());
         assert!(matches!(
-            editor.project.tracks[lead].steps[0],
+            editor.active_steps(lead).unwrap()[0],
             Some(StepEvent::LeadNote { slide: true, .. })
         ));
         assert!(editor.undo());
         assert!(matches!(
-            editor.project.tracks[lead].steps[0],
+            editor.active_steps(lead).unwrap()[0],
             Some(StepEvent::LeadNote { slide: false, .. })
         ));
         assert_eq!(
@@ -1923,13 +1983,13 @@ mod tests {
         editor.toggle_accent(SYNTH_TRACK_START, 1).unwrap_err();
         editor.set_note(SYNTH_TRACK_START, 1, 2).unwrap();
         assert!(matches!(
-            editor.project.tracks[SYNTH_TRACK_START].steps[1],
+            editor.active_steps(SYNTH_TRACK_START).unwrap()[1],
             Some(StepEvent::BassNote { accent: false, .. })
         ));
 
         editor.set_note(SYNTH_TRACK_START, 0, 5).unwrap();
         assert!(matches!(
-            editor.project.tracks[SYNTH_TRACK_START].steps[0],
+            editor.active_steps(SYNTH_TRACK_START).unwrap()[0],
             Some(StepEvent::BassNote { accent: true, .. })
         ));
     }
@@ -2059,20 +2119,20 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            editor.project.tracks[0].steps[0]
+            editor.active_steps(0).unwrap()[0]
                 .as_ref()
                 .unwrap()
                 .locks()
-                .flanger_feedback,
+                .percent(ParameterId::FlangerFeedback),
             Percent::new(60)
         );
         assert!(editor.undo());
         assert!(
-            editor.project.tracks[0].steps[0]
+            editor.active_steps(0).unwrap()[0]
                 .as_ref()
                 .unwrap()
                 .locks()
-                .flanger_feedback
+                .percent(ParameterId::FlangerFeedback)
                 .is_none()
         );
     }
@@ -2095,11 +2155,11 @@ mod tests {
             Ok(p(20))
         );
         assert_eq!(
-            e.project.tracks[0].steps[0]
+            e.active_steps(0).unwrap()[0]
                 .as_ref()
                 .unwrap()
                 .locks()
-                .tune
+                .percent(ParameterId::Tune)
                 .unwrap()
                 .get(),
             90
@@ -2110,11 +2170,11 @@ mod tests {
             Ok(p(80))
         );
         assert!(
-            e.project.tracks[0].steps[0]
+            e.active_steps(0).unwrap()[0]
                 .as_ref()
                 .unwrap()
                 .locks()
-                .tune
+                .percent(ParameterId::Tune)
                 .is_some()
         );
     }
@@ -2152,16 +2212,16 @@ mod tests {
         e.set_note(SYNTH_TRACK_START, 3, 1).unwrap();
         e.toggle_tie(SYNTH_TRACK_START, 0).unwrap();
         e.set_track_length(SYNTH_TRACK_START, 3, None).unwrap();
-        assert_eq!(e.project.tracks[SYNTH_TRACK_START].steps.len(), 3);
-        assert!(e.project.tracks[SYNTH_TRACK_START].steps[0].is_none());
+        assert_eq!(e.active_steps(SYNTH_TRACK_START).unwrap().len(), 3);
+        assert!(e.active_steps(SYNTH_TRACK_START).unwrap()[0].is_none());
         assert!(e.undo());
-        assert_eq!(e.project.tracks[SYNTH_TRACK_START].steps.len(), 4);
+        assert_eq!(e.active_steps(SYNTH_TRACK_START).unwrap().len(), 4);
         assert!(matches!(
-            e.project.tracks[SYNTH_TRACK_START].steps[0],
+            e.active_steps(SYNTH_TRACK_START).unwrap()[0],
             Some(StepEvent::Tie { .. })
         ));
         assert!(matches!(
-            e.project.tracks[SYNTH_TRACK_START].steps[3],
+            e.active_steps(SYNTH_TRACK_START).unwrap()[3],
             Some(StepEvent::BassNote { .. })
         ));
     }
@@ -2181,19 +2241,19 @@ mod tests {
         )
         .unwrap();
         e.toggle_tie(SYNTH_TRACK_START, 0).unwrap();
-        let original = e.project.tracks[SYNTH_TRACK_START].steps.clone();
+        let original = e.active_steps(SYNTH_TRACK_START).unwrap().to_vec();
         e.duplicate_track(SYNTH_TRACK_START).unwrap();
-        assert_eq!(e.project.tracks[SYNTH_TRACK_START].steps.len(), 8);
+        assert_eq!(e.active_steps(SYNTH_TRACK_START).unwrap().len(), 8);
         assert_eq!(
-            &e.project.tracks[SYNTH_TRACK_START].steps[..4],
+            &e.active_steps(SYNTH_TRACK_START).unwrap()[..4],
             original.as_slice()
         );
         assert_eq!(
-            &e.project.tracks[SYNTH_TRACK_START].steps[4..],
+            &e.active_steps(SYNTH_TRACK_START).unwrap()[4..],
             original.as_slice()
         );
         assert!(e.undo());
-        assert_eq!(e.project.tracks[SYNTH_TRACK_START].steps, original);
+        assert_eq!(e.active_steps(SYNTH_TRACK_START).unwrap(), original);
     }
 
     #[test]
@@ -2202,7 +2262,7 @@ mod tests {
         e.set_track_length(0, 33, None).unwrap();
         e.mark_saved();
         assert_eq!(e.duplicate_track(0), Err(EditError::CannotDouble));
-        assert_eq!(e.project.tracks[0].steps.len(), 33);
+        assert_eq!(e.active_steps(0).unwrap().len(), 33);
         assert!(!e.is_dirty());
     }
 
@@ -2282,7 +2342,7 @@ mod tests {
         );
         editor.set_note(CHORD_TRACK_INDEX, 0, 1).unwrap();
         assert!(matches!(
-            editor.project.tracks[CHORD_TRACK_INDEX].steps[0],
+            editor.active_steps(CHORD_TRACK_INDEX).unwrap()[0],
             Some(StepEvent::Note {
                 chord_shape: Some(ChordShape::Single),
                 ..
@@ -2292,7 +2352,7 @@ mod tests {
             .set_chord_shape(CHORD_TRACK_INDEX, 0, ChordShape::DyadFifth)
             .unwrap();
         assert!(matches!(
-            editor.project.tracks[CHORD_TRACK_INDEX].steps[0],
+            editor.active_steps(CHORD_TRACK_INDEX).unwrap()[0],
             Some(StepEvent::Note {
                 chord_shape: Some(ChordShape::DyadFifth),
                 ..
@@ -2300,7 +2360,7 @@ mod tests {
         ));
         assert!(editor.undo());
         assert!(matches!(
-            editor.project.tracks[CHORD_TRACK_INDEX].steps[0],
+            editor.active_steps(CHORD_TRACK_INDEX).unwrap()[0],
             Some(StepEvent::Note {
                 chord_shape: Some(ChordShape::Single),
                 ..
@@ -2414,18 +2474,18 @@ mod tests {
     fn generator_fills_only_empty_steps_and_is_one_undoable_edit() {
         let mut editor = Editor::new(Project::new());
         editor.set_note(SYNTH_TRACK_START, 0, 8).unwrap();
-        let original = editor.project.tracks[SYNTH_TRACK_START].steps[0];
+        let original = editor.active_steps(SYNTH_TRACK_START).unwrap()[0];
         let config = crate::generator::Config {
             density: Percent::new(100).unwrap(),
             ..Default::default()
         };
         let inserted = editor.generate_pattern(config).unwrap();
         assert!(inserted > 0);
-        assert_eq!(editor.project.tracks[SYNTH_TRACK_START].steps[0], original);
+        assert_eq!(editor.active_steps(SYNTH_TRACK_START).unwrap()[0], original);
         assert!(editor.undo());
-        assert_eq!(editor.project.tracks[SYNTH_TRACK_START].steps[0], original);
+        assert_eq!(editor.active_steps(SYNTH_TRACK_START).unwrap()[0], original);
         assert!(editor.redo());
-        assert_eq!(editor.project.tracks[SYNTH_TRACK_START].steps[0], original);
+        assert_eq!(editor.active_steps(SYNTH_TRACK_START).unwrap()[0], original);
     }
 
     #[test]
@@ -2471,7 +2531,7 @@ mod tests {
             condition,
             locks,
             ..
-        }) = editor.project.tracks[3].steps[0]
+        }) = editor.active_steps(3).unwrap()[0]
         else {
             panic!("expected trigger")
         };
@@ -2484,8 +2544,15 @@ mod tests {
                 length: 3
             }
         );
-        assert_eq!(locks.level, Percent::new(25));
-        assert_eq!((locks.tune, locks.tone, locks.decay), (None, None, None));
+        assert_eq!(locks.percent(ParameterId::Level), Percent::new(25));
+        assert_eq!(
+            (
+                locks.percent(ParameterId::Tune),
+                locks.percent(ParameterId::Tone),
+                locks.percent(ParameterId::Decay),
+            ),
+            (None, None, None)
+        );
 
         editor
             .set_drum_recipe_parameter(
@@ -2516,7 +2583,7 @@ mod tests {
         editor.project.tracks[2].input_accent = true;
         editor.set_drum_recipe(2, 4, DrumRecipeSlot::TWO).unwrap();
         assert!(matches!(
-            editor.project.tracks[2].steps[4],
+            editor.active_steps(2).unwrap()[4],
             Some(StepEvent::Trigger {
                 accent: true,
                 recipe: DrumRecipeSlot::TWO,
@@ -2543,8 +2610,8 @@ mod tests {
         editor.copy_step(SYNTH_TRACK_START, 0).unwrap();
         editor.paste_step(SYNTH_TRACK_START, 2).unwrap();
         assert_eq!(
-            editor.project.tracks[SYNTH_TRACK_START].steps[2],
-            editor.project.tracks[SYNTH_TRACK_START].steps[0]
+            editor.active_steps(SYNTH_TRACK_START).unwrap()[2],
+            editor.active_steps(SYNTH_TRACK_START).unwrap()[0]
         );
         assert_eq!(
             editor.paste_step(CHORD_TRACK_INDEX, 2),
@@ -2567,12 +2634,12 @@ mod tests {
         editor.toggle_event(0, 0).unwrap();
         editor.copy_step(0, 1).unwrap();
         editor.paste_step(0, 0).unwrap();
-        assert!(editor.project.tracks[0].steps[0].is_none());
+        assert!(editor.active_steps(0).unwrap()[0].is_none());
         assert!(editor.undo());
-        assert!(editor.project.tracks[0].steps[0].is_some());
+        assert!(editor.active_steps(0).unwrap()[0].is_some());
         assert!(editor.cut_step(0, 0).unwrap());
-        assert!(editor.project.tracks[0].steps[0].is_none());
+        assert!(editor.active_steps(0).unwrap()[0].is_none());
         assert!(editor.undo());
-        assert!(editor.project.tracks[0].steps[0].is_some());
+        assert!(editor.active_steps(0).unwrap()[0].is_some());
     }
 }
