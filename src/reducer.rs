@@ -1,8 +1,9 @@
 use crate::generator::{self, Config as GeneratorConfig, Target as GeneratorTarget};
 use crate::model::{
-    ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, LfoConfig, MAX_STEP_COUNT,
-    MIN_STEP_COUNT, ParameterId, ParameterValue, Pattern, PatternIndexMap, Percent, Project,
-    StepEvent, TrackKind, TriggerCondition, Waveform, tie_source,
+    ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, DrumRecipeSlot, LfoConfig,
+    MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterLocks, ParameterValue, Pattern,
+    PatternIndexMap, Percent, Project, Step, StepEvent, TrackKind, TriggerCondition, Waveform,
+    tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -29,6 +30,9 @@ pub enum EditError {
     NoSlide,
     NoChordShape,
     NoTriggerSettings,
+    InvalidDrumRecipe,
+    EmptyStepClipboard,
+    IncompatibleStepClipboard,
 }
 impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -49,6 +53,11 @@ impl std::fmt::Display for EditError {
                 Self::NoSlide => "slide requires a Bass or Lead note",
                 Self::NoChordShape => "chord shape requires a Chord note or empty Chord step",
                 Self::NoTriggerSettings => "trigger settings require a trigger or note",
+                Self::InvalidDrumRecipe => "recipe is incompatible with this drum track",
+                Self::EmptyStepClipboard => "step clipboard is empty",
+                Self::IncompatibleStepClipboard => {
+                    "copied step requires the same destination track kind"
+                }
             }
         )
     }
@@ -74,8 +83,15 @@ pub struct Editor {
     saved: Project,
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
-    clipboard: Option<Pattern>,
+    pattern_clipboard: Option<Pattern>,
+    step_clipboard: Option<StepClipboard>,
     pending_pattern_map: PatternIndexMap,
+}
+
+#[derive(Clone, Copy)]
+struct StepClipboard {
+    kind: TrackKind,
+    step: Step,
 }
 
 fn read_parameter(
@@ -159,7 +175,8 @@ impl Editor {
             pattern: 0,
             undo: VecDeque::new(),
             redo: Vec::new(),
-            clipboard: None,
+            pattern_clipboard: None,
+            step_clipboard: None,
             pending_pattern_map: PatternIndexMap::identity(),
         }
     }
@@ -183,7 +200,8 @@ impl Editor {
         self.undo.clear();
         self.redo.clear();
         self.pattern = 0;
-        self.clipboard = None;
+        self.pattern_clipboard = None;
+        self.step_clipboard = None;
         self.pending_pattern_map = PatternIndexMap::identity();
     }
     pub fn pattern(&self) -> usize {
@@ -418,14 +436,14 @@ impl Editor {
         })
     }
     pub fn copy_pattern(&mut self) {
-        self.clipboard = Some(self.current_pattern());
+        self.pattern_clipboard = Some(self.current_pattern());
     }
 
     pub fn copy_pattern_at(&mut self, cursor: usize) -> bool {
         let Some(pattern) = self.project.patterns.get(cursor).cloned() else {
             return false;
         };
-        self.clipboard = Some(if cursor == self.pattern {
+        self.pattern_clipboard = Some(if cursor == self.pattern {
             self.current_pattern()
         } else {
             pattern
@@ -433,7 +451,7 @@ impl Editor {
         true
     }
     pub fn cut_pattern(&mut self) -> Result<bool, EditError> {
-        self.clipboard = Some(self.current_pattern());
+        self.pattern_clipboard = Some(self.current_pattern());
         self.delete_pattern()
     }
 
@@ -444,7 +462,7 @@ impl Editor {
         self.delete_pattern_at(cursor)
     }
     pub fn paste_pattern(&mut self) -> Result<bool, EditError> {
-        let Some(pattern) = self.clipboard.clone() else {
+        let Some(pattern) = self.pattern_clipboard.clone() else {
             return Ok(false);
         };
         if self.project.patterns.len() >= crate::model::MAX_PATTERN_COUNT {
@@ -462,7 +480,7 @@ impl Editor {
     }
 
     pub fn paste_pattern_at(&mut self, cursor: usize) -> Result<(bool, usize), EditError> {
-        let Some(pattern) = self.clipboard.clone() else {
+        let Some(pattern) = self.pattern_clipboard.clone() else {
             return Ok((false, cursor));
         };
         if self.project.patterns.len() >= crate::model::MAX_PATTERN_COUNT {
@@ -477,6 +495,52 @@ impl Editor {
             }
             let active = if active > cursor { active + 1 } else { active };
             Ok((cursor + 1, active))
+        })
+    }
+
+    pub fn copy_step(&mut self, track: usize, step: usize) -> Result<(), EditError> {
+        let track = self
+            .project
+            .tracks
+            .get(track)
+            .ok_or(EditError::InvalidTrack)?;
+        let copied = *track.steps.get(step).ok_or(EditError::InvalidStep)?;
+        self.step_clipboard = Some(StepClipboard {
+            kind: track.kind,
+            step: copied,
+        });
+        Ok(())
+    }
+
+    pub fn cut_step(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
+        self.copy_step(track, step)?;
+        self.clear(track, step)
+    }
+
+    pub fn paste_step(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
+        let clipboard = self.step_clipboard.ok_or(EditError::EmptyStepClipboard)?;
+        self.edit(None, move |project| {
+            let destination = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if destination.kind != clipboard.kind {
+                return Err(EditError::IncompatibleStepClipboard);
+            }
+            if step >= destination.steps.len() {
+                return Err(EditError::InvalidStep);
+            }
+
+            let mut candidate = destination.clone();
+            candidate.steps[step] = clipboard.step;
+            if matches!(clipboard.step, Some(StepEvent::Tie { .. }))
+                && tie_source(&candidate.steps, step).is_none()
+            {
+                return Err(EditError::InvalidTie);
+            }
+            cleanup_invalid_ties(&mut candidate);
+            *destination = candidate;
+            Ok(())
         })
     }
     pub fn delete_pattern(&mut self) -> Result<bool, EditError> {
@@ -660,11 +724,94 @@ impl Editor {
             } else {
                 StepEvent::Trigger {
                     accent: t.input_accent,
+                    recipe: crate::model::DrumRecipeSlot::ONE,
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
                     locks: Default::default(),
                 }
             });
+            Ok(())
+        })
+    }
+
+    pub fn drum_recipe_value(
+        &self,
+        track: usize,
+        step: usize,
+    ) -> Result<DrumRecipeSlot, EditError> {
+        let track = self
+            .project
+            .tracks
+            .get(track)
+            .ok_or(EditError::InvalidTrack)?;
+        track
+            .steps
+            .get(step)
+            .ok_or(EditError::InvalidStep)?
+            .as_ref()
+            .and_then(StepEvent::drum_recipe)
+            .ok_or(EditError::InvalidDrumRecipe)
+    }
+
+    pub fn set_drum_recipe(
+        &mut self,
+        track: usize,
+        step: usize,
+        recipe: DrumRecipeSlot,
+    ) -> Result<bool, EditError> {
+        self.edit(None, move |project| {
+            let track = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if !matches!(track.kind, TrackKind::Hat | TrackKind::Tom)
+                || recipe.get() > track.drum_recipe_count()
+            {
+                return Err(EditError::InvalidDrumRecipe);
+            }
+            let event = track.steps.get_mut(step).ok_or(EditError::InvalidStep)?;
+            if event.is_none() {
+                *event = Some(StepEvent::Trigger {
+                    accent: track.input_accent,
+                    recipe,
+                    condition: TriggerCondition::Always,
+                    retrigger_count: 1,
+                    locks: ParameterLocks::default(),
+                });
+                return Ok(());
+            }
+            let trigger = event.as_mut().ok_or(EditError::InvalidDrumRecipe)?;
+            *trigger
+                .drum_recipe_mut()
+                .ok_or(EditError::InvalidDrumRecipe)? = recipe;
+            clear_drum_sound_locks(trigger.locks_mut(), track.kind);
+            Ok(())
+        })
+    }
+
+    pub fn clear_drum_recipe_overrides(
+        &mut self,
+        track: usize,
+        step: usize,
+    ) -> Result<bool, EditError> {
+        self.edit(None, move |project| {
+            let track = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if !matches!(track.kind, TrackKind::Hat | TrackKind::Tom) {
+                return Err(EditError::InvalidDrumRecipe);
+            }
+            let trigger = track
+                .steps
+                .get_mut(step)
+                .ok_or(EditError::InvalidStep)?
+                .as_mut()
+                .ok_or(EditError::InvalidDrumRecipe)?;
+            if trigger.drum_recipe().is_none() {
+                return Err(EditError::InvalidDrumRecipe);
+            }
+            clear_drum_sound_locks(trigger.locks_mut(), track.kind);
             Ok(())
         })
     }
@@ -1268,6 +1415,85 @@ impl Editor {
         })
     }
 
+    pub fn set_drum_recipe_parameter(
+        &mut self,
+        track: usize,
+        step: usize,
+        scope: Scope,
+        recipe_parameter: (DrumRecipeSlot, ParameterId),
+        value: ParameterValue,
+        key: Option<CoalesceKey>,
+    ) -> Result<bool, EditError> {
+        let (recipe, parameter) = recipe_parameter;
+        self.edit(key, move |project| {
+            let track = project
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::InvalidTrack)?;
+            if recipe.get() > track.drum_recipe_count()
+                || !matches!(
+                    parameter,
+                    ParameterId::Tune | ParameterId::Tone | ParameterId::Decay
+                )
+            {
+                return Err(EditError::InvalidDrumRecipe);
+            }
+            match scope {
+                Scope::Base => track
+                    .set_drum_recipe_parameter(recipe, parameter, value)
+                    .then_some(())
+                    .ok_or(EditError::InvalidParameter),
+                Scope::Lock => {
+                    let event = track
+                        .steps
+                        .get_mut(step)
+                        .ok_or(EditError::InvalidStep)?
+                        .as_mut()
+                        .ok_or(EditError::EmptyLock)?;
+                    if event.drum_recipe() != Some(recipe) {
+                        return Err(EditError::InvalidDrumRecipe);
+                    }
+                    event
+                        .locks_mut()
+                        .set(parameter, value)
+                        .then_some(())
+                        .ok_or(EditError::InvalidParameter)
+                }
+            }
+        })
+    }
+
+    pub fn drum_recipe_parameter_value(
+        &self,
+        track: usize,
+        step: usize,
+        scope: Scope,
+        recipe: DrumRecipeSlot,
+        parameter: ParameterId,
+    ) -> Result<ParameterValue, EditError> {
+        let track = self
+            .project
+            .tracks
+            .get(track)
+            .ok_or(EditError::InvalidTrack)?;
+        let base = track
+            .drum_recipe_parameter(recipe, parameter)
+            .ok_or(EditError::InvalidParameter)?;
+        if scope == Scope::Base {
+            return Ok(base);
+        }
+        let event = track
+            .steps
+            .get(step)
+            .ok_or(EditError::InvalidStep)?
+            .as_ref()
+            .ok_or(EditError::EmptyLock)?;
+        if event.drum_recipe() != Some(recipe) {
+            return Err(EditError::InvalidDrumRecipe);
+        }
+        Ok(event.locks().get(parameter).unwrap_or(base))
+    }
+
     pub fn parameter_value(
         &self,
         track: usize,
@@ -1360,6 +1586,15 @@ fn clear_with_ties(t: &mut crate::model::Track, step: usize) {
     t.steps[step] = None;
     cleanup_invalid_ties(t)
 }
+
+fn clear_drum_sound_locks(locks: &mut crate::model::ParameterLocks, kind: TrackKind) {
+    locks.tune = None;
+    locks.decay = None;
+    if kind == TrackKind::Tom {
+        locks.tone = None;
+    }
+}
+
 fn cleanup_invalid_ties(t: &mut crate::model::Track) {
     loop {
         let bad = (0..t.steps.len()).find(|&i| {
@@ -1421,6 +1656,7 @@ mod tests {
         project.patterns.push(project.patterns[0].clone());
         project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: true,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -1501,6 +1737,7 @@ mod tests {
         editor.select_pattern(0);
         editor.project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -2189,5 +2426,153 @@ mod tests {
         assert_eq!(editor.project.tracks[SYNTH_TRACK_START].steps[0], original);
         assert!(editor.redo());
         assert_eq!(editor.project.tracks[SYNTH_TRACK_START].steps[0], original);
+    }
+
+    #[test]
+    fn drum_recipe_selection_is_referenced_and_preserves_unrelated_trigger_data() {
+        let mut editor = Editor::new(Project::new());
+        editor.toggle_event(3, 0).unwrap();
+        editor.toggle_accent(3, 0).unwrap();
+        editor
+            .set_trigger_condition(
+                3,
+                0,
+                TriggerCondition::Cycle {
+                    position: 2,
+                    length: 3,
+                },
+            )
+            .unwrap();
+        editor
+            .set_parameter(
+                3,
+                0,
+                Scope::Lock,
+                ParameterId::Level,
+                ParameterValue::Percent(Percent::new(25).unwrap()),
+                None,
+            )
+            .unwrap();
+        editor
+            .set_parameter(
+                3,
+                0,
+                Scope::Lock,
+                ParameterId::Tune,
+                ParameterValue::Percent(Percent::new(99).unwrap()),
+                None,
+            )
+            .unwrap();
+
+        editor.set_drum_recipe(3, 0, DrumRecipeSlot::TWO).unwrap();
+        let Some(StepEvent::Trigger {
+            accent,
+            recipe,
+            condition,
+            locks,
+            ..
+        }) = editor.project.tracks[3].steps[0]
+        else {
+            panic!("expected trigger")
+        };
+        assert!(accent);
+        assert_eq!(recipe, DrumRecipeSlot::TWO);
+        assert_eq!(
+            condition,
+            TriggerCondition::Cycle {
+                position: 2,
+                length: 3
+            }
+        );
+        assert_eq!(locks.level, Percent::new(25));
+        assert_eq!((locks.tune, locks.tone, locks.decay), (None, None, None));
+
+        editor
+            .set_drum_recipe_parameter(
+                3,
+                0,
+                Scope::Base,
+                (DrumRecipeSlot::TWO, ParameterId::Tune),
+                ParameterValue::Percent(Percent::new(63).unwrap()),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            editor.drum_recipe_parameter_value(
+                3,
+                0,
+                Scope::Lock,
+                DrumRecipeSlot::TWO,
+                ParameterId::Tune
+            ),
+            Ok(ParameterValue::Percent(Percent::new(63).unwrap()))
+        );
+        assert!(editor.undo());
+    }
+
+    #[test]
+    fn recipe_selection_creates_triggers_and_rejects_incompatible_slots() {
+        let mut editor = Editor::new(Project::new());
+        editor.project.tracks[2].input_accent = true;
+        editor.set_drum_recipe(2, 4, DrumRecipeSlot::TWO).unwrap();
+        assert!(matches!(
+            editor.project.tracks[2].steps[4],
+            Some(StepEvent::Trigger {
+                accent: true,
+                recipe: DrumRecipeSlot::TWO,
+                ..
+            })
+        ));
+        assert_eq!(
+            editor.set_drum_recipe(2, 4, DrumRecipeSlot::THREE),
+            Err(EditError::InvalidDrumRecipe)
+        );
+        assert_eq!(
+            editor.set_drum_recipe(0, 0, DrumRecipeSlot::ONE),
+            Err(EditError::InvalidDrumRecipe)
+        );
+    }
+
+    #[test]
+    fn step_clipboard_is_exact_same_kind_and_validates_ties_atomically() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        let mut editor = Editor::new(project);
+        editor.set_note(SYNTH_TRACK_START, 0, 3).unwrap();
+        editor.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
+        editor.copy_step(SYNTH_TRACK_START, 0).unwrap();
+        editor.paste_step(SYNTH_TRACK_START, 2).unwrap();
+        assert_eq!(
+            editor.project.tracks[SYNTH_TRACK_START].steps[2],
+            editor.project.tracks[SYNTH_TRACK_START].steps[0]
+        );
+        assert_eq!(
+            editor.paste_step(CHORD_TRACK_INDEX, 2),
+            Err(EditError::IncompatibleStepClipboard)
+        );
+
+        editor.copy_step(SYNTH_TRACK_START, 1).unwrap();
+        editor.select_pattern(1);
+        let before = editor.project.clone();
+        assert_eq!(
+            editor.paste_step(SYNTH_TRACK_START, 1),
+            Err(EditError::InvalidTie)
+        );
+        assert_eq!(editor.project, before);
+    }
+
+    #[test]
+    fn empty_step_clipboard_clears_destination_and_cut_is_undoable() {
+        let mut editor = Editor::new(Project::new());
+        editor.toggle_event(0, 0).unwrap();
+        editor.copy_step(0, 1).unwrap();
+        editor.paste_step(0, 0).unwrap();
+        assert!(editor.project.tracks[0].steps[0].is_none());
+        assert!(editor.undo());
+        assert!(editor.project.tracks[0].steps[0].is_some());
+        assert!(editor.cut_step(0, 0).unwrap());
+        assert!(editor.project.tracks[0].steps[0].is_none());
+        assert!(editor.undo());
+        assert!(editor.project.tracks[0].steps[0].is_some());
     }
 }

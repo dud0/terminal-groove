@@ -7,8 +7,8 @@ use super::{
         sync_project_with_smoothing,
     },
     render::{
-        GLOBAL_IDS, parameter_descriptors, scope_name, selected_chord_shape,
-        visible_parameter_descriptors,
+        GLOBAL_IDS, is_recipe_parameter, parameter_descriptors, parameter_recipe, scope_name,
+        selected_chord_shape, selected_drum_recipe, visible_parameter_descriptors,
     },
     state::{App, ChordField, GeneratorDialog, LfoField, Mode, ParameterBank, TriggerField},
 };
@@ -17,8 +17,8 @@ use crate::{
     generator::{ChordShapePool, Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
         ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT,
-        LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue,
-        Percent, STEP_BANK_SIZE, STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind,
+        DrumRecipeSlot, LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId,
+        ParameterValue, Percent, STEP_BANK_SIZE, STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind,
         TriggerCondition, Waveform,
     },
     reducer::{Editor, Scope},
@@ -89,6 +89,25 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     }
     if k.modifiers.contains(KeyModifiers::CONTROL) {
         match k.code {
+            KeyCode::Char('c' | 'C')
+                if a.row > 0 && matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_)) =>
+            {
+                let (track, step) = (a.row - 1, a.step);
+                match a.editor.copy_step(track, step) {
+                    Ok(()) => a.status = format!("Copied step {}", step + 1),
+                    Err(error) => a.status = error.to_string(),
+                }
+            }
+            KeyCode::Char('x' | 'X')
+                if a.row > 0 && matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_)) =>
+            {
+                cut_selected_step(a, audio);
+            }
+            KeyCode::Char('v' | 'V')
+                if a.row > 0 && matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_)) =>
+            {
+                paste_selected_step(a, audio);
+            }
             KeyCode::Char('p' | 'P') => {
                 a.pattern_cursor = a.editor.pattern().min(a.editor.project.patterns.len() - 1);
                 a.mode = Mode::PatternDialog;
@@ -345,6 +364,21 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             a.status = format!("{} probability", a.editor.project.tracks[a.row - 1].name);
         }
         KeyCode::Char('C') if a.row == CHORD_TRACK_INDEX + 1 => open_chord_editor(a),
+        KeyCode::Char(c @ '1'..='3')
+            if a.row > 0 && k.modifiers.is_empty() && selected_recipe_shortcut(a, c).is_some() =>
+        {
+            apply_selected_recipe(a, audio, selected_recipe_shortcut(a, c).unwrap());
+        }
+        KeyCode::Char('0')
+            if a.row > 0
+                && k.modifiers.is_empty()
+                && matches!(
+                    a.editor.project.tracks[a.row - 1].kind,
+                    TrackKind::Hat | TrackKind::Tom
+                ) =>
+        {
+            reset_selected_recipe_overrides(a, audio);
+        }
         KeyCode::Char(c) if a.row == 0 => {
             if let Some(id) = global_shortcut(c) {
                 a.global = id as usize;
@@ -441,6 +475,9 @@ pub(super) fn select_track(a: &mut App, track: usize) {
     a.editor.end_coalescing();
     a.row = track + 1;
     a.step = a.step.min(a.editor.project.tracks[track].steps.len() - 1);
+    if a.parameter_recipe.get() > a.editor.project.tracks[track].drum_recipe_count() {
+        a.parameter_recipe = DrumRecipeSlot::ONE;
+    }
 
     match a.mode {
         Mode::ParameterEdit(parameter)
@@ -454,6 +491,13 @@ pub(super) fn select_track(a: &mut App, track: usize) {
             enter_parameter_edit(a, replacement);
         }
         _ => {}
+    }
+
+    if a.scope == Scope::Lock
+        && let Mode::ParameterEdit(parameter) = a.mode
+        && is_recipe_parameter(a.editor.project.tracks[track].kind, parameter)
+    {
+        a.parameter_recipe = selected_drum_recipe(a, track);
     }
 }
 
@@ -731,6 +775,12 @@ where
 pub(super) fn move_step_page(a: &mut App, forward: bool) {
     a.editor.end_coalescing();
     move_step(a, forward);
+    if a.scope == Scope::Lock
+        && let Mode::ParameterEdit(parameter) = a.mode
+        && is_recipe_parameter(a.editor.project.tracks[a.row - 1].kind, parameter)
+    {
+        a.parameter_recipe = selected_drum_recipe(a, a.row - 1);
+    }
 }
 
 pub(super) fn move_step_bank(a: &mut App, forward: bool) {
@@ -972,7 +1022,7 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
                 1
             };
             let delta = if k.code == KeyCode::Up { delta } else { -delta };
-            let current = match a.editor.parameter_value(track, a.step, a.scope, parameter) {
+            let current = match editor_parameter_value(a, track, parameter) {
                 Ok(ParameterValue::Percent(v)) => v,
                 Ok(ParameterValue::Waveform(waveform)) => {
                     set_parameter(
@@ -1084,6 +1134,11 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
             } else {
                 Scope::Base
             };
+            if a.scope == Scope::Lock
+                && is_recipe_parameter(a.editor.project.tracks[track].kind, parameter)
+            {
+                a.parameter_recipe = selected_drum_recipe(a, track);
+            }
             a.status = format!("Scope {}", scope_name(a.scope));
             Ok(true)
         }
@@ -1796,6 +1851,7 @@ pub(super) fn toggle_parameter_bank(a: &mut App) {
         ParameterBank::Params => ParameterBank::Effects,
         ParameterBank::Effects => ParameterBank::Params,
     };
+    a.parameter_recipe = DrumRecipeSlot::ONE;
     if let Mode::ParameterEdit(_) = a.mode {
         let parameter = visible_parameter_descriptors(
             a.parameter_bank,
@@ -1811,6 +1867,15 @@ pub(super) fn toggle_parameter_bank(a: &mut App) {
 }
 
 pub(super) fn enter_parameter_edit(a: &mut App, parameter: ParameterId) {
+    let track = a.row.saturating_sub(1);
+    let kind = a.editor.project.tracks[track].kind;
+    if is_recipe_parameter(kind, parameter) && !matches!(a.mode, Mode::ParameterEdit(_)) {
+        a.parameter_recipe = if a.scope == Scope::Lock {
+            selected_drum_recipe(a, track)
+        } else {
+            DrumRecipeSlot::ONE
+        };
+    }
     a.mode = Mode::ParameterEdit(parameter);
     a.status = format!("Editing {}", parameter.display_name());
 }
@@ -1826,16 +1891,47 @@ pub(super) fn move_parameter_editor(a: &mut App, forward: bool) {
     };
     let descriptors =
         visible_parameter_descriptors(a.parameter_bank, a.editor.project.tracks[a.row - 1].kind);
+    let kind = a.editor.project.tracks[a.row - 1].kind;
     let index = descriptors
         .iter()
-        .position(|descriptor| descriptor.id == current)
+        .enumerate()
+        .position(|(index, descriptor)| {
+            descriptor.id == current
+                && (!is_recipe_parameter(kind, current)
+                    || parameter_recipe(kind, index) == a.parameter_recipe)
+        })
         .unwrap_or(0);
-    let next = if forward {
-        (index + 1) % descriptors.len()
-    } else {
-        (index + descriptors.len() - 1) % descriptors.len()
-    };
+    let mut next = index;
+    loop {
+        next = if forward {
+            (next + 1) % descriptors.len()
+        } else {
+            (next + descriptors.len() - 1) % descriptors.len()
+        };
+        let recipe = parameter_recipe(kind, next);
+        if a.scope == Scope::Base
+            || !is_recipe_parameter(kind, descriptors[next].id)
+            || recipe == selected_drum_recipe(a, a.row - 1)
+        {
+            a.parameter_recipe = recipe;
+            break;
+        }
+    }
     switch_parameter_editor(a, descriptors[next].id);
+}
+
+fn editor_parameter_value(
+    a: &App,
+    track: usize,
+    parameter: ParameterId,
+) -> Result<ParameterValue, crate::reducer::EditError> {
+    let kind = a.editor.project.tracks[track].kind;
+    if is_recipe_parameter(kind, parameter) {
+        a.editor
+            .drum_recipe_parameter_value(track, a.step, a.scope, a.parameter_recipe, parameter)
+    } else {
+        a.editor.parameter_value(track, a.step, a.scope, parameter)
+    }
 }
 
 pub(super) fn flipped_waveform(waveform: Waveform) -> Waveform {
@@ -1860,11 +1956,7 @@ pub(super) fn set_parameter(
     let track = a.row - 1;
     let step = a.step;
     let previous = direct_entry
-        .then(|| {
-            a.editor
-                .parameter_value(track, step, a.scope, parameter)
-                .ok()
-        })
+        .then(|| editor_parameter_value(a, track, parameter).ok())
         .flatten()
         .and_then(|value| match value {
             ParameterValue::Percent(value) => Some(value),
@@ -1873,11 +1965,22 @@ pub(super) fn set_parameter(
             ParameterValue::Spread(_) => None,
             ParameterValue::LeadSubMode(_) => None,
         });
-    let key = keep_editing.then_some(coalesce_key(track, step, parameter));
-    match a
-        .editor
-        .set_parameter(track, step, a.scope, parameter, value, key)
-    {
+    let key = keep_editing.then_some(coalesce_key(track, step, parameter, a.parameter_recipe));
+    let kind = a.editor.project.tracks[track].kind;
+    let changed = if is_recipe_parameter(kind, parameter) {
+        a.editor.set_drum_recipe_parameter(
+            track,
+            step,
+            a.scope,
+            (a.parameter_recipe, parameter),
+            value,
+            key,
+        )
+    } else {
+        a.editor
+            .set_parameter(track, step, a.scope, parameter, value, key)
+    };
+    match changed {
         Ok(true) => {
             let synced = sync_project_with_smoothing(a, audio, direct_entry);
             if synced {
@@ -1905,8 +2008,115 @@ pub(super) fn coalesce_key(
     track: usize,
     step: usize,
     parameter: ParameterId,
+    recipe: DrumRecipeSlot,
 ) -> crate::reducer::CoalesceKey {
-    crate::reducer::CoalesceKey(track, step, parameter as u8)
+    crate::reducer::CoalesceKey(
+        track,
+        step,
+        parameter as u8 + (recipe.get() - 1) * ParameterId::ALL.len() as u8,
+    )
+}
+
+fn selected_recipe_shortcut(a: &App, key: char) -> Option<DrumRecipeSlot> {
+    let track = a.editor.project.tracks.get(a.row.checked_sub(1)?)?;
+    let recipe = DrumRecipeSlot::new(key.to_digit(10)? as u8)?;
+    (matches!(track.kind, TrackKind::Hat | TrackKind::Tom)
+        && recipe.get() <= track.drum_recipe_count())
+    .then_some(recipe)
+}
+
+fn apply_selected_recipe(a: &mut App, audio: &mut Audio, recipe: DrumRecipeSlot) {
+    let required = if a.playing { 1 } else { 2 };
+    if audio.available_commands() < required {
+        a.status = "Audio command queue full; recipe edit rejected".into();
+        return;
+    }
+    let (track, step) = (a.row - 1, a.step);
+    match a.editor.set_drum_recipe(track, step, recipe) {
+        Ok(changed) if !changed || sync_project(a, audio) => {
+            a.parameter_recipe = recipe;
+            a.status = if changed {
+                format!("Recipe {} applied", recipe.get())
+            } else {
+                format!("Recipe {} auditioned", recipe.get())
+            };
+            if !a.playing {
+                let _ = audio.send(AudioCommand::AutoAudition {
+                    track: track as u8,
+                    step: step as u8,
+                });
+            }
+        }
+        Ok(_) => {}
+        Err(error) => a.status = error.to_string(),
+    }
+}
+
+fn reset_selected_recipe_overrides(a: &mut App, audio: &mut Audio) {
+    let required = if a.playing { 1 } else { 2 };
+    if audio.available_commands() < required {
+        a.status = "Audio command queue full; recipe reset rejected".into();
+        return;
+    }
+    let (track, step) = (a.row - 1, a.step);
+    match a.editor.clear_drum_recipe_overrides(track, step) {
+        Ok(changed) if !changed || sync_project(a, audio) => {
+            a.status = if changed {
+                "Recipe overrides cleared".into()
+            } else {
+                "Recipe auditioned without overrides".into()
+            };
+            if !a.playing {
+                let _ = audio.send(AudioCommand::AutoAudition {
+                    track: track as u8,
+                    step: step as u8,
+                });
+            }
+        }
+        Ok(_) => {}
+        Err(error) => a.status = error.to_string(),
+    }
+}
+
+fn cut_selected_step(a: &mut App, audio: &mut Audio) {
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; cut rejected".into();
+        return;
+    }
+    let (track, step) = (a.row - 1, a.step);
+    match a.editor.cut_step(track, step) {
+        Ok(true) if sync_project(a, audio) => {
+            a.mode = Mode::Navigation;
+            a.status = format!("Cut step {}", step + 1);
+        }
+        Ok(true) => {}
+        Ok(false) => a.status = format!("Copied empty step {}", step + 1),
+        Err(error) => a.status = error.to_string(),
+    }
+}
+
+fn paste_selected_step(a: &mut App, audio: &mut Audio) {
+    let required = if a.playing { 1 } else { 2 };
+    if audio.available_commands() < required {
+        a.status = "Audio command queue full; paste rejected".into();
+        return;
+    }
+    let (track, step) = (a.row - 1, a.step);
+    match a.editor.paste_step(track, step) {
+        Ok(true) if sync_project(a, audio) => {
+            a.mode = Mode::Navigation;
+            a.status = format!("Pasted step {}", step + 1);
+            if !a.playing && a.editor.project.tracks[track].steps[step].is_some() {
+                let _ = audio.send(AudioCommand::AutoAudition {
+                    track: track as u8,
+                    step: step as u8,
+                });
+            }
+        }
+        Ok(true) => {}
+        Ok(false) => a.status = "No change".into(),
+        Err(error) => a.status = error.to_string(),
+    }
 }
 
 pub(super) fn apply<F: FnOnce(&mut Editor) -> Result<bool, crate::reducer::EditError>>(

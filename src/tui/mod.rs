@@ -111,12 +111,12 @@ use overlays::{
 #[allow(unused_imports)]
 use render::{
     GLOBAL_IDS, ParameterDescriptor, ParameterGroup, ValueOrigin, articulation_title,
-    displayed_parameter, draw_with_device, effect_descriptors, fader_segments, global_control_text,
-    global_display_name, global_fader_segments, global_shortcut_text, global_value_text,
-    help_available, lock_has_parameter, mode_name, parameter_descriptors,
-    physical_parameter_readout, render_centered, render_global_cards, render_parameter_bank,
-    render_pitch_lfo_card, scope_name, selected_accent, selected_chord_shape, step_cell,
-    track_label,
+    displayed_parameter, displayed_parameter_for_recipe, draw_with_device, effect_descriptors,
+    fader_segments, global_control_text, global_display_name, global_fader_segments,
+    global_shortcut_text, global_value_text, help_available, lock_has_parameter, mode_name,
+    parameter_descriptors, physical_parameter_readout, render_centered, render_global_cards,
+    render_parameter_bank, render_pitch_lfo_card, scope_name, selected_accent,
+    selected_chord_shape, step_cell, track_label,
 };
 
 pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
@@ -210,17 +210,17 @@ mod tests {
         assert_eq!(drum[4].shortcut, "u");
         assert_eq!(drum[4].group, ParameterGroup::Instrument);
         let tom = parameter_descriptors(TrackKind::Tom);
-        assert_eq!(tom.len(), 7);
+        assert_eq!(tom.len(), 13);
         assert_eq!(tom[4].id, ParameterId::Tune);
         assert_eq!(tom[5].id, ParameterId::Tone);
         assert_eq!(tom[6].id, ParameterId::Decay);
         let cymbal = parameter_descriptors(TrackKind::Cymbal);
-        assert_eq!(cymbal.len(), tom.len());
+        assert_eq!(cymbal.len(), 7);
         assert_eq!(cymbal[4].id, ParameterId::Tune);
         assert_eq!(cymbal[5].id, ParameterId::Tone);
         assert_eq!(cymbal[6].id, ParameterId::Decay);
         let rimshot = parameter_descriptors(TrackKind::Rimshot);
-        assert_eq!(rimshot.len(), tom.len());
+        assert_eq!(rimshot.len(), 7);
         assert_eq!(rimshot[4].id, ParameterId::Tune);
         assert_eq!(rimshot[5].id, ParameterId::Tone);
         assert_eq!(rimshot[6].id, ParameterId::Decay);
@@ -423,6 +423,7 @@ mod tests {
         project.patterns.push(project.patterns[0].clone());
         project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -622,6 +623,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: TriggerCondition::Cycle {
                 position: 1,
                 length: 2,
@@ -889,6 +891,7 @@ mod tests {
             step: 0,
             scope: Scope::Base,
             parameter: ParameterId::Level,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             from: Percent::new(20).unwrap(),
             to: Percent::new(80).unwrap(),
             started,
@@ -1450,6 +1453,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: crate::model::ParameterLocks {
@@ -1974,5 +1978,67 @@ mod tests {
                 "unexpected main-layout hint: {hint}"
             );
         }
+    }
+
+    #[test]
+    fn drum_recipe_cards_render_inline_and_arrow_navigation_reaches_duplicates() {
+        let mut app = App::new(Project::new(), None);
+        app.row = 4;
+        let screen = rendered(&app, 120, 34);
+        assert!(screen.contains("LOW"));
+        assert!(screen.contains("MEDIUM"));
+        assert!(screen.contains("HIGH"));
+
+        app.mode = Mode::ParameterEdit(ParameterId::Tune);
+        app.parameter_recipe = crate::model::DrumRecipeSlot::ONE;
+        move_parameter_editor(&mut app, true);
+        move_parameter_editor(&mut app, true);
+        move_parameter_editor(&mut app, true);
+        assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Tune));
+        assert_eq!(app.parameter_recipe, crate::model::DrumRecipeSlot::TWO);
+
+        app.row = 3;
+        let hat = rendered(&app, 120, 34);
+        assert!(hat.contains("CLOSED"));
+        assert!(hat.contains("OPEN"));
+    }
+
+    #[test]
+    fn lock_scope_exposes_only_the_selected_drum_recipe_group() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::TWO,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        let mut app = App::new(project, None);
+        app.row = 4;
+        app.scope = Scope::Lock;
+        assert!(
+            displayed_parameter_for_recipe(
+                &app,
+                3,
+                0,
+                ParameterId::Tune,
+                crate::model::DrumRecipeSlot::ONE
+            )
+            .is_some()
+        );
+        assert!(
+            displayed_parameter_for_recipe(
+                &app,
+                3,
+                0,
+                ParameterId::Tune,
+                crate::model::DrumRecipeSlot::TWO
+            )
+            .is_some()
+        );
+        assert_eq!(
+            step_cell(app.editor.project.tracks[3].steps[0].as_ref()),
+            "x2 "
+        );
     }
 }

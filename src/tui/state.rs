@@ -2,7 +2,10 @@ use super::render::ValueOrigin;
 use crate::tui::DIRECT_PARAMETER_RAMP;
 use crate::{
     generator::{ChordShapePool, Target as GeneratorTarget},
-    model::{ChordShape, GlobalParameterId, ParameterId, Percent, Project, TRACK_COUNT, TrackKind},
+    model::{
+        ChordShape, DrumRecipeSlot, GlobalParameterId, ParameterId, Percent, Project, TRACK_COUNT,
+        TrackKind,
+    },
     reducer::{Editor, Scope},
 };
 use std::{path::PathBuf, time::Instant};
@@ -159,6 +162,7 @@ pub struct App {
     pub(super) global: usize,
     pub(super) scope: Scope,
     pub(super) parameter_bank: ParameterBank,
+    pub(super) parameter_recipe: DrumRecipeSlot,
     pub(super) mode: Mode,
     pub(super) chord_field: ChordField,
     pub(super) status: String,
@@ -185,6 +189,7 @@ pub(super) struct FaderAnimation {
     pub(super) step: usize,
     pub(super) scope: Scope,
     pub(super) parameter: ParameterId,
+    pub(super) recipe: DrumRecipeSlot,
     pub(super) from: Percent,
     pub(super) to: Percent,
     pub(super) started: Instant,
@@ -212,6 +217,7 @@ impl App {
             global: 0,
             scope: Scope::Base,
             parameter_bank: ParameterBank::Params,
+            parameter_recipe: DrumRecipeSlot::ONE,
             mode: Mode::Navigation,
             chord_field: ChordField::Shape,
             status: "Ready".into(),
@@ -247,6 +253,7 @@ impl App {
                 && animation.step == step
                 && animation.scope == scope
                 && animation.parameter == parameter
+                && animation.recipe == self.parameter_recipe
         }) {
             existing.from = existing.value_at(now);
             existing.to = to;
@@ -257,6 +264,7 @@ impl App {
                 step,
                 scope,
                 parameter,
+                recipe: self.parameter_recipe,
                 from,
                 to,
                 started: now,
@@ -268,6 +276,7 @@ impl App {
         track: usize,
         step: usize,
         parameter: ParameterId,
+        recipe: DrumRecipeSlot,
         origin: ValueOrigin,
         target: Percent,
     ) -> Percent {
@@ -278,6 +287,7 @@ impl App {
             .find(|animation| {
                 animation.track == track
                     && animation.parameter == parameter
+                    && animation.recipe == recipe
                     && animation.to == target
                     && match animation.scope {
                         Scope::Base => origin == ValueOrigin::Base,

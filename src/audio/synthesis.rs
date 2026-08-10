@@ -10,14 +10,16 @@ use super::{
 use crate::dsp::{EnvelopeProfile, StereoChorus};
 use crate::engine::{GateAction, synth_action};
 use crate::model::{
-    ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT, Instrument,
-    LEAD_TRACK_INDEX, ParameterId, ParameterLocks, Percent, SYNTH_TRACK_START, StepEvent,
+    ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT, DrumRecipeSlot,
+    Instrument, LEAD_TRACK_INDEX, ParameterId, ParameterLocks, Percent, SYNTH_TRACK_START,
+    StepEvent,
 };
 use std::sync::atomic::Ordering;
 
 impl Renderer {
     pub(super) fn drum_controls(
         track: AudioTrack,
+        recipe: DrumRecipeSlot,
         locks: ParameterLocks,
         offsets: &[f32; ParameterId::ALL.len()],
     ) -> Option<DrumControls> {
@@ -41,22 +43,36 @@ impl Renderer {
                 decay: 0.0,
                 attack: 0.0,
             }),
-            Instrument::Hat(p) => Some(DrumControls {
-                kind: DrumVoiceKind::Hat,
-                tune: value(p.tune, locks.tune, ParameterId::Tune),
-                tone: 0.5,
-                snappy: 0.0,
-                decay: value(p.decay, locks.decay, ParameterId::Decay),
-                attack: 0.0,
-            }),
-            Instrument::Tom(p) => Some(DrumControls {
-                kind: DrumVoiceKind::Tom,
-                tune: value(p.tune, locks.tune, ParameterId::Tune),
-                tone: value(p.tone, locks.tone, ParameterId::Tone),
-                snappy: 0.0,
-                decay: value(p.decay, locks.decay, ParameterId::Decay),
-                attack: 0.0,
-            }),
+            Instrument::Hat(p) => {
+                let (tune, decay) = if recipe == DrumRecipeSlot::TWO {
+                    (p.open.tune, p.open.decay)
+                } else {
+                    (p.tune, p.decay)
+                };
+                Some(DrumControls {
+                    kind: DrumVoiceKind::Hat,
+                    tune: value(tune, locks.tune, ParameterId::Tune),
+                    tone: 0.5,
+                    snappy: 0.0,
+                    decay: value(decay, locks.decay, ParameterId::Decay),
+                    attack: 0.0,
+                })
+            }
+            Instrument::Tom(p) => {
+                let (tune, tone, decay) = match recipe {
+                    DrumRecipeSlot::TWO => (p.medium.tune, p.medium.tone, p.medium.decay),
+                    DrumRecipeSlot::THREE => (p.high.tune, p.high.tone, p.high.decay),
+                    _ => (p.tune, p.tone, p.decay),
+                };
+                Some(DrumControls {
+                    kind: DrumVoiceKind::Tom,
+                    tune: value(tune, locks.tune, ParameterId::Tune),
+                    tone: value(tone, locks.tone, ParameterId::Tone),
+                    snappy: 0.0,
+                    decay: value(decay, locks.decay, ParameterId::Decay),
+                    attack: 0.0,
+                })
+            }
             Instrument::Cymbal(p) => Some(DrumControls {
                 kind: DrumVoiceKind::Cymbal,
                 tune: value(p.tune, locks.tune, ParameterId::Tune),
@@ -77,9 +93,15 @@ impl Renderer {
         }
     }
 
-    pub(super) fn trigger_drum(&mut self, track: usize, accent: bool, locks: ParameterLocks) {
+    pub(super) fn trigger_drum(
+        &mut self,
+        track: usize,
+        accent: bool,
+        recipe: DrumRecipeSlot,
+        locks: ParameterLocks,
+    ) {
         let t = self.project.tracks[track];
-        let Some(controls) = Self::drum_controls(t, locks, &self.lfo_offsets[track]) else {
+        let Some(controls) = Self::drum_controls(t, recipe, locks, &self.lfo_offsets[track]) else {
             return;
         };
         Self::start_drum_voice(&mut self.drums[track], controls, accent, self.sr);
@@ -88,10 +110,13 @@ impl Renderer {
         &mut self,
         track: usize,
         accent: bool,
+        recipe: DrumRecipeSlot,
         locks: ParameterLocks,
     ) {
         let t = self.project.tracks[track];
-        let Some(controls) = Self::drum_controls(t, locks, &self.preview_lfo_offsets[track]) else {
+        let Some(controls) =
+            Self::drum_controls(t, recipe, locks, &self.preview_lfo_offsets[track])
+        else {
             return;
         };
         Self::start_drum_voice(&mut self.preview_drums[track], controls, accent, self.sr);
@@ -828,13 +853,13 @@ impl Renderer {
             true,
         );
         if track < DRUM_TRACK_COUNT {
-            let accent = match self.project.patterns[self.active_pattern].tracks[track].steps[step]
-            {
-                Some(StepEvent::Trigger { accent, .. }) => accent,
-                _ => self.project.tracks[track].input_accent,
-            };
+            let (accent, recipe) =
+                match self.project.patterns[self.active_pattern].tracks[track].steps[step] {
+                    Some(StepEvent::Trigger { accent, recipe, .. }) => (accent, recipe),
+                    _ => (self.project.tracks[track].input_accent, DrumRecipeSlot::ONE),
+                };
             self.restart_preview_trigger_lfos(track);
-            self.trigger_preview_drum(track, accent, self.locks_at(track, step));
+            self.trigger_preview_drum(track, accent, recipe, self.locks_at(track, step));
             return;
         }
         let t = self.project.patterns[self.active_pattern].tracks[track];
@@ -1049,10 +1074,15 @@ impl Renderer {
                 self.update_drum_mix(track, step, ParameterSmoothing::Default.samples(self.sr));
             }
             if trigger_allowed
-                && let Some(StepEvent::Trigger { accent, locks, .. }) = sequence.steps[step]
+                && let Some(StepEvent::Trigger {
+                    accent,
+                    recipe,
+                    locks,
+                    ..
+                }) = sequence.steps[step]
             {
                 self.restart_trigger_lfos(track);
-                self.trigger_drum(track, accent, locks);
+                self.trigger_drum(track, accent, recipe, locks);
             }
             return;
         }

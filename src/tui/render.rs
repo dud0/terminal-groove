@@ -78,7 +78,7 @@ pub(super) fn help_available(mode: &Mode) -> bool {
 const HELP_TEXT: &str =
     "CORE  Space play/pause · . stop/reset · ? help · Esc close help
       Ctrl+N new project · Ctrl+O browse projects · Ctrl+S save · Ctrl+Shift+S save as
-      Ctrl+Q quit · Ctrl+Z undo · Ctrl+Y redo
+      Ctrl+Q quit · Ctrl+Z undo · Ctrl+Y redo · Ctrl+C/X/V copy/cut/paste selected step
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
 NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
@@ -87,14 +87,15 @@ NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/�
            Shift+Delete clear selected track
 EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
                  A accent/default · Shift+G Bass/Lead slide · Shift+T condition/retrigger · Shift+S swing · Shift+Q probability
+                 Hat 1/2 Closed/Open · Tom 1/2/3 Low/Medium/High · 0 clear recipe locks
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
 PARAMETERS  v level · n pan · y delay send · b reverb send
            Tab PARAMS/EFFECTS · EFFECTS: d drive · t tone · x distortion mix
            EFFECTS: r/e/f/M phaser rate/depth/feedback/mix
            EFFECTS: R rate · q delay · E depth · F feedback · N flanger mix
            Kick: u tune · d decay · a attack
-           Snare: u tune · t tone · s snappy · Hat: u tune · d decay
-           Tom/Cymbal/Rimshot: u tune · t tone · d decay
+           Snare: u tune · t tone · s snappy · Hat recipes: u tune · d decay
+           Tom recipes/Cymbal/Rimshot: u tune · t tone · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
            Chord/Lead: w osc mix · P pulse · u sub · i pitch LFO
            Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR
@@ -118,25 +119,38 @@ pub(super) fn step_cell(event: Option<&StepEvent>) -> String {
         None => " . ".into(),
         Some(StepEvent::Trigger {
             accent,
+            recipe,
             condition,
             retrigger_count,
             locks,
+            ..
         }) if *condition != TriggerCondition::Always || *retrigger_count != 1 => {
-            if *accent {
+            if recipe.get() > 1 {
+                format!("{}+{}", if *accent { 'X' } else { 'x' }, recipe.get())
+            } else if *accent {
                 "X+ ".into()
             } else {
                 "x+ ".into()
             }
         }
-        Some(StepEvent::Trigger { accent, locks, .. }) if locks.is_empty() => {
-            if *accent {
+        Some(StepEvent::Trigger {
+            accent,
+            recipe,
+            locks,
+            ..
+        }) if locks.is_empty() => {
+            if recipe.get() > 1 {
+                format!("{}{} ", if *accent { 'X' } else { 'x' }, recipe.get())
+            } else if *accent {
                 " X ".into()
             } else {
                 " x ".into()
             }
         }
-        Some(StepEvent::Trigger { accent, .. }) => {
-            if *accent {
+        Some(StepEvent::Trigger { accent, recipe, .. }) => {
+            if recipe.get() > 1 {
+                format!("{}*{}", if *accent { 'X' } else { 'x' }, recipe.get())
+            } else if *accent {
                 "X* ".into()
             } else {
                 "x* ".into()
@@ -204,6 +218,13 @@ pub(super) fn articulation_title(a: &App, track: usize) -> String {
                 a.editor.project.tracks[track].steps[a.step]
             {
                 text.push_str(&format!(" · Slide {}", if slide { "on" } else { "off" }));
+            }
+            if let Some(recipe) = a.editor.project.tracks[track].steps[a.step]
+                .as_ref()
+                .and_then(StepEvent::drum_recipe)
+            {
+                text.push_str(" · ");
+                text.push_str(recipe_label(a.editor.project.tracks[track].kind, recipe));
             }
             text
         }
@@ -365,7 +386,7 @@ const SNARE_PARAMETERS: [ParameterDescriptor; 7] = [
     },
 ];
 
-const HAT_PARAMETERS: [ParameterDescriptor; 6] = [
+const HAT_PARAMETERS: [ParameterDescriptor; 8] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
@@ -382,9 +403,21 @@ const HAT_PARAMETERS: [ParameterDescriptor; 6] = [
         shortcut: "d",
         group: ParameterGroup::Instrument,
     },
+    ParameterDescriptor {
+        id: ParameterId::Tune,
+        label: "Tune",
+        shortcut: "u",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Decay,
+        label: "Decay",
+        shortcut: "d",
+        group: ParameterGroup::Instrument,
+    },
 ];
 
-const TOM_PARAMETERS: [ParameterDescriptor; 7] = [
+const TOM_PARAMETERS: [ParameterDescriptor; 13] = [
     COMMON_PARAMETERS[0],
     COMMON_PARAMETERS[1],
     COMMON_PARAMETERS[2],
@@ -407,10 +440,54 @@ const TOM_PARAMETERS: [ParameterDescriptor; 7] = [
         shortcut: "d",
         group: ParameterGroup::Instrument,
     },
+    ParameterDescriptor {
+        id: ParameterId::Tune,
+        label: "Tune",
+        shortcut: "u",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Tone,
+        label: "Tone",
+        shortcut: "t",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Decay,
+        label: "Decay",
+        shortcut: "d",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Tune,
+        label: "Tune",
+        shortcut: "u",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Tone,
+        label: "Tone",
+        shortcut: "t",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Decay,
+        label: "Decay",
+        shortcut: "d",
+        group: ParameterGroup::Instrument,
+    },
 ];
 
-const CYMBAL_PARAMETERS: [ParameterDescriptor; 7] = TOM_PARAMETERS;
-const RIMSHOT_PARAMETERS: [ParameterDescriptor; 7] = TOM_PARAMETERS;
+const CYMBAL_PARAMETERS: [ParameterDescriptor; 7] = [
+    COMMON_PARAMETERS[0],
+    COMMON_PARAMETERS[1],
+    COMMON_PARAMETERS[2],
+    COMMON_PARAMETERS[3],
+    TOM_PARAMETERS[4],
+    TOM_PARAMETERS[5],
+    TOM_PARAMETERS[6],
+];
+const RIMSHOT_PARAMETERS: [ParameterDescriptor; 7] = CYMBAL_PARAMETERS;
 
 const BASS_PARAMETERS: [ParameterDescriptor; 9] = [
     COMMON_PARAMETERS[0],
@@ -680,6 +757,48 @@ pub(super) fn visible_parameter_descriptors(
     }
 }
 
+pub(super) fn parameter_recipe(kind: TrackKind, index: usize) -> crate::model::DrumRecipeSlot {
+    use crate::model::DrumRecipeSlot;
+    match kind {
+        TrackKind::Hat if index >= 6 => DrumRecipeSlot::TWO,
+        TrackKind::Tom if (7..10).contains(&index) => DrumRecipeSlot::TWO,
+        TrackKind::Tom if index >= 10 => DrumRecipeSlot::THREE,
+        _ => DrumRecipeSlot::ONE,
+    }
+}
+
+pub(super) fn is_recipe_parameter(kind: TrackKind, parameter: ParameterId) -> bool {
+    match kind {
+        TrackKind::Hat => matches!(parameter, ParameterId::Tune | ParameterId::Decay),
+        TrackKind::Tom => matches!(
+            parameter,
+            ParameterId::Tune | ParameterId::Tone | ParameterId::Decay
+        ),
+        _ => false,
+    }
+}
+
+pub(super) fn recipe_label(kind: TrackKind, recipe: crate::model::DrumRecipeSlot) -> &'static str {
+    use crate::model::DrumRecipeSlot;
+    match (kind, recipe) {
+        (TrackKind::Hat, DrumRecipeSlot::ONE) => "CLOSED",
+        (TrackKind::Hat, DrumRecipeSlot::TWO) => "OPEN",
+        (TrackKind::Tom, DrumRecipeSlot::ONE) => "LOW",
+        (TrackKind::Tom, DrumRecipeSlot::TWO) => "MEDIUM",
+        (TrackKind::Tom, DrumRecipeSlot::THREE) => "HIGH",
+        _ => "INSTRUMENT",
+    }
+}
+
+pub(super) fn selected_drum_recipe(a: &App, track: usize) -> crate::model::DrumRecipeSlot {
+    a.editor.project.tracks[track]
+        .steps
+        .get(a.step)
+        .and_then(Option::as_ref)
+        .and_then(StepEvent::drum_recipe)
+        .unwrap_or(crate::model::DrumRecipeSlot::ONE)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ValueOrigin {
     Base,
@@ -696,16 +815,34 @@ pub(super) fn displayed_parameter(
     step: usize,
     parameter: ParameterId,
 ) -> Option<(ParameterValue, ValueOrigin)> {
-    let base = a
-        .editor
-        .parameter_value(track, step, Scope::Base, parameter)
-        .ok()?;
+    displayed_parameter_for_recipe(a, track, step, parameter, crate::model::DrumRecipeSlot::ONE)
+}
+
+pub(super) fn displayed_parameter_for_recipe(
+    a: &App,
+    track: usize,
+    step: usize,
+    parameter: ParameterId,
+    recipe: crate::model::DrumRecipeSlot,
+) -> Option<(ParameterValue, ValueOrigin)> {
+    let kind = a.editor.project.tracks.get(track)?.kind;
+    let recipe_parameter = is_recipe_parameter(kind, parameter);
+    let base = if recipe_parameter {
+        a.editor
+            .drum_recipe_parameter_value(track, step, Scope::Base, recipe, parameter)
+            .ok()?
+    } else {
+        a.editor
+            .parameter_value(track, step, Scope::Base, parameter)
+            .ok()?
+    };
     if a.scope == Scope::Base {
         let value = match base {
             ParameterValue::Percent(target) => ParameterValue::Percent(a.animated_percent(
                 track,
                 step,
                 parameter,
+                recipe,
                 ValueOrigin::Base,
                 target,
             )),
@@ -721,19 +858,27 @@ pub(super) fn displayed_parameter(
         .and_then(|t| t.steps.get(step))
         .and_then(Option::as_ref)
         .is_some_and(|event| lock_has_parameter(event, parameter));
-    let value = a
-        .editor
-        .parameter_value(track, step, Scope::Lock, parameter)
-        .unwrap_or(base);
+    if recipe_parameter && selected_drum_recipe(a, track) != recipe {
+        return Some((base, ValueOrigin::Base));
+    }
+    let value = if recipe_parameter {
+        a.editor
+            .drum_recipe_parameter_value(track, step, Scope::Lock, recipe, parameter)
+            .unwrap_or(base)
+    } else {
+        a.editor
+            .parameter_value(track, step, Scope::Lock, parameter)
+            .unwrap_or(base)
+    };
     let origin = if locked {
         ValueOrigin::Lock
     } else {
         ValueOrigin::Base
     };
     let value = match value {
-        ParameterValue::Percent(target) => {
-            ParameterValue::Percent(a.animated_percent(track, step, parameter, origin, target))
-        }
+        ParameterValue::Percent(target) => ParameterValue::Percent(
+            a.animated_percent(track, step, parameter, recipe, origin, target),
+        ),
         value => value,
     };
     Some((value, origin))
@@ -762,7 +907,9 @@ pub(super) fn physical_parameter_readout(
             })
             .unwrap_or_else(|| "unassigned · LFO".into());
     }
-    let Some((value, origin)) = displayed_parameter(a, track, step, parameter) else {
+    let Some((value, origin)) =
+        displayed_parameter_for_recipe(a, track, step, parameter, a.parameter_recipe)
+    else {
         return "unavailable".into();
     };
     let origin = match origin {
@@ -1278,9 +1425,15 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
     let mut group_start = 0;
     while group_start < descriptors.len() {
         let group = descriptors[group_start].group;
+        let group_recipe = parameter_recipe(t.kind, group_start);
         let group_end = descriptors[group_start..]
             .iter()
-            .position(|descriptor| descriptor.group != group)
+            .enumerate()
+            .position(|(offset, descriptor)| {
+                descriptor.group != group
+                    || (group == ParameterGroup::Instrument
+                        && parameter_recipe(t.kind, group_start + offset) != group_recipe)
+            })
             .map(|offset| group_start + offset)
             .unwrap_or(descriptors.len());
         let group_area = Rect {
@@ -1289,18 +1442,36 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             width: slot_width * (group_end - group_start) as u16,
             height: 1,
         };
+        let group_enabled = a.scope == Scope::Base
+            || group != ParameterGroup::Instrument
+            || !matches!(t.kind, TrackKind::Hat | TrackKind::Tom)
+            || selected_drum_recipe(a, track) == group_recipe;
         render_centered(
             f,
-            group.label(),
+            if group == ParameterGroup::Instrument
+                && matches!(t.kind, TrackKind::Hat | TrackKind::Tom)
+            {
+                recipe_label(t.kind, group_recipe)
+            } else {
+                group.label()
+            },
             group_area,
             Style::default()
-                .fg(group.color())
+                .fg(if group_enabled {
+                    group.color()
+                } else {
+                    Color::DarkGray
+                })
                 .add_modifier(Modifier::BOLD),
         );
         group_start = group_end;
     }
 
     for (index, descriptor) in descriptors.iter().enumerate() {
+        let recipe = parameter_recipe(t.kind, index);
+        let enabled = a.scope == Scope::Base
+            || !is_recipe_parameter(t.kind, descriptor.id)
+            || selected_drum_recipe(a, track) == recipe;
         let slot = Rect {
             x: bank.x + slot_width * index as u16,
             y: bank.y,
@@ -1309,10 +1480,16 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         };
         let active = matches!(
             a.mode,
-            Mode::ParameterEdit(parameter) if parameter == descriptor.id
+            Mode::ParameterEdit(parameter)
+                if parameter == descriptor.id
+                    && (!is_recipe_parameter(t.kind, descriptor.id)
+                        || a.parameter_recipe == recipe)
         ) || matches!(
             a.mode,
-            Mode::LfoEdit { parameter, .. } if parameter == descriptor.id
+            Mode::LfoEdit { parameter, .. }
+                if parameter == descriptor.id
+                    && (!is_recipe_parameter(t.kind, descriptor.id)
+                        || a.parameter_recipe == recipe)
         );
         let group_color = descriptor.group.color();
         let block = if active {
@@ -1344,6 +1521,8 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 .fg(group_color)
                 .reversed()
                 .add_modifier(Modifier::BOLD)
+        } else if !enabled {
+            Style::default().fg(Color::DarkGray)
         } else {
             Style::default()
                 .fg(group_color)
@@ -1353,7 +1532,9 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             render_pitch_lfo_card(f, content, t, descriptor, active, group_color, style);
             continue;
         }
-        let Some((value, origin)) = displayed_parameter(a, track, a.step, descriptor.id) else {
+        let Some((value, origin)) =
+            displayed_parameter_for_recipe(a, track, a.step, descriptor.id, recipe)
+        else {
             continue;
         };
         let value_label = match value {

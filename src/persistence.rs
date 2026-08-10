@@ -44,7 +44,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if version != Some(19) {
+    if version != Some(20) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
@@ -168,12 +168,14 @@ mod tests {
         project.patterns.push(project.patterns[0].clone());
         project.patterns[0].tracks[0].steps[0] = Some(crate::model::StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
         });
         project.patterns[1].tracks[0].steps[1] = Some(crate::model::StepEvent::Trigger {
             accent: true,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -256,7 +258,7 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 19);
+        assert_eq!(value["format_version"], 20);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -267,9 +269,12 @@ mod tests {
         assert_eq!(value["tracks"][4]["kind"], "cymbal");
         assert_eq!(value["tracks"][4]["name"], "Cymbal");
         assert_eq!(value["tracks"][3]["kind"], "tom");
-        assert_eq!(value["tracks"][3]["instrument"]["tune"], 50);
-        assert_eq!(value["tracks"][3]["instrument"]["tone"], 50);
-        assert_eq!(value["tracks"][3]["instrument"]["decay"], 40);
+        assert_eq!(value["tracks"][2]["instrument"]["open"]["decay"], 85);
+        assert_eq!(value["tracks"][3]["instrument"]["tune"], 15);
+        assert_eq!(value["tracks"][3]["instrument"]["tone"], 35);
+        assert_eq!(value["tracks"][3]["instrument"]["decay"], 60);
+        assert_eq!(value["tracks"][3]["instrument"]["medium"]["tune"], 50);
+        assert_eq!(value["tracks"][3]["instrument"]["high"]["tune"], 85);
         assert_eq!(value["tracks"][4]["instrument"]["tone"], 55);
         assert_eq!(value["tracks"][5]["kind"], "rimshot");
         assert_eq!(value["tracks"][5]["name"], "Rimshot");
@@ -390,18 +395,15 @@ mod tests {
 
     #[test]
     fn legacy_projects_are_rejected_after_the_format_bump() {
-        for json in [
-            r#"{"format_version":18}"#,
-            r#"{"format_version":18,"globals":{},"tracks":[]}"#,
-        ] {
+        for version in [18, 19] {
             let path = tempfile::NamedTempFile::new().unwrap();
-            fs::write(path.path(), json).unwrap();
+            fs::write(path.path(), format!(r#"{{"format_version":{version}}}"#)).unwrap();
             assert!(matches!(
                 load(path.path()),
                 Err(ProjectIoError::Validation {
-                    source: crate::model::ValidationError::Version(18),
+                    source: crate::model::ValidationError::Version(found),
                     ..
-                })
+                }) if found == version
             ));
         }
     }
@@ -601,7 +603,7 @@ mod tests {
             .remove("flanger");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 19);
+        assert_eq!(loaded.format_version, 20);
         assert_eq!(
             loaded.tracks[0].effects.flanger,
             crate::model::FlangerParameters::default()
@@ -648,6 +650,50 @@ mod tests {
         assert!(matches!(
             load(&path),
             Err(ProjectIoError::Validation { .. })
+        ));
+    }
+
+    #[test]
+    fn drum_recipes_round_trip_and_recipe_one_is_omitted() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("recipes.groove.json");
+        let mut project = Project::new();
+        project.patterns[0].tracks[2].steps[0] = Some(crate::model::StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        project.patterns[0].tracks[3].steps[0] = Some(crate::model::StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::THREE,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        save_atomic(&path, &project).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            value["patterns"][0]["tracks"][2]["steps"][0]
+                .get("recipe")
+                .is_none()
+        );
+        assert_eq!(value["patterns"][0]["tracks"][3]["steps"][0]["recipe"], 3);
+        assert_eq!(value["tracks"][2]["instrument"]["open"]["decay"], 85);
+        assert_eq!(value["tracks"][3]["instrument"]["medium"]["tone"], 50);
+        assert_eq!(load(&path).unwrap(), project);
+
+        let mut invalid = value;
+        invalid["patterns"][0]["tracks"][2]["steps"][0]["recipe"] = 3.into();
+        fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        assert!(matches!(
+            load(&path),
+            Err(ProjectIoError::Validation {
+                source: crate::model::ValidationError::DrumRecipe(2, 0),
+                ..
+            })
         ));
     }
 }

@@ -65,7 +65,9 @@ Playback supports start, pause, resume, stop, reset, live editing, drum triggers
 
 ### 2.3 Drum events
 
-A drum step is either empty or contains one trigger with a required Boolean `accent`, a trigger `condition`, and a `retrigger_count`. Each track has a persisted input accent default, initially off. New triggers inherit that default; pressing `A` on an empty step toggles the default and leaves the step empty. Pressing `A` on an occupied trigger toggles only that trigger's accent. New triggers otherwise always trigger and retrigger once. `condition` is `Always`, `Cycle { position, length }` for all phases of lengths 2–4, or `Chance { probability }` at 0–100%. Counts are 1–4 inclusive, including the first hit. Ties never carry these fields. Pressing `Enter` on an occupied drum step clears the trigger, its articulation, and all locks.
+A drum step is either empty or contains one trigger with a required Boolean `accent`, a trigger `condition`, and a `retrigger_count`. Hi-hat and Tom triggers additionally select a referenced instrument recipe: Hi-hat recipes are Closed and Open, while Tom recipes are Low, Medium, and High. Recipe 1 is the default and is omitted from JSON. Each track has a persisted input accent default, initially off. New triggers inherit that default; pressing `A` on an empty step toggles the default and leaves the step empty. Pressing `A` on an occupied trigger toggles only that trigger's accent. New triggers otherwise always trigger and retrigger once. `condition` is `Always`, `Cycle { position, length }` for all phases of lengths 2–4, or `Chance { probability }` at 0–100%. Counts are 1–4 inclusive, including the first hit. Ties never carry these fields. Pressing `Enter` on an occupied drum step clears the trigger, its articulation, and all locks.
+
+On the Hi-hat row, `1` and `2` select Closed and Open. On the Tom row, `1`, `2`, and `3` select Low, Medium, and High. The shortcut creates a trigger on an empty step or changes the recipe on an existing trigger, preserving accent, condition, retrigger count, and unrelated locks. Selecting a recipe clears that step's Tune/Tone/Decay overrides as applicable. `0` clears those overrides without changing the recipe. Recipe selection automatically auditions while stopped or paused.
 
 Each drum track is a single retriggerable synthesized voice. Accent has a fixed engine-specific response: it raises level and may also strengthen transient excitation or brightness, including the Rimshot's high-frequency crack. Instrument parameters are captured when the hit starts and remain part of that hit's tail. Mixer level and sends continue to follow each sequencer step.
 
@@ -117,7 +119,7 @@ Every track has base parameter values. A step may contain a sparse set of parame
 - Locks are permitted only on a drum trigger, synth note, or synth tie.
 - Instrument parameters, waveform, pan, level, delay send, reverb send, distortion, and phaser parameters are lockable. Chord spread is also lockable on Chord steps. Effects are not LFO destinations.
 - Mute is never lockable.
-- At each boundary, the engine computes effective values by overlaying the current step's locks on the base values.
+- At each boundary, the engine resolves the referenced Hi-hat or Tom recipe, then overlays the current step's locks.
 - A track LFO then applies its bipolar offset around that effective base-or-lock value and clamps the result to 0–100%.
 - At the next boundary, an unlocked parameter returns to its base value or takes the next step's lock.
 - Continuous changes are smoothed to prevent clicks.
@@ -190,7 +192,7 @@ The hi-hat is an intentionally sample-free metallic percussion voice rather than
 - `tune`: moves the metallic source base from approximately 310–670 Hz and its filter bands.
 - `decay`: maps exponentially from approximately 25–800 ms, spanning closed to open behavior.
 
-Defaults: tune 50%, decay 20%. Accent adds about 3 dB and a short brightness boost.
+Closed is recipe 1 and defaults to tune 50%, decay 15%. Open defaults to tune 50%, decay 85%. Recipe changes affect all referencing steps on their next hit. Accent adds about 3 dB and a short brightness boost.
 
 ### 3.6 Tom drum
 
@@ -200,7 +202,7 @@ The Tom is a 909-style synthesized tom combining two damped triangle resonators,
 - `tone`: balances the low body, upper resonator, and attack click.
 - `decay`: maps exponentially from approximately 90–800 ms.
 
-Defaults: tune 50%, tone 50%, decay 40%. Accent adds about 3 dB and a stronger attack click.
+Low is recipe 1 and defaults to tune/tone/decay 15%/35%/60%. Medium defaults to 50%/50%/45%, and High to 85%/65%/35%. Recipe changes affect all referencing steps on their next hit. Accent adds about 3 dB and a stronger attack click.
 
 ### 3.7 Cymbal
 
@@ -364,6 +366,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `Ctrl+Q` | Quit, with dirty confirmation |
 | Anywhere | `Ctrl+Z` | Undo |
 | Anywhere | `Ctrl+Y` | Redo |
+| Track navigation/parameter screen | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy, cut, or paste the selected step exactly; paste requires the same track kind |
 | Navigation, parameter, LFO, or Chord editor | `?` | Open the full help overlay |
 | Navigation or parameter editor | `~` (`Shift+\``) | Jump to the global-controls row |
 | Track | `p` | Toggle visible `BASE`/`LOCK` scope |
@@ -388,6 +391,8 @@ The application uses ordinary portable terminal press events. It must not requir
 | Snare | `u` / `t` / `s` | Edit tune, tone, or snappy |
 | Hi-hat | `u` / `d` | Edit tune or decay |
 | Tom/Cymbal/Rimshot | `u` / `t` / `d` | Edit tune, tone, or decay |
+| Hi-hat | `1` / `2` / `0` | Select Closed/Open recipe, or clear its step overrides |
+| Tom | `1` / `2` / `3` / `0` | Select Low/Medium/High recipe, or clear its step overrides |
 | Pitched track | `1`–`8` | Insert/replace note at current input octave |
 | Pitched track | `[` / `]` | Decrease/increase input octave, clamped to 0–7 |
 | Pitched track | `t` | Insert, replace with, or clear a tie subject to validation |
@@ -462,7 +467,7 @@ At `120x34` or larger, the normal screen contains:
 4. A selected-control panel: vertical parameter faders for the selected track, or ten titled global detail cards when the global row is selected. The global cards show a tempo numeric readout, delay-division/key/scale selectors, and faders for delay feedback, reverb time, reverb tone, reverb pre-delay, and reverb return. Global faders use their model ranges (`0–95%`, `0.2–10.0 s`, `0–100%`, `0–200 ms`, and `0–100%`) and show exact values with units beside the fader; every card retains its local shortcut.
 5. Status line: current mode, last successful operation or actionable error, and active-editor guidance. While a track parameter is being edited in `LOCK` scope, the selected-control panel and status line prominently show `LOCK PARAMETER EDITING` using contrasting styling.
 
-Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. The selected-track title shows event accent, the empty-step input accent default, inherited accent/source on ties, and Bass or Lead slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, envelope, distortion, phaser, and flanger groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus `BASE`-inherited values. Physical units are shown in the active readout; flanger readouts show Hz, center delay/excursion in ms, feedback, and wet mix. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.
+Track percentage parameters use ten vertically stacked segments, filled proportionally and accompanied by an exact percentage. Hi-hat shows adjacent Closed and Open Tune/Decay groups; Tom shows adjacent Low, Medium, and High Tune/Tone/Decay groups. In BASE scope every recipe is editable. In LOCK scope only the selected trigger's recipe group remains active and its locks override that recipe. The selected-track title and non-default step-cell digit identify the referenced recipe. The selected-track title also shows event accent, the empty-step input accent default, inherited accent/source on ties, and Bass or Lead slide state. Bass waveform and Chord chorus use the same column geometry as discrete switches. Mixer, instrument, filter, envelope, distortion, phaser, and flanger groups use distinct colors. The active parameter editor is marked with a heavy outline, reverse styling, and a bold label. In `LOCK` scope, faders show effective values and explicitly identify `LOCK` overrides versus recipe/base-inherited values. Physical units are shown in the active readout; flanger readouts show Hz, center delay/excursion in ms, feedback, and wet mix. A `~` badge marks parameters with an LFO assignment, including disabled assignments. The Chord/Lead `Pitch LFO` card is LFO-only and shows depth plus its ±semitone range instead of a base or lock value.
 
 The compact, centered track-level LFO modal arranges enabled, waveform, trigger reset, starting phase, rate mode, rate, and depth as seven control columns from left to right, matching left/right field selection and up/down value adjustment. Its width is capped at 116 columns and shrinks safely on smaller areas. Control names occupy their card borders to avoid duplicated labels and empty space. Enabled, trigger reset, and rate mode use two-position switches; waveform and synchronized rate use multi-value selectors that fill all available rows; and starting phase, free rate, and depth use ten-segment faders. Up selects the displayed option above and Down selects the option below; switches and selectors stop at their first and last values instead of cycling. For faders, Up increases and Down decreases. Starting phase shows both percentage and derived degrees. The selected column uses the same heavy outline, reverse styling, and bold labeling as an active parameter. Rate shows its synchronized division or free percentage together with the resulting physical Hz value; ordinary depth is labeled in bipolar percentage points, while pitch depth also shows its ±semitone range. The Chord editor uses the same compact treatment as LFO, with four equal-width Shape, Arp, Type, and Rate fields, disabled Type/Rate styling while Arp is off, trigger-origin indicators, and PageUp/PageDown step navigation. The trigger editor uses the same large card treatment with five horizontal Mode, Phase, Length, Chance, and Retrigger fields: Mode, Phase, Length, and Retrigger are multi-option selectors, Chance is a ten-segment percentage fader, and selector arrows follow the displayed order. Inactive mode-specific fields remain visibly muted. Swing and pattern-generator dialogs use compact, content-sized centered overlays.
 
@@ -526,7 +531,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`. TUI Save As appends this extension to bare names and does not duplicate it when already present; explicit CLI project paths are used literally.
-- Version 18 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs, invalid tie graphs, and song references outside the dynamic pattern list. The required `globals.sidechain` object contains `depth`, `attack`, and `release` percentages. Version 17 and earlier files remain rejected; unsupported versions, missing versions, and unknown future versions are rejected without migration.
+- Version 20 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs/recipes, invalid tie graphs, and song references outside the dynamic pattern list. The required `globals.sidechain` object contains `depth`, `attack`, and `release` percentages. Version 19 and earlier files remain rejected; unsupported versions, missing versions, and unknown future versions are rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -536,7 +541,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 19,
+  "format_version": 20,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -588,9 +593,9 @@ The top-level object is:
 
 Top-level tracks contain shared configuration only. Sequence data is stored under `patterns[].tracks[].steps`; each pattern track contains 1 through 64 steps, and its array length is the track length.
 
-Tom, Cymbal, and Rimshot instruments each store `tune`, `tone`, and `decay`. Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `noise`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. `spread` accepts `off`, `narrow`, or `wide`. Lead stores `oscillator_mix`, `pulse_width`, `sub_oscillator`, `noise`, `sub_mode`, `keyboard_tracking`, `portamento_time`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`; `sub_mode` accepts `one_octave_square`, `two_octave_square`, or `two_octave_narrow_pulse`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
+Hi-hat stores recipe-1 `tune` and `decay` plus a required `open` object with the same fields. Tom stores recipe-1 `tune`, `tone`, and `decay` plus required `medium` and `high` objects with the same fields. Cymbal and Rimshot each store `tune`, `tone`, and `decay`. Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `noise`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. `spread` accepts `off`, `narrow`, or `wide`. Lead stores `oscillator_mix`, `pulse_width`, `sub_oscillator`, `noise`, `sub_mode`, `keyboard_tracking`, `portamento_time`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`; `sub_mode` accepts `one_octave_square`, `two_octave_square`, or `two_octave_narrow_pulse`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`.
 
-An empty step is JSON `null`. Populated steps use tagged `trigger`, `bass_note`, `note`, `lead_note`, or `tie` objects with a required `locks` object. `accent` is required and Boolean on triggers and notes; `slide` is additionally required on `bass_note` and `lead_note`; both are invalid on ties.
+An empty step is JSON `null`. Populated steps use tagged `trigger`, `bass_note`, `note`, `lead_note`, or `tie` objects with a required `locks` object. `accent` is required and Boolean on triggers and notes; `slide` is additionally required on `bass_note` and `lead_note`; both are invalid on ties. Hi-hat triggers accept recipe 1–2 and Tom triggers 1–3; recipe 1 is omitted, while recipes are invalid on other tracks.
 
 Chord notes may include an optional `chord_shape` string. Omitted values mean `triad_root` (`1-3-5`). They may also include `arpeggio` with `enabled`, `type`, and `rate`; omitted arpeggio means disabled, Up, and `1/16`, while non-default type/rate values remain stored when disabled. The stable shape names are `single`, `dyad_third`, `dyad_fifth`, `triad_root`, `triad_first_inversion`, `triad_second_inversion`, `seventh_root`, `seventh_first_inversion`, `seventh_second_inversion`, `seventh_third_inversion`, `sixth_root`, `sixth_first_inversion`, `sixth_second_inversion`, `sixth_third_inversion`, `sus2_root`, `sus2_first_inversion`, `sus2_second_inversion`, `sus4_root`, `sus4_first_inversion`, and `sus4_second_inversion`. Chord data is invalid on Lead notes.
 
@@ -630,7 +635,7 @@ For Chord or Lead pitch:
 }
 ```
 
-The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. Trigger reset and starting phase are required LFO fields in format version 19.
+The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. Trigger reset and starting phase are required LFO fields in format version 20.
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 
@@ -735,7 +740,7 @@ Cover musical degree/frequency mapping, input limits, tie creation/resolution/cl
 
 ### 12.2 Persistence tests
 
-Round-trip default and populated version-18 projects, including Rimshot, sidechain, track probability, every event, lock, LFO, effect, flanger setting, and articulation variant. The sidechain object and all three fields are required; missing or invalid values are rejected. Missing `tracks[].probability` loads as 100%; new saves always include it. Reject version 17 and other unsupported versions, incompatible Noise and Keyboard Tracking LFO assignments, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, and history reset on load.
+Round-trip default and populated version-20 projects, including drum recipes, Rimshot, sidechain, track probability, every event, lock, LFO, effect, flanger setting, and articulation variant. The sidechain object and all three fields are required; missing or invalid values are rejected. Missing `tracks[].probability` loads as 100%; new saves always include it. Reject version 19 and other unsupported versions, incompatible recipes, Noise and Keyboard Tracking LFO assignments, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, history reset on load, and exact same-kind step clipboard behavior.
 
 ### 12.3 TUI tests
 
@@ -752,7 +757,7 @@ Cover bounded oscillator pitch, ADSR timing, filter stability, finite drum outpu
 3. Enter Bass, Chord, and Lead notes with octave changes, shapes, inversions, arpeggiation, accents, slide, ordinary and wrapped ties; verify gates, releases, inherited articulation, and the fixed-time Bass glide.
 4. Edit base values, locks, synced/free LFOs, and all track effects including flanger center delay/depth; verify faders, readouts, badges, modulation centers, smoothing, and next-pass live updates.
 5. Audition empty and occupied steps with `o` while stopped and playing, including Chord shapes; change key and scale and verify existing degrees are reinterpreted on future triggers.
-6. Exercise undo/redo, tie cleanup, coalesced parameter edits, dirty restoration, sidechain editing and version-18 save/load with all event, lock, LFO, effect, mixer, articulation, and input settings; verify version-17 rejection.
+6. Exercise undo/redo, step copy/cut/paste, tie cleanup, coalesced parameter and recipe edits, dirty restoration, sidechain editing and version-20 save/load with all event, lock, LFO, effect, mixer, articulation, and input settings; verify version-19 rejection.
 7. List devices, use the default output, select a unique explicit device, and play for at least ten minutes at a supported low-latency configuration without stream errors, non-finite output, timing drift, or audible edit clicks.
 8. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored and project editing remains safe where supported.
 

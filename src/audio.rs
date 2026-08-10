@@ -575,6 +575,7 @@ mod tests {
             for track in 0..DRUM_TRACK_COUNT {
                 project.patterns[0].tracks[track].steps[step] = Some(StepEvent::Trigger {
                     accent: step % 4 == 0,
+                    recipe: crate::model::DrumRecipeSlot::ONE,
                     condition: Default::default(),
                     retrigger_count: 4,
                     locks: Default::default(),
@@ -1036,6 +1037,7 @@ mod tests {
         project.patterns.push(project.patterns[0].clone());
         project.patterns[1].tracks[0].steps[1] = Some(StepEvent::Trigger {
             accent: true,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -1086,6 +1088,7 @@ mod tests {
         project.patterns[0].tracks[0].steps.resize(4, None);
         project.patterns[0].tracks[0].steps[3] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 4,
             locks: Default::default(),
@@ -1117,6 +1120,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 4,
             locks: Default::default(),
@@ -1133,6 +1137,7 @@ mod tests {
 
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: true,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -1149,6 +1154,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 2,
             locks: Default::default(),
@@ -1185,6 +1191,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 4,
             locks: Default::default(),
@@ -1222,6 +1229,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: crate::model::TriggerCondition::Chance {
                 probability: Percent::ZERO,
             },
@@ -1286,6 +1294,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -1432,7 +1441,12 @@ mod tests {
         let status = Arc::new(AudioStatus::default());
         let mut renderer =
             Renderer::new(AudioProject::from_project(&Project::new()), 8_000, status);
-        renderer.trigger_drum(0, false, ParameterLocks::default());
+        renderer.trigger_drum(
+            0,
+            false,
+            crate::model::DrumRecipeSlot::ONE,
+            ParameterLocks::default(),
+        );
         renderer.command(AudioCommand::PlayPause);
         renderer.command(AudioCommand::PlayPause);
         let elapsed_before = renderer.drums[0].envelope.elapsed;
@@ -1451,6 +1465,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -1474,6 +1489,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -1495,6 +1511,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -1532,6 +1549,7 @@ mod tests {
 
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: ParameterLocks {
@@ -1548,6 +1566,7 @@ mod tests {
         let mut p = Project::new();
         p.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -1569,6 +1588,7 @@ mod tests {
             project.tracks[track_index].muted = false;
             project.patterns[0].tracks[track_index].steps[0] = Some(StepEvent::Trigger {
                 accent: true,
+                recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
                 locks: Default::default(),
@@ -1606,6 +1626,7 @@ mod tests {
             parameters.decay = Percent::new(decay).unwrap();
             project.patterns[0].tracks[RIMSHOT_TRACK_INDEX].steps[0] = Some(StepEvent::Trigger {
                 accent,
+                recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
                 locks: Default::default(),
@@ -1686,6 +1707,7 @@ mod tests {
             let mut project = Project::new();
             project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
                 accent,
+                recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
                 locks: Default::default(),
@@ -2169,6 +2191,7 @@ mod tests {
         for step in [0, 4, 8, 12] {
             project.patterns[0].tracks[0].steps[step] = Some(StepEvent::Trigger {
                 accent: step == 0,
+                recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
                 locks: Default::default(),
@@ -2177,6 +2200,7 @@ mod tests {
         for step in [4, 12] {
             project.patterns[0].tracks[1].steps[step] = Some(StepEvent::Trigger {
                 accent: true,
+                recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
                 locks: Default::default(),
@@ -2185,6 +2209,7 @@ mod tests {
         for step in 0..16 {
             project.patterns[0].tracks[2].steps[step] = Some(StepEvent::Trigger {
                 accent: step == 6 || step == 14,
+                recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
                 locks: Default::default(),
@@ -2244,6 +2269,7 @@ mod tests {
         let mut dry_project = Project::new();
         dry_project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -2268,6 +2294,7 @@ mod tests {
         let mut dry_project = Project::new();
         dry_project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -2287,6 +2314,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -2326,6 +2354,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: ParameterLocks {
@@ -2934,6 +2963,7 @@ mod tests {
         });
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 2,
             locks: Default::default(),
@@ -3158,5 +3188,34 @@ mod tests {
                 .iter()
                 .all(|(left, right)| left.is_finite() && right.is_finite())
         );
+    }
+
+    #[test]
+    fn drum_recipe_resolution_precedes_locks() {
+        let project = AudioProject::from_project(&Project::new());
+        let offsets = [0.0; ParameterId::ALL.len()];
+        let hat = Renderer::drum_controls(
+            project.tracks[2],
+            crate::model::DrumRecipeSlot::TWO,
+            ParameterLocks::default(),
+            &offsets,
+        )
+        .unwrap();
+        assert!((hat.tune - 0.50).abs() < f32::EPSILON);
+        assert!((hat.decay - 0.85).abs() < f32::EPSILON);
+
+        let tom = Renderer::drum_controls(
+            project.tracks[3],
+            crate::model::DrumRecipeSlot::THREE,
+            ParameterLocks {
+                decay: Percent::new(12),
+                ..Default::default()
+            },
+            &offsets,
+        )
+        .unwrap();
+        assert!((tom.tune - 0.85).abs() < f32::EPSILON);
+        assert!((tom.tone - 0.65).abs() < f32::EPSILON);
+        assert!((tom.decay - 0.12).abs() < f32::EPSILON);
     }
 }

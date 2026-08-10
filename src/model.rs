@@ -102,6 +102,8 @@ pub enum ValidationError {
     Condition(usize, usize),
     #[error("tracks[{0}].steps[{1}]: retrigger_count must be between 1 and 4")]
     Retrigger(usize, usize),
+    #[error("tracks[{0}].steps[{1}]: invalid drum recipe")]
+    DrumRecipe(usize, usize),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -142,6 +144,45 @@ impl<'de> Deserialize<'de> for Percent {
         let n = u8::deserialize(d)?;
         Self::new(n).ok_or_else(|| serde::de::Error::custom("percentage must be between 0 and 100"))
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct DrumRecipeSlot(u8);
+
+impl Default for DrumRecipeSlot {
+    fn default() -> Self {
+        Self::ONE
+    }
+}
+
+impl DrumRecipeSlot {
+    pub const ONE: Self = Self(1);
+    pub const TWO: Self = Self(2);
+    pub const THREE: Self = Self(3);
+
+    pub const fn new(value: u8) -> Option<Self> {
+        if value >= 1 && value <= 3 {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for DrumRecipeSlot {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = u8::deserialize(deserializer)?;
+        Self::new(value).ok_or_else(|| serde::de::Error::custom("drum recipe must be 1, 2, or 3"))
+    }
+}
+
+fn drum_recipe_is_default(value: &DrumRecipeSlot) -> bool {
+    *value == DrumRecipeSlot::ONE
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -798,10 +839,26 @@ pub struct SnareParameters {
 pub struct HatParameters {
     pub tune: Percent,
     pub decay: Percent,
+    pub open: HatRecipe,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HatRecipe {
+    pub tune: Percent,
+    pub decay: Percent,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TomParameters {
+    pub tune: Percent,
+    pub tone: Percent,
+    pub decay: Percent,
+    pub medium: TomRecipe,
+    pub high: TomRecipe,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TomRecipe {
     pub tune: Percent,
     pub tone: Percent,
     pub decay: Percent,
@@ -1384,6 +1441,8 @@ impl fmt::Display for TriggerCondition {
 pub enum StepEvent {
     Trigger {
         accent: bool,
+        #[serde(default, skip_serializing_if = "drum_recipe_is_default")]
+        recipe: DrumRecipeSlot,
         #[serde(default, skip_serializing_if = "trigger_condition_is_default")]
         condition: TriggerCondition,
         #[serde(
@@ -1452,6 +1511,20 @@ fn retrigger_count_is_default(value: &u8) -> bool {
     *value == 1
 }
 impl StepEvent {
+    pub fn drum_recipe(&self) -> Option<DrumRecipeSlot> {
+        match self {
+            Self::Trigger { recipe, .. } => Some(*recipe),
+            _ => None,
+        }
+    }
+
+    pub fn drum_recipe_mut(&mut self) -> Option<&mut DrumRecipeSlot> {
+        match self {
+            Self::Trigger { recipe, .. } => Some(recipe),
+            _ => None,
+        }
+    }
+
     pub fn locks(&self) -> &ParameterLocks {
         match self {
             Self::Trigger { locks, .. }
@@ -1805,7 +1878,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 19,
+            format_version: 20,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1831,16 +1904,30 @@ impl Project {
                     "Hi-hat",
                     Instrument::Hat(HatParameters {
                         tune: p(50),
-                        decay: p(20),
+                        decay: p(15),
+                        open: HatRecipe {
+                            tune: p(50),
+                            decay: p(85),
+                        },
                     }),
                 ),
                 track(
                     TrackKind::Tom,
                     "Tom",
                     Instrument::Tom(TomParameters {
-                        tune: p(50),
-                        tone: p(50),
-                        decay: p(40),
+                        tune: p(15),
+                        tone: p(35),
+                        decay: p(60),
+                        medium: TomRecipe {
+                            tune: p(50),
+                            tone: p(50),
+                            decay: p(45),
+                        },
+                        high: TomRecipe {
+                            tune: p(85),
+                            tone: p(65),
+                            decay: p(35),
+                        },
                     }),
                 ),
                 track(
@@ -1962,7 +2049,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 19 {
+        if self.format_version != 20 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -2090,6 +2177,16 @@ impl Project {
                             && !(1..=4).contains(&count)
                         {
                             return Err(ValidationError::Retrigger(ti, si));
+                        }
+                        if let StepEvent::Trigger { recipe, .. } = event {
+                            let maximum = match track.kind {
+                                TrackKind::Hat => 2,
+                                TrackKind::Tom => 3,
+                                _ => 1,
+                            };
+                            if recipe.get() > maximum {
+                                return Err(ValidationError::DrumRecipe(ti, si));
+                            }
                         }
                         if let StepEvent::Note {
                             chord_shape,
@@ -2496,6 +2593,77 @@ impl ParameterId {
 }
 
 impl Track {
+    pub const fn drum_recipe_count(&self) -> u8 {
+        match self.kind {
+            TrackKind::Hat => 2,
+            TrackKind::Tom => 3,
+            _ => 1,
+        }
+    }
+
+    pub fn drum_recipe_parameter(
+        &self,
+        recipe: DrumRecipeSlot,
+        parameter: ParameterId,
+    ) -> Option<ParameterValue> {
+        if recipe == DrumRecipeSlot::ONE {
+            return self.parameter(parameter);
+        }
+        match (self.instrument, recipe, parameter) {
+            (Instrument::Hat(p), DrumRecipeSlot::TWO, ParameterId::Tune) => {
+                Some(ParameterValue::Percent(p.open.tune))
+            }
+            (Instrument::Hat(p), DrumRecipeSlot::TWO, ParameterId::Decay) => {
+                Some(ParameterValue::Percent(p.open.decay))
+            }
+            (Instrument::Tom(p), DrumRecipeSlot::TWO, ParameterId::Tune) => {
+                Some(ParameterValue::Percent(p.medium.tune))
+            }
+            (Instrument::Tom(p), DrumRecipeSlot::TWO, ParameterId::Tone) => {
+                Some(ParameterValue::Percent(p.medium.tone))
+            }
+            (Instrument::Tom(p), DrumRecipeSlot::TWO, ParameterId::Decay) => {
+                Some(ParameterValue::Percent(p.medium.decay))
+            }
+            (Instrument::Tom(p), DrumRecipeSlot::THREE, ParameterId::Tune) => {
+                Some(ParameterValue::Percent(p.high.tune))
+            }
+            (Instrument::Tom(p), DrumRecipeSlot::THREE, ParameterId::Tone) => {
+                Some(ParameterValue::Percent(p.high.tone))
+            }
+            (Instrument::Tom(p), DrumRecipeSlot::THREE, ParameterId::Decay) => {
+                Some(ParameterValue::Percent(p.high.decay))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn set_drum_recipe_parameter(
+        &mut self,
+        recipe: DrumRecipeSlot,
+        parameter: ParameterId,
+        value: ParameterValue,
+    ) -> bool {
+        if recipe == DrumRecipeSlot::ONE {
+            return self.set_parameter(parameter, value);
+        }
+        let ParameterValue::Percent(value) = value else {
+            return false;
+        };
+        match (&mut self.instrument, recipe, parameter) {
+            (Instrument::Hat(p), DrumRecipeSlot::TWO, ParameterId::Tune) => p.open.tune = value,
+            (Instrument::Hat(p), DrumRecipeSlot::TWO, ParameterId::Decay) => p.open.decay = value,
+            (Instrument::Tom(p), DrumRecipeSlot::TWO, ParameterId::Tune) => p.medium.tune = value,
+            (Instrument::Tom(p), DrumRecipeSlot::TWO, ParameterId::Tone) => p.medium.tone = value,
+            (Instrument::Tom(p), DrumRecipeSlot::TWO, ParameterId::Decay) => p.medium.decay = value,
+            (Instrument::Tom(p), DrumRecipeSlot::THREE, ParameterId::Tune) => p.high.tune = value,
+            (Instrument::Tom(p), DrumRecipeSlot::THREE, ParameterId::Tone) => p.high.tone = value,
+            (Instrument::Tom(p), DrumRecipeSlot::THREE, ParameterId::Decay) => p.high.decay = value,
+            _ => return false,
+        }
+        true
+    }
+
     pub fn parameter(&self, parameter: ParameterId) -> Option<ParameterValue> {
         let value = match parameter {
             ParameterId::Level => ParameterValue::Percent(self.level),
@@ -2870,12 +3038,14 @@ mod tests {
         let mut right = left.clone();
         left.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
         });
         right.tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: true,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -2884,6 +3054,7 @@ mod tests {
 
         right.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: true,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -3061,7 +3232,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 19);
+        assert_eq!(project.format_version, 20);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
@@ -3116,6 +3287,7 @@ mod tests {
     fn accent_and_slide_event_fields_are_strict() {
         let trigger = StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: Default::default(),
@@ -3167,6 +3339,7 @@ mod tests {
         let mut drum = Project::new();
         drum.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks: ParameterLocks {
@@ -3398,6 +3571,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
             accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
             locks,
@@ -3406,5 +3580,43 @@ mod tests {
             project.validate(),
             Err(ValidationError::Lock(0, 0, "cutoff"))
         );
+    }
+
+    #[test]
+    fn drum_recipe_defaults_and_track_bounds_are_strict() {
+        let mut project = Project::new();
+        let Instrument::Hat(hat) = project.tracks[2].instrument else {
+            panic!("expected hat")
+        };
+        assert_eq!(hat.decay, p(15));
+        assert_eq!(hat.open.decay, p(85));
+        let Instrument::Tom(tom) = project.tracks[3].instrument else {
+            panic!("expected tom")
+        };
+        assert_eq!((tom.tune, tom.tone, tom.decay), (p(15), p(35), p(60)));
+        assert_eq!(tom.medium.tune, p(50));
+        assert_eq!(tom.high.tune, p(85));
+
+        project.patterns[0].tracks[2].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: DrumRecipeSlot::TWO,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: DrumRecipeSlot::THREE,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        project.validate().unwrap();
+        *project.patterns[0].tracks[2].steps[0]
+            .as_mut()
+            .unwrap()
+            .drum_recipe_mut()
+            .unwrap() = DrumRecipeSlot::THREE;
+        assert_eq!(project.validate(), Err(ValidationError::DrumRecipe(2, 0)));
     }
 }

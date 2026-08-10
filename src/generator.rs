@@ -253,6 +253,7 @@ fn fill_track(
             | TrackKind::Cymbal
             | TrackKind::Rimshot => StepEvent::Trigger {
                 accent,
+                recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
                 locks: ParameterLocks::default(),
