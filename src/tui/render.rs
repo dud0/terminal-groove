@@ -219,12 +219,14 @@ pub(super) fn articulation_title(a: &App, track: usize) -> String {
             {
                 text.push_str(&format!(" · Slide {}", if slide { "on" } else { "off" }));
             }
-            if let Some(recipe) = a.editor.project.tracks[track].steps[a.step]
-                .as_ref()
-                .and_then(StepEvent::drum_recipe)
+            let kind = a.editor.project.tracks[track].kind;
+            if matches!(kind, TrackKind::Hat | TrackKind::Tom)
+                && let Some(recipe) = a.editor.project.tracks[track].steps[a.step]
+                    .as_ref()
+                    .and_then(StepEvent::drum_recipe)
             {
                 text.push_str(" · ");
-                text.push_str(recipe_label(a.editor.project.tracks[track].kind, recipe));
+                text.push_str(recipe_label(kind, recipe));
             }
             text
         }

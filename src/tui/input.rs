@@ -775,6 +775,10 @@ where
 pub(super) fn move_step_page(a: &mut App, forward: bool) {
     a.editor.end_coalescing();
     move_step(a, forward);
+    refresh_lock_recipe(a);
+}
+
+fn refresh_lock_recipe(a: &mut App) {
     if a.scope == Scope::Lock
         && let Mode::ParameterEdit(parameter) = a.mode
         && is_recipe_parameter(a.editor.project.tracks[a.row - 1].kind, parameter)
@@ -798,6 +802,7 @@ pub(super) fn move_step_bank(a: &mut App, forward: bool) {
         (bank + banks - 1) % banks
     };
     a.step = (next_bank * STEP_BANK_SIZE + offset).min(length - 1);
+    refresh_lock_recipe(a);
 }
 
 pub(super) fn move_step_vertical(a: &mut App, down: bool) {

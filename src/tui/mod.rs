@@ -884,6 +884,16 @@ mod tests {
     }
 
     #[test]
+    fn articulation_titles_label_only_hat_and_tom_recipes() {
+        let mut app = App::new(Project::new(), None);
+        app.editor.toggle_event(0, 0).unwrap();
+        assert_eq!(articulation_title(&app, 0), "Accent off");
+
+        app.editor.toggle_event(2, 0).unwrap();
+        assert_eq!(articulation_title(&app, 2), "Accent off · CLOSED");
+    }
+
+    #[test]
     fn fader_animation_interpolates_and_reaches_its_target() {
         let started = Instant::now();
         let animation = FaderAnimation {
@@ -1937,6 +1947,31 @@ mod tests {
         assert_eq!(app.step, 19);
         move_step_bank(&mut app, true);
         assert_eq!(app.step, 3);
+    }
+
+    #[test]
+    fn bank_navigation_refreshes_the_lock_recipe() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[3]
+            .steps
+            .resize(STEP_BANK_SIZE * 2, None);
+        project.patterns[0].tracks[3].steps[STEP_BANK_SIZE] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::TWO,
+            condition: Default::default(),
+            retrigger_count: 1,
+            locks: Default::default(),
+        });
+        let mut app = App::new(project, None);
+        app.row = 4;
+        app.scope = Scope::Lock;
+        app.mode = Mode::ParameterEdit(ParameterId::Tune);
+        app.parameter_recipe = crate::model::DrumRecipeSlot::ONE;
+
+        move_step_bank(&mut app, true);
+
+        assert_eq!(app.step, STEP_BANK_SIZE);
+        assert_eq!(app.parameter_recipe, crate::model::DrumRecipeSlot::TWO);
     }
 
     #[test]
