@@ -196,7 +196,7 @@ Defaults: tune 50%, decay 20%. Accent adds about 3 dB and a short brightness boo
 
 The Tom is a 909-style synthesized tom combining two damped triangle resonators, a short deterministic attack click, and mild nonlinear coloration.
 
-- `tune`: maps the fundamental from approximately 90–210 Hz and the upper resonator from 133–311 Hz.
+- `tune`: maps the fundamental from approximately 80–220 Hz and the upper resonator from 118–326 Hz.
 - `tone`: balances the low body, upper resonator, and attack click.
 - `decay`: maps exponentially from approximately 90–800 ms.
 
