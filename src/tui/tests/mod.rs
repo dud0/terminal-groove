@@ -1529,7 +1529,8 @@ fn global_cards_show_all_local_shortcuts() {
         assert!(screen.contains(key), "missing {key}");
     }
     for value in [
-        "Tempo", "1/8", "30%", "2.5 s", "40%", "20 ms", "Return", "Off", "C", "Major",
+        "Tempo", "Dly div", "Rev time", "Pre-dly", "1/8", "30%", "2.5 s", "40%", "20 ms", "Return",
+        "Off", "C", "Major",
     ] {
         assert!(screen.contains(value), "missing {value}");
     }

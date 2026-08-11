@@ -1175,10 +1175,6 @@ pub(super) fn global_shortcut_text(id: GlobalParameterId) -> &'static str {
     global_control(id).shortcut
 }
 
-pub(super) fn global_display_name(id: GlobalParameterId) -> &'static str {
-    global_control(id).label
-}
-
 pub(super) fn global_value_text(g: &crate::model::Globals, id: GlobalParameterId) -> String {
     match id {
         GlobalParameterId::Tempo => format!("{} BPM", g.tempo_bpm),
@@ -1429,7 +1425,7 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
         }
         render_centered(
             f,
-            global_display_name(id),
+            control.detail_label,
             Rect {
                 y: content.y + 11,
                 height: 1,
