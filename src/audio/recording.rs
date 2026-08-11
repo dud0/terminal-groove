@@ -115,7 +115,7 @@ struct PreparedTake {
 
 enum WorkerCommand {
     Prepare(PreparedTake),
-    Shutdown,
+    Shutdown { take_error: Option<&'static str> },
 }
 
 struct CurrentTake {
@@ -250,8 +250,20 @@ impl RecordingWorker {
         self.events.try_recv().ok()
     }
 
+    pub(super) fn request_shutdown(&self) {
+        let _ = self
+            .commands
+            .send(WorkerCommand::Shutdown { take_error: None });
+    }
+
+    pub(super) fn request_failed_stream_shutdown(&self) {
+        let _ = self.commands.send(WorkerCommand::Shutdown {
+            take_error: Some("audio stream failed while recording"),
+        });
+    }
+
     pub(super) fn shutdown(&mut self) {
-        let _ = self.commands.send(WorkerCommand::Shutdown);
+        self.request_shutdown();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -273,6 +285,7 @@ fn writer_loop(
 ) {
     let mut current: Option<CurrentTake> = None;
     let mut shutdown = false;
+    let mut shutdown_error = None;
     loop {
         loop {
             match commands.try_recv() {
@@ -288,7 +301,12 @@ fn writer_loop(
                         first_error: None,
                     });
                 }
-                Ok(WorkerCommand::Shutdown) | Err(TryRecvError::Disconnected) => {
+                Ok(WorkerCommand::Shutdown { take_error }) => {
+                    shutdown = true;
+                    shutdown_error = take_error;
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
                     shutdown = true;
                     break;
                 }
@@ -319,6 +337,9 @@ fn writer_loop(
             }
         }
         if shutdown {
+            if let (Some(take), Some(error)) = (current.as_mut(), shutdown_error) {
+                take.first_error.get_or_insert_with(|| error.into());
+            }
             while let Ok(item) = queue.pop() {
                 if let Some(take) = current.as_mut() {
                     match item {
@@ -508,6 +529,36 @@ mod tests {
         let reader = hound::WavReader::open(path).unwrap();
         assert_eq!(reader.duration(), 0);
         assert_eq!(reader.spec().channels, 2);
+    }
+
+    #[test]
+    fn failed_stream_shutdown_without_callback_end_finalizes_the_accepted_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("failed-stream.wav");
+        let status = Arc::new(AudioStatus::default());
+        let (mut worker, mut producer) = RecordingWorker::spawn(48_000, status).unwrap();
+        worker.prepare(&path, 48_000).unwrap();
+        producer.start();
+        producer.capture(0.25, -0.25);
+        producer.capture(0.5, -0.5);
+        drop(producer);
+        worker.request_failed_stream_shutdown();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let event = loop {
+            if let Some(event) = worker.poll() {
+                break event;
+            }
+            assert!(Instant::now() < deadline, "writer did not finish");
+            thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(event.frames, 2);
+        assert_eq!(
+            event.result,
+            Err("audio stream failed while recording".into())
+        );
+        worker.shutdown();
+        assert_eq!(hound::WavReader::open(path).unwrap().duration(), 2);
     }
 
     #[test]

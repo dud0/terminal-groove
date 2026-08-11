@@ -65,9 +65,7 @@ impl Audio {
     }
     /// Destroy snapshots on the UI thread, never from the audio callback.
     pub fn reap_retired(&mut self) {
-        while let Ok(snapshot) = self.retired.pop() {
-            drop(snapshot);
-        }
+        reap_retired_queue(&mut self.retired);
     }
     pub fn log_pending_diagnostics(&mut self) -> std::io::Result<super::AudioDiagnostics> {
         let mut diagnostics = super::AudioDiagnostics::default();
@@ -111,6 +109,9 @@ impl Audio {
         self.recording_path.as_deref()
     }
     pub fn start_recording(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        if self.status.failed.load(Ordering::Acquire) {
+            anyhow::bail!("audio stream has failed; cannot start recording")
+        }
         if self.recording_state != super::RecordingState::Idle {
             anyhow::bail!("a recording is already active or finalizing")
         }
@@ -136,26 +137,58 @@ impl Audio {
         if self.recording_state != super::RecordingState::Recording {
             anyhow::bail!("no recording is active")
         }
+        if self.status.failed.load(Ordering::Acquire) {
+            self.begin_failed_stream_finalization();
+            return Ok(());
+        }
         self.send(AudioCommand::StopRecording)
             .map_err(|_| super::recording::queue_full_error())?;
         self.recording_state = super::RecordingState::Finalizing;
         Ok(())
     }
     pub fn poll_recording_event(&mut self) -> Option<super::RecordingEvent> {
+        if self.recording_state != super::RecordingState::Idle
+            && self.status.failed.load(Ordering::Acquire)
+        {
+            self.begin_failed_stream_finalization();
+        }
         let event = self.recording_worker.poll()?;
         self.recording_state = super::RecordingState::Idle;
         self.recording_path = None;
         Some(event)
     }
+    fn begin_failed_stream_finalization(&mut self) {
+        if self.recording_state == super::RecordingState::Idle || self.stream.is_none() {
+            return;
+        }
+        self.recording_state = super::RecordingState::Finalizing;
+        // A failed callback cannot deliver an ordered end marker. Stop and
+        // destroy its producer first, then let the worker drain every frame it
+        // had already accepted and finalize that contiguous prefix.
+        self.stream.take();
+        self.recording_worker.request_failed_stream_shutdown();
+    }
     pub fn shutdown_recording(&mut self) {
-        if self.recording_state == super::RecordingState::Recording {
-            while self.stop_recording().is_err() && !self.status.failed.load(Ordering::Acquire) {
+        if self.status.failed.load(Ordering::Acquire) {
+            self.begin_failed_stream_finalization();
+        } else if self.recording_state == super::RecordingState::Recording {
+            loop {
+                self.reap_retired();
+                if self.status.failed.load(Ordering::Acquire) {
+                    self.begin_failed_stream_finalization();
+                    break;
+                }
+                if self.stop_recording().is_ok() {
+                    break;
+                }
                 std::thread::sleep(Duration::from_millis(1));
             }
         }
-        while self.recording_state != super::RecordingState::Idle
-            && !self.status.failed.load(Ordering::Acquire)
-        {
+        while self.recording_state != super::RecordingState::Idle {
+            self.reap_retired();
+            if self.status.failed.load(Ordering::Acquire) {
+                self.begin_failed_stream_finalization();
+            }
             if self.poll_recording_event().is_none() {
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -212,9 +245,35 @@ impl Audio {
     }
 }
 
+fn reap_retired_queue(retired: &mut Consumer<Box<AudioProject>>) {
+    while let Ok(snapshot) = retired.pop() {
+        drop(snapshot);
+    }
+}
+
 impl Drop for Audio {
     fn drop(&mut self) {
         self.stream.take();
         self.recording_worker.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rtrb::RingBuffer;
+
+    #[test]
+    fn finalization_wait_can_release_every_retirement_slot() {
+        let project = Project::new();
+        let (mut producer, mut retired) = RingBuffer::new(32);
+        for _ in 0..32 {
+            producer
+                .push(Box::new(AudioProject::from_project(&project)))
+                .unwrap();
+        }
+        assert_eq!(producer.slots(), 0);
+        reap_retired_queue(&mut retired);
+        assert_eq!(producer.slots(), 32);
     }
 }
