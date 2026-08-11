@@ -1,10 +1,12 @@
 [package]
 name = "terminal-groove"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A real-time terminal groovebox"
 license = "MIT"
+homepage = "https://github.com/dud0/terminal-groove"
+repository = "https://github.com/dud0/terminal-groove"
 
 [dependencies]
 anyhow = "1"
