@@ -57,11 +57,14 @@ impl Drop for TerminalGuard {
 }
 
 mod controller;
+mod controls;
 mod input;
 mod overlays;
 mod render;
 mod state;
 
+#[cfg(test)]
+use controls::GLOBAL_CONTROLS;
 pub use state::App;
 #[cfg(test)]
 use state::FaderAnimation;
@@ -110,13 +113,13 @@ use overlays::{
 #[cfg(test)]
 #[allow(unused_imports)]
 use render::{
-    GLOBAL_IDS, ParameterDescriptor, ParameterGroup, ValueOrigin, articulation_title,
-    displayed_parameter, displayed_parameter_for_recipe, draw_with_device, effect_descriptors,
-    fader_segments, global_control_text, global_display_name, global_fader_segments,
-    global_shortcut_text, global_value_text, help_available, lock_has_parameter, mode_name,
-    parameter_descriptors, physical_parameter_readout, render_centered, render_global_cards,
-    render_parameter_bank, render_pitch_lfo_card, scope_name, selected_accent,
-    selected_chord_shape, step_cell, track_label,
+    ParameterDescriptor, ParameterGroup, ValueOrigin, articulation_title, displayed_parameter,
+    displayed_parameter_for_recipe, draw_with_device, effect_descriptors, fader_segments,
+    global_control_text, global_display_name, global_fader_segments, global_shortcut_text,
+    global_value_text, help_available, lock_has_parameter, mode_name, parameter_descriptors,
+    physical_parameter_readout, render_centered, render_global_cards, render_parameter_bank,
+    render_pitch_lfo_card, scope_name, selected_accent, selected_chord_shape, step_cell,
+    track_label,
 };
 
 pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {

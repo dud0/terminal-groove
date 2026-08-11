@@ -1,5 +1,5 @@
 use super::{
-    render::GLOBAL_IDS,
+    controls::{GLOBAL_CONTROLS, global_control},
     state::{App, FileAction, Mode, ParameterBank, SidechainField},
 };
 use crate::{
@@ -385,22 +385,13 @@ pub(super) fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
 }
 
 pub(super) fn global_id(index: usize) -> GlobalParameterId {
-    GLOBAL_IDS[index % GLOBAL_IDS.len()]
+    GLOBAL_CONTROLS[index % GLOBAL_CONTROLS.len()].id
 }
 pub(super) fn global_shortcut(c: char) -> Option<GlobalParameterId> {
-    match c {
-        't' => Some(GlobalParameterId::Tempo),
-        'y' => Some(GlobalParameterId::DelayDivision),
-        'f' => Some(GlobalParameterId::DelayFeedback),
-        'r' => Some(GlobalParameterId::ReverbTime),
-        'b' => Some(GlobalParameterId::ReverbTone),
-        'p' => Some(GlobalParameterId::ReverbPreDelay),
-        'm' => Some(GlobalParameterId::ReverbReturn),
-        'd' => Some(GlobalParameterId::Ducking),
-        'k' => Some(GlobalParameterId::Key),
-        's' => Some(GlobalParameterId::Scale),
-        _ => None,
-    }
+    GLOBAL_CONTROLS
+        .iter()
+        .find(|control| control.shortcut.starts_with(c))
+        .map(|control| control.id)
 }
 pub(super) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
     a.mode = if id == GlobalParameterId::Tempo {
@@ -417,9 +408,9 @@ pub(super) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
 
 pub(super) fn move_global_editor(a: &mut App, forward: bool) {
     let next = if forward {
-        (a.global + 1) % GLOBAL_IDS.len()
+        (a.global + 1) % GLOBAL_CONTROLS.len()
     } else {
-        (a.global + GLOBAL_IDS.len() - 1) % GLOBAL_IDS.len()
+        (a.global + GLOBAL_CONTROLS.len() - 1) % GLOBAL_CONTROLS.len()
     };
     a.editor.end_coalescing();
     a.global = next;
@@ -427,18 +418,7 @@ pub(super) fn move_global_editor(a: &mut App, forward: bool) {
 }
 
 pub(super) fn global_name(id: GlobalParameterId) -> &'static str {
-    match id {
-        GlobalParameterId::Tempo => "tempo",
-        GlobalParameterId::DelayDivision => "delay division",
-        GlobalParameterId::DelayFeedback => "delay feedback",
-        GlobalParameterId::ReverbTime => "reverb time",
-        GlobalParameterId::ReverbTone => "reverb tone",
-        GlobalParameterId::ReverbPreDelay => "reverb pre-delay",
-        GlobalParameterId::ReverbReturn => "reverb return",
-        GlobalParameterId::Ducking => "ducking",
-        GlobalParameterId::Key => "key",
-        GlobalParameterId::Scale => "scale",
-    }
+    global_control(id).name
 }
 pub(super) fn edit_global<F: FnOnce(&mut crate::model::Globals)>(
     a: &mut App,

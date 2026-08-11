@@ -560,6 +560,9 @@ fn direct_percentage_entry_excludes_discrete_parameters() {
     assert!(!parameter_supports_direct_percentage(ParameterId::Waveform));
     assert!(!parameter_supports_direct_percentage(ParameterId::Chorus));
     assert!(!parameter_supports_direct_percentage(ParameterId::Spread));
+    assert!(!parameter_supports_direct_percentage(
+        ParameterId::LeadSubMode
+    ));
     assert!(!parameter_supports_direct_percentage(ParameterId::Pitch));
 }
 
@@ -1475,7 +1478,7 @@ fn sidechain_editor_renders_off_state_and_physical_readouts() {
 #[test]
 fn global_shortcuts_enter_editing_for_every_control() {
     let mut app = App::new(Project::new(), None);
-    for id in GLOBAL_IDS {
+    for id in GLOBAL_CONTROLS.map(|control| control.id) {
         enter_global_edit(&mut app, id);
         match id {
             GlobalParameterId::Tempo => assert_eq!(app.mode, Mode::TempoInput(String::new())),
@@ -1497,7 +1500,7 @@ fn global_editor_left_and_right_cycle_controls() {
     app.mode = Mode::GlobalEdit(GlobalParameterId::Tempo);
 
     move_global_editor(&mut app, false);
-    assert_eq!(app.global, GLOBAL_IDS.len() - 1);
+    assert_eq!(app.global, GLOBAL_CONTROLS.len() - 1);
     assert_eq!(app.mode, Mode::GlobalEdit(GlobalParameterId::Scale));
 
     move_global_editor(&mut app, true);

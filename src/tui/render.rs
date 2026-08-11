@@ -6,6 +6,7 @@ use super::overlays::{
 };
 use super::{
     controller::{PROJECT_EXTENSION, global_name, project_directory, project_path_for_name},
+    controls::{GLOBAL_CONTROLS, global_control},
     input::parameter_supports_direct_percentage,
     state::{App, Mode, ParameterBank},
 };
@@ -308,38 +309,126 @@ impl ParameterGroup {
     }
 }
 
-const COMMON_PARAMETERS: [ParameterDescriptor; 4] = [
-    ParameterDescriptor {
-        id: ParameterId::Level,
-        label: "Level",
-        shortcut: "v",
-        group: ParameterGroup::Mixer,
-    },
-    ParameterDescriptor {
-        id: ParameterId::DelaySend,
-        label: "Delay",
-        shortcut: "y",
-        group: ParameterGroup::Mixer,
-    },
-    ParameterDescriptor {
-        id: ParameterId::ReverbSend,
-        label: "Reverb",
-        shortcut: "b",
-        group: ParameterGroup::Mixer,
-    },
-    ParameterDescriptor {
-        id: ParameterId::Pan,
-        label: "Pan",
-        shortcut: "n",
-        group: ParameterGroup::Mixer,
-    },
-];
+const LEVEL_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Level,
+    label: "Level",
+    shortcut: "v",
+    group: ParameterGroup::Mixer,
+};
+const DELAY_SEND_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::DelaySend,
+    label: "Delay",
+    shortcut: "y",
+    group: ParameterGroup::Mixer,
+};
+const REVERB_SEND_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::ReverbSend,
+    label: "Reverb",
+    shortcut: "b",
+    group: ParameterGroup::Mixer,
+};
+const PAN_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Pan,
+    label: "Pan",
+    shortcut: "n",
+    group: ParameterGroup::Mixer,
+};
+const TUNE_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Tune,
+    label: "Tune",
+    shortcut: "u",
+    group: ParameterGroup::Instrument,
+};
+const TONE_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Tone,
+    label: "Tone",
+    shortcut: "t",
+    group: ParameterGroup::Instrument,
+};
+const DECAY_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Decay,
+    label: "Decay",
+    shortcut: "d",
+    group: ParameterGroup::Instrument,
+};
+const OSCILLATOR_MIX_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::OscillatorMix,
+    label: "Osc Mix",
+    shortcut: "w",
+    group: ParameterGroup::Instrument,
+};
+const PULSE_WIDTH_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::PulseWidth,
+    label: "Pulse W",
+    shortcut: "P",
+    group: ParameterGroup::Instrument,
+};
+const SUB_OSCILLATOR_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::SubOscillator,
+    label: "Sub",
+    shortcut: "u",
+    group: ParameterGroup::Instrument,
+};
+const NOISE_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Noise,
+    label: "Noise",
+    shortcut: "o",
+    group: ParameterGroup::Instrument,
+};
+const PITCH_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Pitch,
+    label: "Pitch",
+    shortcut: "i",
+    group: ParameterGroup::Instrument,
+};
+const CUTOFF_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Cutoff,
+    label: "Cutoff",
+    shortcut: "c",
+    group: ParameterGroup::Filter,
+};
+const RESONANCE_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Resonance,
+    label: "Reson",
+    shortcut: "R",
+    group: ParameterGroup::Filter,
+};
+const FILTER_ENVELOPE_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::FilterEnvelope,
+    label: "Filt Env",
+    shortcut: "f",
+    group: ParameterGroup::Filter,
+};
+const ATTACK_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Attack,
+    label: "Attack",
+    shortcut: "a",
+    group: ParameterGroup::Envelope,
+};
+const SYNTH_DECAY_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Decay,
+    label: "Decay",
+    shortcut: "d",
+    group: ParameterGroup::Envelope,
+};
+const SUSTAIN_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Sustain,
+    label: "Sustain",
+    shortcut: "s",
+    group: ParameterGroup::Envelope,
+};
+const RELEASE_PARAMETER: ParameterDescriptor = ParameterDescriptor {
+    id: ParameterId::Release,
+    label: "Release",
+    shortcut: "r",
+    group: ParameterGroup::Envelope,
+};
 
 const KICK_PARAMETERS: [ParameterDescriptor; 7] = [
-    COMMON_PARAMETERS[0],
-    COMMON_PARAMETERS[1],
-    COMMON_PARAMETERS[2],
-    COMMON_PARAMETERS[3],
+    LEVEL_PARAMETER,
+    DELAY_SEND_PARAMETER,
+    REVERB_SEND_PARAMETER,
+    PAN_PARAMETER,
     ParameterDescriptor {
         id: ParameterId::Tune,
         label: "Tune",
@@ -361,10 +450,10 @@ const KICK_PARAMETERS: [ParameterDescriptor; 7] = [
 ];
 
 const SNARE_PARAMETERS: [ParameterDescriptor; 7] = [
-    COMMON_PARAMETERS[0],
-    COMMON_PARAMETERS[1],
-    COMMON_PARAMETERS[2],
-    COMMON_PARAMETERS[3],
+    LEVEL_PARAMETER,
+    DELAY_SEND_PARAMETER,
+    REVERB_SEND_PARAMETER,
+    PAN_PARAMETER,
     ParameterDescriptor {
         id: ParameterId::Tune,
         label: "Tune",
@@ -386,10 +475,10 @@ const SNARE_PARAMETERS: [ParameterDescriptor; 7] = [
 ];
 
 const HAT_PARAMETERS: [ParameterDescriptor; 8] = [
-    COMMON_PARAMETERS[0],
-    COMMON_PARAMETERS[1],
-    COMMON_PARAMETERS[2],
-    COMMON_PARAMETERS[3],
+    LEVEL_PARAMETER,
+    DELAY_SEND_PARAMETER,
+    REVERB_SEND_PARAMETER,
+    PAN_PARAMETER,
     ParameterDescriptor {
         id: ParameterId::Tune,
         label: "Tune",
@@ -417,10 +506,10 @@ const HAT_PARAMETERS: [ParameterDescriptor; 8] = [
 ];
 
 const TOM_PARAMETERS: [ParameterDescriptor; 13] = [
-    COMMON_PARAMETERS[0],
-    COMMON_PARAMETERS[1],
-    COMMON_PARAMETERS[2],
-    COMMON_PARAMETERS[3],
+    LEVEL_PARAMETER,
+    DELAY_SEND_PARAMETER,
+    REVERB_SEND_PARAMETER,
+    PAN_PARAMETER,
     ParameterDescriptor {
         id: ParameterId::Tune,
         label: "Tune",
@@ -478,21 +567,21 @@ const TOM_PARAMETERS: [ParameterDescriptor; 13] = [
 ];
 
 const CYMBAL_PARAMETERS: [ParameterDescriptor; 7] = [
-    COMMON_PARAMETERS[0],
-    COMMON_PARAMETERS[1],
-    COMMON_PARAMETERS[2],
-    COMMON_PARAMETERS[3],
-    TOM_PARAMETERS[4],
-    TOM_PARAMETERS[5],
-    TOM_PARAMETERS[6],
+    LEVEL_PARAMETER,
+    DELAY_SEND_PARAMETER,
+    REVERB_SEND_PARAMETER,
+    PAN_PARAMETER,
+    TUNE_PARAMETER,
+    TONE_PARAMETER,
+    DECAY_PARAMETER,
 ];
 const RIMSHOT_PARAMETERS: [ParameterDescriptor; 7] = CYMBAL_PARAMETERS;
 
 const BASS_PARAMETERS: [ParameterDescriptor; 9] = [
-    COMMON_PARAMETERS[0],
-    COMMON_PARAMETERS[1],
-    COMMON_PARAMETERS[2],
-    COMMON_PARAMETERS[3],
+    LEVEL_PARAMETER,
+    DELAY_SEND_PARAMETER,
+    REVERB_SEND_PARAMETER,
+    PAN_PARAMETER,
     ParameterDescriptor {
         id: ParameterId::Waveform,
         label: "Wave",
@@ -526,10 +615,10 @@ const BASS_PARAMETERS: [ParameterDescriptor; 9] = [
 ];
 
 const CHORD_PARAMETERS: [ParameterDescriptor; 18] = [
-    COMMON_PARAMETERS[0],
-    COMMON_PARAMETERS[1],
-    COMMON_PARAMETERS[2],
-    COMMON_PARAMETERS[3],
+    LEVEL_PARAMETER,
+    DELAY_SEND_PARAMETER,
+    REVERB_SEND_PARAMETER,
+    PAN_PARAMETER,
     ParameterDescriptor {
         id: ParameterId::OscillatorMix,
         label: "Osc Mix",
@@ -617,14 +706,14 @@ const CHORD_PARAMETERS: [ParameterDescriptor; 18] = [
 ];
 
 const LEAD_PARAMETERS: [ParameterDescriptor; 19] = [
-    COMMON_PARAMETERS[0],
-    COMMON_PARAMETERS[1],
-    COMMON_PARAMETERS[2],
-    COMMON_PARAMETERS[3],
-    CHORD_PARAMETERS[4],
-    CHORD_PARAMETERS[5],
-    CHORD_PARAMETERS[6],
-    CHORD_PARAMETERS[7],
+    LEVEL_PARAMETER,
+    DELAY_SEND_PARAMETER,
+    REVERB_SEND_PARAMETER,
+    PAN_PARAMETER,
+    OSCILLATOR_MIX_PARAMETER,
+    PULSE_WIDTH_PARAMETER,
+    SUB_OSCILLATOR_PARAMETER,
+    NOISE_PARAMETER,
     ParameterDescriptor {
         id: ParameterId::LeadSubMode,
         label: "Sub mode",
@@ -637,20 +726,20 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 19] = [
         shortcut: "g",
         group: ParameterGroup::Instrument,
     },
-    CHORD_PARAMETERS[10],
-    CHORD_PARAMETERS[11],
-    CHORD_PARAMETERS[12],
-    CHORD_PARAMETERS[13],
+    PITCH_PARAMETER,
+    CUTOFF_PARAMETER,
+    RESONANCE_PARAMETER,
+    FILTER_ENVELOPE_PARAMETER,
     ParameterDescriptor {
         id: ParameterId::KeyboardTracking,
         label: "KYBD",
         shortcut: "k",
         group: ParameterGroup::Filter,
     },
-    CHORD_PARAMETERS[14],
-    CHORD_PARAMETERS[15],
-    CHORD_PARAMETERS[16],
-    CHORD_PARAMETERS[17],
+    ATTACK_PARAMETER,
+    SYNTH_DECAY_PARAMETER,
+    SUSTAIN_PARAMETER,
+    RELEASE_PARAMETER,
 ];
 
 pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescriptor] {
@@ -1082,46 +1171,11 @@ pub(super) fn physical_parameter_readout(
 }
 
 pub(super) fn global_shortcut_text(id: GlobalParameterId) -> &'static str {
-    match id {
-        GlobalParameterId::Tempo => "t",
-        GlobalParameterId::DelayDivision => "y",
-        GlobalParameterId::DelayFeedback => "f",
-        GlobalParameterId::ReverbTime => "r",
-        GlobalParameterId::ReverbTone => "b",
-        GlobalParameterId::ReverbPreDelay => "p",
-        GlobalParameterId::ReverbReturn => "m",
-        GlobalParameterId::Ducking => "d",
-        GlobalParameterId::Key => "k",
-        GlobalParameterId::Scale => "s",
-    }
+    global_control(id).shortcut
 }
 
-pub(super) const GLOBAL_IDS: [GlobalParameterId; 10] = [
-    GlobalParameterId::Tempo,
-    GlobalParameterId::DelayDivision,
-    GlobalParameterId::DelayFeedback,
-    GlobalParameterId::ReverbTime,
-    GlobalParameterId::ReverbTone,
-    GlobalParameterId::ReverbPreDelay,
-    GlobalParameterId::ReverbReturn,
-    GlobalParameterId::Ducking,
-    GlobalParameterId::Key,
-    GlobalParameterId::Scale,
-];
-
 pub(super) fn global_display_name(id: GlobalParameterId) -> &'static str {
-    match id {
-        GlobalParameterId::Tempo => "Tempo",
-        GlobalParameterId::DelayDivision => "Delay div.",
-        GlobalParameterId::DelayFeedback => "Feedback",
-        GlobalParameterId::ReverbTime => "Reverb time",
-        GlobalParameterId::ReverbTone => "Tone",
-        GlobalParameterId::ReverbPreDelay => "Pre-delay",
-        GlobalParameterId::ReverbReturn => "Return",
-        GlobalParameterId::Ducking => "Ducking",
-        GlobalParameterId::Key => "Key",
-        GlobalParameterId::Scale => "Scale",
-    }
+    global_control(id).label
 }
 
 pub(super) fn global_value_text(g: &crate::model::Globals, id: GlobalParameterId) -> String {
@@ -1226,9 +1280,9 @@ fn global_selector_data(
 }
 
 pub(super) fn global_control_text(g: &crate::model::Globals) -> Vec<String> {
-    GLOBAL_IDS
+    GLOBAL_CONTROLS
         .iter()
-        .map(|id| format!("{} {}", global_display_name(*id), global_value_text(g, *id)))
+        .map(|control| format!("{} {}", control.label, global_value_text(g, control.id)))
         .collect()
 }
 
@@ -1240,18 +1294,19 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
         return;
     }
     let g = &a.editor.project.globals;
-    for (index, id) in GLOBAL_IDS.iter().enumerate() {
-        let x = inner.x + inner.width * index as u16 / GLOBAL_IDS.len() as u16;
-        let next_x = inner.x + inner.width * (index + 1) as u16 / GLOBAL_IDS.len() as u16;
+    for (index, control) in GLOBAL_CONTROLS.iter().enumerate() {
+        let id = control.id;
+        let x = inner.x + inner.width * index as u16 / GLOBAL_CONTROLS.len() as u16;
+        let next_x = inner.x + inner.width * (index + 1) as u16 / GLOBAL_CONTROLS.len() as u16;
         let slot = Rect {
             x,
             y: inner.y,
             width: next_x.saturating_sub(x),
             height: inner.height,
         };
-        let active = matches!(&a.mode, Mode::GlobalEdit(active_id) if *active_id == *id)
-            || matches!(&a.mode, Mode::TempoInput(_) if *id == GlobalParameterId::Tempo)
-            || matches!(&a.mode, Mode::SidechainEdit { .. } if *id == GlobalParameterId::Ducking);
+        let active = matches!(&a.mode, Mode::GlobalEdit(active_id) if *active_id == id)
+            || matches!(&a.mode, Mode::TempoInput(_) if id == GlobalParameterId::Tempo)
+            || matches!(&a.mode, Mode::SidechainEdit { .. } if id == GlobalParameterId::Ducking);
         let block = if active {
             Block::bordered()
                 .border_type(BorderType::Double)
@@ -1266,10 +1321,10 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
                         .reversed()
                         .add_modifier(Modifier::BOLD),
                 )
-                .title(global_display_name(*id))
+                .title(global_display_name(id))
                 .style(Style::default().reversed())
         } else {
-            Block::bordered().title(global_display_name(*id))
+            Block::bordered().title(global_display_name(id))
         };
         let content = block.inner(slot);
         f.render_widget(block, slot);
@@ -1291,7 +1346,7 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
         };
         render_centered(
             f,
-            &format!("[{}]", global_shortcut_text(*id)),
+            &format!("[{}]", global_shortcut_text(id)),
             shortcut_area,
             style,
         );
@@ -1302,10 +1357,10 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
             width: content.width,
             height: content.height.saturating_sub(1),
         };
-        if let Some(filled) = global_fader_segments(g, *id) {
+        if let Some(filled) = global_fader_segments(g, id) {
             render_centered(
                 f,
-                &global_value_text(g, *id),
+                &global_value_text(g, id),
                 Rect { height: 1, ..body },
                 style,
             );
@@ -1335,10 +1390,10 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
                     segment_style,
                 );
             }
-        } else if let Some((choices, selected)) = global_selector_data(g, *id) {
+        } else if let Some((choices, selected)) = global_selector_data(g, id) {
             render_lfo_selector(f, body, &choices, selected, style);
         } else {
-            render_centered(f, &global_value_text(g, *id), body, style);
+            render_centered(f, &global_value_text(g, id), body, style);
         }
     }
 }

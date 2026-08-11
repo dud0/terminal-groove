@@ -1032,7 +1032,7 @@ pub enum Instrument {
     Lead(LeadParameters),
 }
 
-const PARAMETER_COUNT: usize = 37;
+const PARAMETER_COUNT: usize = ParameterId::COUNT;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParameterLocks {
@@ -2200,7 +2200,8 @@ pub enum ParameterValueKind {
 }
 
 impl ParameterId {
-    pub const ALL: [Self; 37] = [
+    pub const COUNT: usize = 37;
+    pub const ALL: [Self; Self::COUNT] = [
         Self::Level,
         Self::Pan,
         Self::DelaySend,
@@ -2254,6 +2255,10 @@ impl ParameterId {
             Self::LeadSubMode => ParameterValueKind::LeadSubMode,
             _ => ParameterValueKind::Percent,
         }
+    }
+
+    pub const fn is_percentage(self) -> bool {
+        matches!(self.value_kind(), ParameterValueKind::Percent)
     }
 
     pub const fn upper_bound(self) -> u8 {

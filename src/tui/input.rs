@@ -6,8 +6,9 @@ use super::{
         project_browser_mode, request_new_project, save, save_as_mode, sync_project,
         sync_project_with_smoothing,
     },
+    controls::GLOBAL_CONTROLS,
     render::{
-        GLOBAL_IDS, is_recipe_parameter, parameter_descriptors, parameter_recipe, scope_name,
+        is_recipe_parameter, parameter_descriptors, parameter_recipe, scope_name,
         selected_chord_shape, selected_drum_recipe, visible_parameter_descriptors,
     },
     state::{App, ChordField, GeneratorDialog, LfoField, Mode, ParameterBank, TriggerField},
@@ -266,7 +267,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         }
         KeyCode::Left => {
             if a.row == 0 {
-                a.global = (a.global + GLOBAL_IDS.len() - 1) % GLOBAL_IDS.len()
+                a.global = (a.global + GLOBAL_CONTROLS.len() - 1) % GLOBAL_CONTROLS.len()
             } else if k.modifiers.contains(KeyModifiers::SHIFT) {
                 move_step_bank(a, false)
             } else {
@@ -275,7 +276,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         }
         KeyCode::Right => {
             if a.row == 0 {
-                a.global = (a.global + 1) % GLOBAL_IDS.len()
+                a.global = (a.global + 1) % GLOBAL_CONTROLS.len()
             } else if k.modifiers.contains(KeyModifiers::SHIFT) {
                 move_step_bank(a, true)
             } else {
@@ -1215,10 +1216,7 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
 }
 
 pub(super) fn parameter_supports_direct_percentage(parameter: ParameterId) -> bool {
-    !matches!(
-        parameter,
-        ParameterId::Waveform | ParameterId::Chorus | ParameterId::Spread | ParameterId::Pitch
-    )
+    parameter.is_percentage() && parameter != ParameterId::Pitch
 }
 
 pub(super) fn clamp_parameter_percentage(parameter: ParameterId, value: Percent) -> Percent {
