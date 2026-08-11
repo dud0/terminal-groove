@@ -343,7 +343,7 @@ impl Renderer {
                     )
                 }
                 Instrument::Chord(p) => {
-                    voice.kind = SynthVoiceKind::Juno;
+                    voice.kind = SynthVoiceKind::Chord;
                     voice.sub_mode = crate::dsp::SubOscillatorMode::OneOctave;
                     voice.noise_level.set(
                         locks
@@ -353,7 +353,7 @@ impl Renderer {
                             * 0.35,
                         smoothing,
                     );
-                    voice.env.set_profile(EnvelopeProfile::Juno);
+                    voice.env.set_profile(EnvelopeProfile::Chord);
                     voice.oscillator_mix.set(
                         locks
                             .percent(ParameterId::OscillatorMix)
@@ -386,7 +386,7 @@ impl Renderer {
                     )
                 }
                 Instrument::Lead(p) => {
-                    voice.kind = SynthVoiceKind::Sh101;
+                    voice.kind = SynthVoiceKind::Lead;
                     voice.sub_mode = match locks.lead_sub_mode().unwrap_or(p.sub_mode) {
                         crate::model::LeadSubMode::OneOctaveSquare => {
                             crate::dsp::SubOscillatorMode::OneOctave
@@ -409,7 +409,7 @@ impl Renderer {
                         .percent(ParameterId::KeyboardTracking)
                         .unwrap_or(p.keyboard_tracking)
                         .get() as f32;
-                    voice.env.set_profile(EnvelopeProfile::Sh101);
+                    voice.env.set_profile(EnvelopeProfile::Lead);
                     voice.oscillator_mix.set(
                         locks
                             .percent(ParameterId::OscillatorMix)
@@ -488,7 +488,7 @@ impl Renderer {
                 .normalized(),
             smoothing,
         );
-        if !(voice.kind == SynthVoiceKind::Juno && voice.active) {
+        if !(voice.kind == SynthVoiceKind::Chord && voice.active) {
             voice.pan.set(
                 locks.percent(ParameterId::Pan).unwrap_or(t.pan).get() as f32,
                 smoothing,
@@ -600,7 +600,7 @@ impl Renderer {
             voice.env.gate_on();
         }
         voice.slide_armed =
-            matches!(voice.kind, SynthVoiceKind::Bass | SynthVoiceKind::Sh101) && trigger.slide;
+            matches!(voice.kind, SynthVoiceKind::Bass | SynthVoiceKind::Lead) && trigger.slide;
         voice.active = true;
     }
 

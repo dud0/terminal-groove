@@ -34,36 +34,36 @@ mod tests {
     }
 
     #[test]
-    fn juno_and_sh101_filters_have_distinct_resonant_responses() {
-        let mut juno = JunoFilter::new();
-        let mut sh101 = Sh101Filter::new();
-        juno.set_parameters_smoothed(1_200.0, 0.75, 96_000.0, 0);
-        sh101.set_parameters_smoothed(1_200.0, 0.75, 96_000.0, 0);
-        let mut juno_energy = 0.0;
-        let mut sh101_energy = 0.0;
+    fn chord_and_lead_filters_have_distinct_resonant_responses() {
+        let mut chord = ChordFilter::new();
+        let mut lead = LeadFilter::new();
+        chord.set_parameters_smoothed(1_200.0, 0.75, 96_000.0, 0);
+        lead.set_parameters_smoothed(1_200.0, 0.75, 96_000.0, 0);
+        let mut chord_energy = 0.0;
+        let mut lead_energy = 0.0;
         for sample in 0..512 {
             let input = if sample == 0 { 1.0 } else { 0.0 };
-            juno_energy += juno.process(input).abs();
-            sh101_energy += sh101.process(input).abs();
+            chord_energy += chord.process(input).abs();
+            lead_energy += lead.process(input).abs();
         }
-        assert!((juno_energy - sh101_energy).abs() > 0.001);
-        assert!(juno_energy.is_finite() && sh101_energy.is_finite());
+        assert!((chord_energy - lead_energy).abs() > 0.001);
+        assert!(chord_energy.is_finite() && lead_energy.is_finite());
     }
 
     #[test]
     fn calibrated_four_pole_resonance_emphasizes_cutoff_relative_to_the_low_end() {
         enum Filter {
-            Juno(JunoFilter),
-            Sh101(Sh101Filter),
+            Chord(ChordFilter),
+            Lead(LeadFilter),
         }
 
         impl Filter {
             fn set_parameters(&mut self, cutoff: f32, resonance: f32, sample_rate: f32) {
                 match self {
-                    Self::Juno(filter) => {
+                    Self::Chord(filter) => {
                         filter.set_parameters_smoothed(cutoff, resonance, sample_rate, 0)
                     }
-                    Self::Sh101(filter) => {
+                    Self::Lead(filter) => {
                         filter.set_parameters_smoothed(cutoff, resonance, sample_rate, 0)
                     }
                 }
@@ -71,8 +71,8 @@ mod tests {
 
             fn process(&mut self, input: f32) -> f32 {
                 match self {
-                    Self::Juno(filter) => filter.process(input),
-                    Self::Sh101(filter) => filter.process(input),
+                    Self::Chord(filter) => filter.process(input),
+                    Self::Lead(filter) => filter.process(input),
                 }
             }
         }
@@ -81,8 +81,8 @@ mod tests {
             let sample_rate = 96_000.0;
             let cutoff = 1_000.0;
             let mut filter = match kind {
-                "Juno" => Filter::Juno(JunoFilter::new()),
-                "SH-101" => Filter::Sh101(Sh101Filter::new()),
+                "Chord" => Filter::Chord(ChordFilter::new()),
+                "Lead" => Filter::Lead(LeadFilter::new()),
                 _ => unreachable!(),
             };
             filter.set_parameters(cutoff, resonance, sample_rate);
@@ -100,7 +100,7 @@ mod tests {
             (energy / count as f32).sqrt()
         }
 
-        for (kind, cutoff_region) in [("Juno", 920.0), ("SH-101", 1_060.0)] {
+        for (kind, cutoff_region) in [("Chord", 920.0), ("Lead", 1_060.0)] {
             let low_at_zero = rms_at(kind, 0.0, 100.0);
             let low_at_maximum = rms_at(kind, 1.0, 100.0);
             let cutoff_at_zero = rms_at(kind, 0.0, cutoff_region);
@@ -142,11 +142,11 @@ mod tests {
             );
         }
 
-        let mut juno = JunoFilter::new();
-        juno.set_parameters_smoothed(1_000.0, 1.0, 96_000.0, 0);
-        assert_impulse_decays(|input| juno.process(input));
+        let mut chord = ChordFilter::new();
+        chord.set_parameters_smoothed(1_000.0, 1.0, 96_000.0, 0);
+        assert_impulse_decays(|input| chord.process(input));
 
-        let mut filter = Sh101Filter::new();
+        let mut filter = LeadFilter::new();
         filter.set_parameters_smoothed(1_000.0, 1.0, 96_000.0, 0);
         assert_impulse_decays(|input| filter.process(input));
     }
@@ -517,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn juno_chorus_modes_are_deterministic_finite_and_stereo() {
+    fn chord_chorus_modes_are_deterministic_finite_and_stereo() {
         let render = || {
             let mut chorus = StereoChorus::new(48_000);
             chorus.configure(2);
@@ -541,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn juno_chorus_handles_float_wrap_at_44100_hz() {
+    fn chord_chorus_handles_float_wrap_at_44100_hz() {
         for mode in 1..=2 {
             let mut chorus = StereoChorus::new(44_100);
             chorus.configure(mode);
@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn juno_chorus_tap_handles_a_near_zero_negative_read() {
+    fn chord_chorus_tap_handles_a_near_zero_negative_read() {
         let mut chorus = StereoChorus::new(44_100);
         chorus.pos = 0;
         assert!(
@@ -1046,11 +1046,11 @@ mod tests {
     }
 
     #[test]
-    fn tb303_filter_is_finite_at_extreme_parameters_and_sample_rates() {
+    fn bass_filter_is_finite_at_extreme_parameters_and_sample_rates() {
         for sample_rate in [8_000.0, 44_100.0, 96_000.0] {
             for cutoff in [20.0, sample_rate * 0.42] {
                 for resonance in [0.0, 1.0] {
-                    let mut filter = Tb303Filter::new();
+                    let mut filter = BassFilter::new();
                     filter.set_parameters_smoothed(cutoff, resonance, sample_rate * 2.0, 0);
                     for sample in 0..20_000 {
                         let input = ((sample as f32) * 0.071).sin() * 2.0;
@@ -1062,10 +1062,10 @@ mod tests {
     }
 
     #[test]
-    fn tb303_filter_approaches_four_pole_far_stopband_rolloff() {
+    fn bass_filter_approaches_four_pole_far_stopband_rolloff() {
         fn amplitude_at(frequency: f32) -> f32 {
             let sample_rate = 96_000.0;
-            let mut filter = Tb303Filter::new();
+            let mut filter = BassFilter::new();
             filter.set_parameters_smoothed(250.0, 0.0, sample_rate, 0);
             let mut sine = 0.0;
             let mut cosine = 0.0;
@@ -1093,10 +1093,10 @@ mod tests {
     }
 
     #[test]
-    fn tb303_filter_resonance_emphasizes_cutoff_relative_to_the_low_end() {
+    fn bass_filter_resonance_emphasizes_cutoff_relative_to_the_low_end() {
         fn rms_at(resonance: f32, frequency: f32) -> f32 {
             let sample_rate = 48_000.0;
-            let mut filter = Tb303Filter::new();
+            let mut filter = BassFilter::new();
             filter.set_parameters_smoothed(250.0, resonance, sample_rate, 0);
             let mut energy = 0.0;
             let mut count = 0;

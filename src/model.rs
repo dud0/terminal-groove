@@ -1071,7 +1071,7 @@ pub struct LeadParameters {
     pub release: Percent,
 }
 
-/// The SH-101 divider is phase locked to the main oscillator.  The narrow
+/// The Lead divider is phase locked to the main oscillator. The narrow
 /// mode deliberately keeps the two-octave divider's shorter pulse shape.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

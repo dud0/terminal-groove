@@ -1,6 +1,6 @@
 use crate::dsp::{
-    Adsr, BassAccentEnvelope, BassFilterEnvelope, BassVcaEnvelope, Biquad, JunoFilter, NoiseSource,
-    PolyBlepOsc, Sh101Filter, Smoother, StereoChorus, SubOscillatorMode, Tb303Filter,
+    Adsr, BassAccentEnvelope, BassFilter, BassFilterEnvelope, BassVcaEnvelope, Biquad, ChordFilter,
+    LeadFilter, NoiseSource, PolyBlepOsc, Smoother, StereoChorus, SubOscillatorMode,
     additive_source_gains,
 };
 use crate::model::{
@@ -10,8 +10,8 @@ use crate::model::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SynthVoiceKind {
     Bass,
-    Juno,
-    Sh101,
+    Chord,
+    Lead,
 }
 
 pub(super) struct SynthVoice {
@@ -23,14 +23,14 @@ pub(super) struct SynthVoice {
     pub(super) noise_level: Smoother,
     pub(super) keyboard_tracking: f32,
     pub(super) env: Adsr,
-    pub(super) bass_filter: Tb303Filter,
+    pub(super) bass_filter: BassFilter,
     pub(super) bass_vca: BassVcaEnvelope,
     pub(super) bass_filter_envelope: BassFilterEnvelope,
     pub(super) bass_accent_envelope: BassAccentEnvelope,
     pub(super) bass_decay_percent: Smoother,
-    pub(super) juno_filter: JunoFilter,
-    pub(super) sh101_filter: Sh101Filter,
-    pub(super) juno_highpass: Biquad,
+    pub(super) chord_filter: ChordFilter,
+    pub(super) lead_filter: LeadFilter,
+    pub(super) chord_highpass: Biquad,
     pub(super) freq: Smoother,
     pub(super) wave: Waveform,
     pub(super) oscillator_mix: Smoother,
@@ -478,8 +478,8 @@ impl SynthVoice {
     }
 
     pub(super) fn new_with_seed(sr: f32, seed: u32) -> Self {
-        let mut juno_highpass = Biquad::new();
-        juno_highpass.set_highpass(32.0, 0.707, sr * 2.0);
+        let mut chord_highpass = Biquad::new();
+        chord_highpass.set_highpass(32.0, 0.707, sr * 2.0);
         Self {
             osc: Default::default(),
             sub_osc: Default::default(),
@@ -494,9 +494,9 @@ impl SynthVoice {
             bass_filter_envelope: BassFilterEnvelope::new(sr),
             bass_accent_envelope: BassAccentEnvelope::new(sr),
             bass_decay_percent: Smoother::new(40.0),
-            juno_filter: Default::default(),
-            sh101_filter: Default::default(),
-            juno_highpass,
+            chord_filter: Default::default(),
+            lead_filter: Default::default(),
+            chord_highpass,
             freq: Smoother::new(110.0),
             wave: Waveform::Saw,
             oscillator_mix: Smoother::new(70.0),
@@ -581,9 +581,9 @@ impl SynthVoice {
         self.env.reset();
         self.active = false;
         self.remaining = 0;
-        self.juno_filter.reset();
-        self.sh101_filter.reset();
-        self.juno_highpass.clear_state();
+        self.chord_filter.reset();
+        self.lead_filter.reset();
+        self.chord_highpass.clear_state();
     }
 
     pub(super) fn gate_off(&mut self) {

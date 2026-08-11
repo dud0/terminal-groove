@@ -36,14 +36,10 @@ impl MixBus {
     }
 }
 
-/// The SH-101 filter is calibrated for 50% keyboard tracking around C3.  A
+/// The Lead filter is calibrated for 50% keyboard tracking around C3. A
 /// reference-centered mapping keeps the existing cutoff control useful while
 /// making higher notes naturally brighter and lower notes darker.
-pub(super) fn sh101_keyboard_tracked_cutoff(
-    base_cutoff: f32,
-    frequency: f32,
-    tracking: f32,
-) -> f32 {
+pub(super) fn lead_keyboard_tracked_cutoff(base_cutoff: f32, frequency: f32, tracking: f32) -> f32 {
     let reference = 130.8128;
     let key_ratio = frequency.max(1.0) / reference;
     base_cutoff * key_ratio.powf(tracking.clamp(0.0, 100.0) / 100.0)
@@ -211,18 +207,18 @@ impl Renderer {
                     v.bass_filter_envelope.reset();
                     v.bass_accent_envelope.reset();
                 }
-                SynthVoiceKind::Juno => {
-                    v.juno_filter.reset();
-                    v.juno_highpass.clear_state();
+                SynthVoiceKind::Chord => {
+                    v.chord_filter.reset();
+                    v.chord_highpass.clear_state();
                 }
-                SynthVoiceKind::Sh101 => v.sh101_filter.reset(),
+                SynthVoiceKind::Lead => v.lead_filter.reset(),
             }
             return (0.0, 0.0, 0.0);
         }
         match v.kind {
             SynthVoiceKind::Bass => Self::render_bass(v, sr, offsets),
-            SynthVoiceKind::Juno => Self::render_chord(v, sr, offsets),
-            SynthVoiceKind::Sh101 => Self::render_lead(v, sr, offsets),
+            SynthVoiceKind::Chord => Self::render_chord(v, sr, offsets),
+            SynthVoiceKind::Lead => Self::render_lead(v, sr, offsets),
         }
     }
 
@@ -313,7 +309,7 @@ impl Renderer {
         sr: f32,
         offsets: &[f32; ParameterId::ALL.len()],
     ) -> (f32, f32, f32) {
-        Self::render_poly_voice(v, sr, offsets, SynthVoiceKind::Juno)
+        Self::render_poly_voice(v, sr, offsets, SynthVoiceKind::Chord)
     }
 
     fn render_lead(
@@ -321,7 +317,7 @@ impl Renderer {
         sr: f32,
         offsets: &[f32; ParameterId::ALL.len()],
     ) -> (f32, f32, f32) {
-        Self::render_poly_voice(v, sr, offsets, SynthVoiceKind::Sh101)
+        Self::render_poly_voice(v, sr, offsets, SynthVoiceKind::Lead)
     }
 
     fn render_poly_voice(
@@ -352,7 +348,7 @@ impl Renderer {
         let accent_filter = v.accent_filter.next_value();
         let minimum_cutoff = 20.0;
         let maximum_cutoff = 20_000.0_f32.min(sr * 0.45);
-        let envelope_octaves = if kind == SynthVoiceKind::Juno {
+        let envelope_octaves = if kind == SynthVoiceKind::Chord {
             5.5
         } else {
             6.0
@@ -375,23 +371,23 @@ impl Renderer {
             let mut cutoff = (base_cutoff
                 * 2.0_f32.powf(env * filter_env * envelope_octaves + accent_filter))
             .min(maximum_cutoff);
-            if kind == SynthVoiceKind::Sh101 {
-                cutoff = sh101_keyboard_tracked_cutoff(cutoff, frequency, v.keyboard_tracking)
+            if kind == SynthVoiceKind::Lead {
+                cutoff = lead_keyboard_tracked_cutoff(cutoff, frequency, v.keyboard_tracking)
                     .min(maximum_cutoff);
             }
             match kind {
-                SynthVoiceKind::Juno => {
+                SynthVoiceKind::Chord => {
                     // The fixed low corner is intentionally subtle: it gives
-                    // the Chord path the Juno high-pass architecture without
+                    // the Chord path its high-pass architecture without
                     // adding a new persisted panel control.
-                    v.juno_filter.set_parameters_smoothed(
+                    v.chord_filter.set_parameters_smoothed(
                         cutoff,
                         resonance_percent / 100.0,
                         sr * 2.0,
                         16,
                     );
                 }
-                SynthVoiceKind::Sh101 => v.sh101_filter.set_parameters_smoothed(
+                SynthVoiceKind::Lead => v.lead_filter.set_parameters_smoothed(
                     cutoff,
                     resonance_percent / 100.0,
                     sr * 2.0,
@@ -443,13 +439,13 @@ impl Renderer {
             };
             let source = pulse * pulse_gain + saw * saw_gain + sub_sample * sub + noise;
             filtered += match kind {
-                SynthVoiceKind::Juno => v.juno_filter.process(v.juno_highpass.process(source)),
-                SynthVoiceKind::Sh101 => v.sh101_filter.process(source),
+                SynthVoiceKind::Chord => v.chord_filter.process(v.chord_highpass.process(source)),
+                SynthVoiceKind::Lead => v.lead_filter.process(source),
                 SynthVoiceKind::Bass => unreachable!(),
             };
         }
         filtered *= 0.5;
-        let output_gain = if kind == SynthVoiceKind::Juno {
+        let output_gain = if kind == SynthVoiceKind::Chord {
             1.15 * std::f32::consts::FRAC_1_SQRT_2
         } else {
             1.85
@@ -784,7 +780,7 @@ impl Renderer {
 
 #[cfg(test)]
 mod tests {
-    use super::{MixBus, sh101_keyboard_tracked_cutoff};
+    use super::{MixBus, lead_keyboard_tracked_cutoff};
 
     #[test]
     fn mix_bus_routes_dry_and_send_gains_without_state_or_allocation() {
@@ -803,11 +799,11 @@ mod tests {
     }
 
     #[test]
-    fn sh101_keyboard_tracking_is_centered_on_c3_and_moves_cutoff_by_half_octaves() {
+    fn lead_keyboard_tracking_is_centered_on_c3_and_moves_cutoff_by_half_octaves() {
         let base = 1_000.0;
-        let c3 = sh101_keyboard_tracked_cutoff(base, 130.8128, 50.0);
-        let c4 = sh101_keyboard_tracked_cutoff(base, 261.6256, 50.0);
-        let c2 = sh101_keyboard_tracked_cutoff(base, 65.4064, 50.0);
+        let c3 = lead_keyboard_tracked_cutoff(base, 130.8128, 50.0);
+        let c4 = lead_keyboard_tracked_cutoff(base, 261.6256, 50.0);
+        let c2 = lead_keyboard_tracked_cutoff(base, 65.4064, 50.0);
         assert!((c3 - base).abs() < 0.01);
         assert!((c4 / base - 2.0_f32.sqrt()).abs() < 0.01);
         assert!((c2 / base - 2.0_f32.sqrt().recip()).abs() < 0.01);

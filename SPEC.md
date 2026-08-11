@@ -102,7 +102,7 @@ Bass and Lead are monophonic. Chord interprets the stored degree as the root of 
 - A new Chord note restarts its own arpeggio sequence. An empty step releases the arpeggio; the next note starts a new cycle.
 - A following empty step closes the gate and begins release.
 - A following note closes/restarts the existing voice at the new pitch, with click-safe envelope handling.
-- Bass and Lead notes additionally store a Boolean slide. Bass slides remain armed through ties and glide to the next Bass note over a fixed 60 ms. Lead slide is SH-101 AUTO portamento: it uses the source note's effective Portamento Time, glides in pitch without retriggering ADSR, remains armed through ties, and is cleared by an empty step.
+- Bass and Lead notes additionally store a Boolean slide. Bass slides remain armed through ties and glide to the next Bass note over a fixed 60 ms. Lead slide is source-owned automatic portamento: it uses the source note's effective Portamento Time, glides in pitch without retriggering ADSR, remains armed through ties, and is cleared by an empty step.
 
 Pressing a degree key replaces any existing event on the selected step with that note and preserves compatible locks, articulations, and the Chord shape/arpeggio of an existing Chord note. New notes inherit the track's input accent default and new Bass and Lead notes have slide disabled; replacing a tie or creating a note on an empty step uses the current default, while replacing an existing compatible note preserves its accent. Pressing `Enter` on an empty pitched step inserts the track's last-entered degree and octave with the input accent default; empty Chord steps also use the track's last-entered Chord shape and arpeggio configuration. Pressing `Enter` on a note or tie clears it and its locks.
 
@@ -173,7 +173,7 @@ Auditions use independent preview LFO state beginning at the configured starting
 
 ### 3.3 Kick drum
 
-The 909-inspired kick combines a resonant sine body, an exponential pitch transient, a short procedural-noise click, and mild nonlinear coloration.
+The procedural kick combines a resonant sine body, an exponential pitch transient, a short procedural-noise click, and mild nonlinear coloration.
 
 - `tune`: maps the settled body from 45–70 Hz and pitch peak from 110–280 Hz.
 - `decay`: maps exponentially from approximately 80 ms to 1.2 seconds.
@@ -183,7 +183,7 @@ Defaults: tune 50%, decay 35%, attack 35%. Accent adds about 4 dB and 25% more t
 
 ### 3.4 Snare drum
 
-The 909-inspired snare combines two detuned triangle resonators with separately high-pass/band-pass-filtered procedural noise.
+The procedural snare combines two detuned triangle resonators with separately high-pass/band-pass-filtered procedural noise.
 
 - `tune`: moves the lower body from approximately 150–300 Hz and the upper mode at 1.72 times that frequency.
 - `tone`: changes resonator balance and noise-band brightness.
@@ -193,7 +193,7 @@ Defaults: tune 50%, tone 50%, snappy 55%. Accent adds about 4 dB and 20% more sn
 
 ### 3.5 Hi-hat
 
-The hi-hat is an intentionally sample-free metallic percussion voice rather than an emulation of the TR-909's sampled hi-hat source. Six band-limited square oscillators at fixed inharmonic ratios mix with deterministic noise, then pass through high-pass/band-pass shaping and coarse nonlinear coloration. Its tuning, short-to-long decay range, and accent response are designed to sit alongside the 909-inspired analog drum voices while retaining a distinct synthesized character.
+The hi-hat is an intentionally sample-free metallic percussion voice. Six band-limited square oscillators at fixed inharmonic ratios mix with deterministic noise, then pass through high-pass/band-pass shaping and coarse nonlinear coloration. Its tuning, short-to-long decay range, and accent response give it a distinct synthesized character alongside the other procedural drum voices.
 
 - `tune`: moves the metallic source base from approximately 310–670 Hz and its filter bands.
 - `decay`: maps exponentially from approximately 25–800 ms, spanning closed to open behavior.
@@ -202,7 +202,7 @@ Closed is recipe 1 and defaults to tune 50%, decay 15%. Open defaults to tune 50
 
 ### 3.6 Tom drum
 
-The Tom is a 909-style synthesized tom combining two damped triangle resonators, a short deterministic attack click, and mild nonlinear coloration.
+The Tom is a synthesized voice combining two damped triangle resonators, a short deterministic attack click, and mild nonlinear coloration.
 
 - `tune`: maps the fundamental from approximately 80–220 Hz and the upper resonator from 118–326 Hz.
 - `tone`: balances the low body, upper resonator, and attack click.
@@ -212,7 +212,7 @@ Low is recipe 1 and defaults to tune/tone/decay 15%/35%/60%. Medium defaults to 
 
 ### 3.7 Cymbal
 
-The Cymbal is an intentionally sample-free metallic percussion voice rather than an emulation of the TR-909's sampled cymbal source. It is built from six fixed inharmonic square oscillators blended with deterministic noise and shaped by high-pass and band-pass filters. It complements the 909-inspired analog drum voices but deliberately retains its own synthesized character.
+The Cymbal is an intentionally sample-free metallic percussion voice. It is built from six fixed inharmonic square oscillators blended with deterministic noise and shaped by high-pass and band-pass filters. It complements the other procedural drum voices while retaining its own synthesized character.
 
 - `tune`: maps the metallic source base from approximately 240–720 Hz.
 - `tone`: balances the metallic oscillator bank against the filtered noise component.
@@ -222,7 +222,7 @@ Defaults: tune 50%, tone 55%, decay 30%. Accent adds about 3 dB and a short high
 
 ### 3.8 Rimshot
 
-The 909-inspired Rimshot uses three independently damped sine resonators, a short amplitude attack, high-pass shaping, and mild nonlinear coloration. At the default settings, its modes are approximately 222 Hz at half amplitude with a 45 ms nominal -80 dB decay, 500 Hz at full amplitude with a 20 ms decay, and 1 kHz at full amplitude with a 5 ms decay.
+The procedural Rimshot uses three independently damped sine resonators, a short amplitude attack, high-pass shaping, and mild nonlinear coloration. At the default settings, its modes are approximately 222 Hz at half amplitude with a 45 ms nominal -80 dB decay, 500 Hz at full amplitude with a 20 ms decay, and 1 kHz at full amplitude with a 5 ms decay.
 
 - `tune`: exponentially scales all three resonator frequencies from 0.5× through 2×, with 50% at the reference frequencies.
 - `tone`: shifts normalized energy from the 222/500 Hz body toward the 1 kHz crack while retaining all three modes.
@@ -232,7 +232,7 @@ Defaults: tune 50%, tone 50%, decay 50%. Accent adds about 3 dB and 20% more 1 k
 
 ### 3.9 Bass, Chord, and Lead
 
-The Bass track is a 303-inspired engine with:
+The Bass track is a monophonic resonant synth with:
 
 - Band-limited asymmetric saw or square waveform.
 - A nonlinear four-pole, diode-ladder-inspired resonant low-pass filter processed at 2x oversampling. Its transition around cutoff is deliberately gentle, while its far-stopband response approaches 24 dB/octave.
@@ -242,14 +242,14 @@ The Bass track is a 303-inspired engine with:
 
 Defaults: saw, cutoff 45%, resonance 55%, filter envelope 65%, decay 40%.
 
-Chord is a Juno-60-inspired polyphonic engine; Lead is an SH-101-inspired monophonic engine. Both provide phase-aligned band-limited Pulse and Saw sources, an additive source mixer, a nonlinear four-stage resonant low-pass filter, one ADSR for amplitude and positive filter modulation, and these controls:
+Chord is a polyphonic synth; Lead is a monophonic synth. Both provide phase-aligned band-limited Pulse and Saw sources, an additive source mixer, a nonlinear four-stage resonant low-pass filter, one ADSR for amplitude and positive filter modulation, and these controls:
 
 The Bass, Chord, and Lead filters apply resonance within their feedback loops without resonance-dependent output makeup. Increasing resonance therefore emphasizes the cutoff region relative to the low-frequency passband and may reduce the voice's overall level.
 
 - `oscillator mix`: 0% is Pulse, 100% is Saw. Intermediate values are additive pulse/saw source levels with equal-power macro gains, so both sources contribute simultaneously without changing the saved-project meaning of this control.
 - `pulse width`: maps from 5% through 95% duty cycle.
 - `sub oscillator`: linear source level; Chord uses an octave-down square divider and Lead uses its selected divider waveform.
-- `noise`: linear deterministic voice-local source level. Chord maps 0–100% to 0–0.35 amplitude for a restrained Juno-style noise source; Lead maps 0–100% to 0–1.0 amplitude so noise can act as a full SH-101 mixer source. Noise is lockable but not LFO-modulatable.
+- `noise`: linear deterministic voice-local source level. Chord maps 0–100% to 0–0.35 amplitude for a restrained noise source; Lead maps 0–100% to 0–1.0 amplitude so noise can act as a full mixer source. Noise is lockable but not LFO-modulatable.
 - `cutoff`: maps exponentially from 20 Hz to the lower of 20 kHz or 45% of sample rate.
 - `resonance`, and positive `filter envelope` up to six octaves.
 - `attack`, `decay`, `sustain`, and `release`; Chord uses approximately 1 ms–3 s attack and 2 ms–12 s decay/release, while Lead uses 1.5 ms–4 s and 2 ms–10 s respectively.
@@ -263,9 +263,9 @@ Lead additionally provides a `sub mode` selector for one-octave square, two-octa
 
 Chord defaults: 70% Saw mix, pulse width 50%, sub 0%, noise 0%, chorus I, cutoff 55%, resonance 15%, filter envelope 25%, and ADSR 55/45/75/65%. Lead defaults: 75% Saw mix, pulse width 50%, sub 25%, noise 0%, two-octave square sub mode, keyboard tracking 50%, portamento time 50%, cutoff 50%, resonance 35%, filter envelope 55%, and ADSR 0/35/55/20%.
 
-The Chord render path uses a stable DCO-style oscillator with additive pulse, saw, octave-down square, and a restrained deterministic voice-local noise source. A fixed 32 Hz high-pass stage precedes its dedicated Juno-calibrated four-pole VCF; separate resonance compensation emphasizes the cutoff region while limiting pass-band loss, maximum resonance is bounded, and output remains finite. Chorus keeps the existing two-mode stereo delay geometry with a calibrated dry-biased equal-power mix.
+The Chord render path uses a stable DCO-style oscillator with additive pulse, saw, octave-down square, and a restrained deterministic voice-local noise source. A fixed 32 Hz high-pass stage precedes its dedicated four-pole VCF; separate resonance compensation emphasizes the cutoff region while limiting pass-band loss, maximum resonance is bounded, and output remains finite. Chorus uses two stereo delay configurations with a calibrated dry-biased equal-power mix.
 
-The Lead render path uses the same phase-aligned primitive only for its common oscillator work, then uses an additive pulse/saw mixer, the selected sub-divider mode, a full-range deterministic voice-local noise source, and a dedicated SH-101-calibrated four-pole VCF. Its separate resonance compensation emphasizes the cutoff region while limiting pass-band loss; maximum resonance is bounded and output remains finite. Keyboard tracking is adjustable from 0–100% around C3, so positive tracking opens the filter on higher notes and closes it on lower notes. Lead ties preserve the gate and ADSR state for legato phrases; ordinary notes retrigger the envelope.
+The Lead render path uses the same phase-aligned primitive only for its common oscillator work, then uses an additive pulse/saw mixer, the selected sub-divider mode, a full-range deterministic voice-local noise source, and a dedicated four-pole VCF with stronger drive and feedback than the Chord filter. Its separate resonance compensation emphasizes the cutoff region while limiting pass-band loss; maximum resonance is bounded and output remains finite. Keyboard tracking is adjustable from 0–100% around C3, so positive tracking opens the filter on higher notes and closes it on lower notes. Lead ties preserve the gate and ADSR state for legato phrases; ordinary notes retrigger the envelope.
 
 All pitched tracks default to input degree 1 and octave 3. Their oscillators and filters run at 2x oversampling. Chord uses stable DCO pitch and a smoother resonance-compensated response; Lead uses stronger drive and feedback.
 

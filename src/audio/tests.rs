@@ -160,19 +160,19 @@ mod tests {
     }
 
     #[test]
-    fn juno_highpass_reset_preserves_constructor_coefficients() {
+    fn chord_highpass_reset_preserves_constructor_coefficients() {
         let mut voice = SynthVoice::new(48_000.0);
-        let coefficients = voice.juno_highpass.coefficients();
+        let coefficients = voice.chord_highpass.coefficients();
         assert_ne!(coefficients, [1.0, 0.0, 0.0, 0.0, 0.0]);
-        voice.juno_highpass.process(1.0);
+        voice.chord_highpass.process(1.0);
         voice.reset_to_idle();
-        assert_eq!(voice.juno_highpass.coefficients(), coefficients);
+        assert_eq!(voice.chord_highpass.coefficients(), coefficients);
 
         let mut fresh = SynthVoice::new(48_000.0);
         for input in [1.0, 0.0, -0.25, 0.5] {
             assert_eq!(
-                voice.juno_highpass.process(input),
-                fresh.juno_highpass.process(input)
+                voice.chord_highpass.process(input),
+                fresh.chord_highpass.process(input)
             );
         }
     }
@@ -487,7 +487,7 @@ mod tests {
         assert!((at_end - DRUM_SILENCE).abs() < 0.000001);
     }
     #[test]
-    fn kick_pitch_uses_909_inspired_peak_and_settled_mappings() {
+    fn kick_pitch_uses_documented_peak_and_settled_mappings() {
         let mut pitch = KickPitchEnvelope::new();
         pitch.trigger(0.5, 0.455, 10_000.0);
         let at_peak = (0..=15).map(|_| pitch.next_value()).last().unwrap();
@@ -2298,17 +2298,17 @@ mod tests {
     }
 
     #[test]
-    fn juno_and_sh101_noise_controls_use_instrument_specific_source_ranges() {
+    fn chord_and_lead_noise_controls_use_instrument_specific_source_ranges() {
         let project = AudioProject::from_project(&Project::new());
         let locks = parameter_locks([(ParameterId::Noise, 100)]);
-        let mut juno = SynthVoice::new(48_000.0);
-        Renderer::apply_synth_params(&project, 48_000.0, CHORD_TRACK_INDEX, locks, &mut juno, 0);
-        let mut sh101 = SynthVoice::new(48_000.0);
-        Renderer::apply_synth_params(&project, 48_000.0, LEAD_TRACK_INDEX, locks, &mut sh101, 0);
+        let mut chord = SynthVoice::new(48_000.0);
+        Renderer::apply_synth_params(&project, 48_000.0, CHORD_TRACK_INDEX, locks, &mut chord, 0);
+        let mut lead = SynthVoice::new(48_000.0);
+        Renderer::apply_synth_params(&project, 48_000.0, LEAD_TRACK_INDEX, locks, &mut lead, 0);
 
-        assert!((juno.noise_level.value() - 0.35).abs() < f32::EPSILON);
-        assert!((sh101.noise_level.value() - 1.0).abs() < f32::EPSILON);
-        assert!(sh101.noise_level.value() > juno.noise_level.value() * 2.0);
+        assert!((chord.noise_level.value() - 0.35).abs() < f32::EPSILON);
+        assert!((lead.noise_level.value() - 1.0).abs() < f32::EPSILON);
+        assert!(lead.noise_level.value() > chord.noise_level.value() * 2.0);
     }
 
     #[test]

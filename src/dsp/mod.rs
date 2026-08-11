@@ -1199,8 +1199,8 @@ pub enum EnvStage {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EnvelopeProfile {
     Generic,
-    Juno,
-    Sh101,
+    Chord,
+    Lead,
 }
 
 pub struct Adsr {
@@ -1374,8 +1374,8 @@ impl Adsr {
     fn profile_ranges(&self) -> (f32, f32, f32, f32, f32, f32) {
         match self.profile {
             EnvelopeProfile::Generic => (0.001, 2.0, 0.005, 3.0, 0.005, 5.0),
-            EnvelopeProfile::Juno => (0.001, 3.0, 0.002, 12.0, 0.002, 12.0),
-            EnvelopeProfile::Sh101 => (0.0015, 4.0, 0.002, 10.0, 0.002, 10.0),
+            EnvelopeProfile::Chord => (0.001, 3.0, 0.002, 12.0, 0.002, 12.0),
+            EnvelopeProfile::Lead => (0.0015, 4.0, 0.002, 10.0, 0.002, 10.0),
         }
     }
 
@@ -1410,7 +1410,7 @@ impl Adsr {
     }
 }
 
-/// The 303's amplifier is a gate, rather than a second copy of its filter
+/// The Bass amplifier is a gate, rather than a second copy of its filter
 /// contour.  Its deliberately fixed timing keeps held notes present after the
 /// filter sweep has completed.
 pub struct BassVcaEnvelope {
@@ -1679,12 +1679,12 @@ impl CalibratedFourPole {
     }
 }
 
-/// Four-pole low-pass calibration for the Juno-inspired Chord voice.
-pub struct JunoFilter {
+/// Four-pole low-pass calibration for the Chord voice.
+pub struct ChordFilter {
     inner: CalibratedFourPole,
 }
 
-impl JunoFilter {
+impl ChordFilter {
     pub fn new() -> Self {
         Self {
             inner: CalibratedFourPole::new(),
@@ -1713,20 +1713,20 @@ impl JunoFilter {
     }
 }
 
-impl Default for JunoFilter {
+impl Default for ChordFilter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Four-pole low-pass calibration for the SH-101-inspired Lead voice.  Its
+/// Four-pole low-pass calibration for the Lead voice. Its
 /// stronger drive and feedback retain the sharper, more aggressive response
 /// of the monophonic instrument.
-pub struct Sh101Filter {
+pub struct LeadFilter {
     inner: CalibratedFourPole,
 }
 
-impl Sh101Filter {
+impl LeadFilter {
     pub fn new() -> Self {
         Self {
             inner: CalibratedFourPole::new(),
@@ -1755,7 +1755,7 @@ impl Sh101Filter {
     }
 }
 
-impl Default for Sh101Filter {
+impl Default for LeadFilter {
     fn default() -> Self {
         Self::new()
     }
@@ -1766,7 +1766,7 @@ impl Default for Sh101Filter {
 /// far-stopband response approaches 24 dB/octave.  It is intended to be driven
 /// at 2x the host sample rate. Parameter updates are cached and interpolated at
 /// control rate so cutoff changes do not produce zipper noise in the callback.
-pub struct Tb303Filter {
+pub struct BassFilter {
     stages: [f32; 4],
     coefficient: f32,
     feedback: f32,
@@ -1778,7 +1778,7 @@ pub struct Tb303Filter {
     cached_sr: f32,
 }
 
-impl Tb303Filter {
+impl BassFilter {
     pub fn new() -> Self {
         Self {
             stages: [0.0; 4],
@@ -1848,7 +1848,7 @@ impl Tb303Filter {
     }
 }
 
-impl Default for Tb303Filter {
+impl Default for BassFilter {
     fn default() -> Self {
         Self::new()
     }
@@ -1937,7 +1937,7 @@ impl Default for Biquad {
     }
 }
 
-/// A short, modulated stereo delay inspired by the fixed Juno chorus modes.
+/// A short, modulated stereo delay implementing the fixed Chord chorus modes.
 /// Storage is allocated when the renderer is built, never in the audio callback.
 pub struct StereoChorus {
     buffer: Vec<f32>,
