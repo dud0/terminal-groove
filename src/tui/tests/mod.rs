@@ -4,9 +4,9 @@ use crate::{
     generator::{ChordShapePool, Target as GeneratorTarget},
     model::{
         CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, GlobalParameterId, LEAD_TRACK_INDEX,
-        LfoConfig, LfoDivision, LfoRate, ParameterId, ParameterValue, Percent, RIMSHOT_TRACK_INDEX,
-        STEP_BANK_SIZE, SYNTH_TRACK_START, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition,
-        Waveform,
+        LfoConfig, LfoDivision, LfoRate, Microtiming, ParameterId, ParameterValue, Percent,
+        RIMSHOT_TRACK_INDEX, STEP_BANK_SIZE, SYNTH_TRACK_START, StepEvent, TRACK_COUNT, TrackKind,
+        TriggerCondition, Waveform,
     },
     reducer::Scope,
 };
@@ -495,6 +495,36 @@ fn trigger_dialog_renders_horizontal_cards() {
     assert!(screen.contains("[←/→] select"));
     assert!(screen.contains("50%"));
     assert!(screen.contains("···"));
+}
+
+#[test]
+fn closing_trigger_editor_ends_microtiming_coalescing() {
+    let mut app = App::new(Project::new(), None);
+    app.editor.toggle_event(0, 0).unwrap();
+    app.editor.end_coalescing();
+    let key = Some(crate::reducer::CoalesceKey(0, 0, 0xfd));
+
+    app.editor
+        .set_microtiming(0, 0, Microtiming::new(1).unwrap(), key)
+        .unwrap();
+    app.mode = Mode::TriggerEdit {
+        field: TriggerField::Microtiming,
+    };
+    finish_trigger_edit(&mut app);
+    app.editor
+        .set_microtiming(0, 0, Microtiming::new(2).unwrap(), key)
+        .unwrap();
+
+    assert!(app.editor.undo());
+    assert_eq!(
+        app.editor.microtiming_value(0, 0).unwrap(),
+        Microtiming::new(1).unwrap()
+    );
+    assert!(app.editor.undo());
+    assert_eq!(
+        app.editor.microtiming_value(0, 0).unwrap(),
+        Microtiming::ZERO
+    );
 }
 
 #[test]

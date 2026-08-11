@@ -54,7 +54,8 @@ Playback supports start, pause, resume, stop, reset, live editing, drum triggers
   `+50%` of a nominal sixteenth-note step. Zero is the default and is omitted from JSON. Negative
   values play early and positive values play late; ties do not carry microtiming. Microtiming is
   added to swing and shifts the complete retrigger burst. The effective burst is clamped between
-  adjacent swing-adjusted track slots so event order is preserved.
+  adjacent swing-adjusted track slots; if a following early event leaves too little room, the
+  retrigger spacing is compressed so every hit still precedes that event.
 - Changing a track length while playing preserves its next local step when that step remains in range; otherwise that track wraps to step 1. Other tracks do not restart.
 - Growing a track appends empty steps. Shrinking truncates removed steps immediately and clears ties made invalid by the new cyclic boundary. The complete resize and tie cleanup are one undoable edit.
 - Doubling a track of 1 through 32 steps appends an exact copy of all existing steps, including events and locks. Tracks longer than 32 steps cannot be doubled because the result would exceed 64.
@@ -283,7 +284,7 @@ Each track provides:
 - Swing, default 0%, range 0–75%, shared across all patterns
 - Probability, default 100%, range 0–100%, shared across all patterns
 
-Swing delays only global offbeat sixteenths (clock steps 2, 4, …) by its percentage of the nominal step duration. It applies to the complete per-track action, including releases and locks, and remains aligned to the global clock for polymetric tracks. Conditions are evaluated once when an event is scheduled, followed by the probability gate. A successful event launches its full evenly-spaced retrigger burst before that track's next swing-adjusted slot; microtiming shifts that burst and is clamped when necessary to preserve the slot boundary. Cycle counters, event-Chance streams, and probability streams are deterministic and independent per track; all reset on Stop and pattern activation. Probability draws are not made at 0% or 100%, and never perturb event-Chance streams.
+Swing delays only global offbeat sixteenths (clock steps 2, 4, …) by its percentage of the nominal step duration. It applies to the complete per-track action, including releases and locks, and remains aligned to the global clock for polymetric tracks. Conditions are evaluated once when an event is scheduled, followed by the probability gate. A successful event launches its full evenly-spaced retrigger burst before that track's next swing-adjusted slot; microtiming shifts that burst and is clamped when necessary to preserve the slot boundary. If the following event is scheduled early, the preceding burst is compressed as needed so its final hit occurs first. Cycle counters, event-Chance streams, and probability streams are deterministic and independent per track; all reset on Stop and pattern activation. Probability draws are not made at 0% or 100%, and never perturb event-Chance streams.
 
 Sends are post-fader and post-mute. Chord group level, pan/spread layout, delay send, and reverb send are captured when a group triggers and remain with that group through release; a later Chord lock cannot reroute an earlier group’s tail. Muting ramps the dry track and new send input to silence, but already-generated global effect tails continue. A muted synth voice continues its internal state, so unmuting may reveal a still-active voice.
 

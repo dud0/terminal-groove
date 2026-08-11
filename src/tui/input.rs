@@ -1583,6 +1583,12 @@ pub(super) fn move_chord_editor_step(a: &mut App, forward: bool) {
     a.mode = Mode::ChordEdit { shape };
 }
 
+pub(super) fn finish_trigger_edit(a: &mut App) {
+    a.editor.end_coalescing();
+    a.mode = Mode::Navigation;
+    a.status = "Trigger editing finished".into();
+}
+
 pub(super) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::TriggerEdit { field } = a.mode else {
         return Ok(false);
@@ -1592,12 +1598,12 @@ pub(super) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
     match k.code {
         KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o') => return Ok(false),
         KeyCode::Char('?') => {
+            a.editor.end_coalescing();
             a.mode = Mode::Help;
             return Ok(true);
         }
         KeyCode::Enter | KeyCode::Esc | KeyCode::Char('T') => {
-            a.mode = Mode::Navigation;
-            a.status = "Trigger editing finished".into();
+            finish_trigger_edit(a);
             return Ok(true);
         }
         KeyCode::Left | KeyCode::Right => {
@@ -1620,6 +1626,7 @@ pub(super) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
     let condition = match a.editor.trigger_condition_value(track, step) {
         Ok(value) => value,
         Err(error) => {
+            a.editor.end_coalescing();
             a.status = error.to_string();
             a.mode = Mode::Navigation;
             return Ok(true);

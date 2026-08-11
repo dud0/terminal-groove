@@ -719,6 +719,118 @@ mod tests {
     }
 
     #[test]
+    fn retriggers_finish_before_a_following_early_event() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps.resize(2, None);
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: Default::default(),
+            retrigger_count: 4,
+            microtiming: Microtiming::new(50).unwrap(),
+            locks: Default::default(),
+        });
+        project.patterns[0].tracks[0].steps[1] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::new(-50).unwrap(),
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary(0);
+
+        let next_start = renderer
+            .scheduled
+            .iter()
+            .flatten()
+            .find(|action| action.track == 0 && action.step == 1 && !action.retrigger)
+            .unwrap()
+            .remaining;
+        let previous_retriggers: Vec<_> = renderer
+            .scheduled
+            .iter()
+            .flatten()
+            .filter(|action| action.track == 0 && action.step == 0 && action.retrigger)
+            .map(|action| action.remaining)
+            .collect();
+        assert_eq!(previous_retriggers, vec![124, 249, 374]);
+        assert!(previous_retriggers
+            .iter()
+            .all(|remaining| *remaining < next_start));
+    }
+
+    #[test]
+    fn negative_microtiming_looks_ahead_across_an_ordinary_bar_boundary() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::new(-50).unwrap(),
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.next_steps[0] = 15;
+        renderer.boundary(15);
+
+        assert_eq!(renderer.early_armed[0], Some(0));
+        assert_eq!(
+            renderer
+                .scheduled
+                .iter()
+                .flatten()
+                .filter(|action| action.track == 0 && action.step == 0 && !action.retrigger)
+                .count(),
+            1
+        );
+        renderer.boundary(16);
+        assert_eq!(renderer.early_armed[0], None);
+        assert_eq!(
+            renderer
+                .scheduled
+                .iter()
+                .flatten()
+                .filter(|action| action.track == 0 && action.step == 0 && !action.retrigger)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn negative_microtiming_does_not_look_ahead_across_a_queued_transition() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::new(-50).unwrap(),
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.next_steps[0] = 15;
+        renderer.queued_pattern = Some(1);
+        renderer.boundary(15);
+
+        assert_eq!(renderer.early_armed[0], None);
+        assert!(renderer
+            .scheduled
+            .iter()
+            .flatten()
+            .all(|action| action.track != 0 || action.step != 0));
+    }
+
+    #[test]
     fn late_microtiming_and_retriggers_are_clamped_before_the_next_slot() {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
@@ -744,7 +856,7 @@ mod tests {
         assert!(actions.iter().all(|action| action.remaining < 1_000));
         assert_eq!(
             actions.iter().find(|action| !action.retrigger).unwrap().remaining,
-            812
+            811
         );
     }
 

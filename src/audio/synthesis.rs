@@ -16,6 +16,12 @@ use crate::model::{
 };
 use std::sync::atomic::Ordering;
 
+#[derive(Clone, Copy)]
+struct TrackActionSchedule {
+    lookahead: bool,
+    next_early_start: Option<u32>,
+}
+
 impl Renderer {
     pub(super) fn drum_controls(
         track: AudioTrack,
@@ -1102,7 +1108,7 @@ impl Renderer {
         global_step: usize,
         step_samples: u32,
         trigger_allowed: bool,
-        lookahead: bool,
+        schedule: TrackActionSchedule,
     ) {
         let sequence = self.project.patterns[self.active_pattern].tracks[track];
         let event = sequence.steps[step];
@@ -1117,15 +1123,20 @@ impl Renderer {
         let count = event.and_then(|event| event.retrigger_count()).unwrap_or(1);
         let last_offset = horizon * u32::from(count.saturating_sub(1)) / u32::from(count);
         let next_slot = step_samples + next_delay;
-        let max_start = next_slot.saturating_sub(last_offset);
+        let cutoff = schedule.next_early_start.unwrap_or(next_slot);
+        // The cutoff is exclusive: a following event must win the sample at its
+        // own scheduled start.  If the complete burst cannot fit after clamping
+        // its base hit, retriggers are compressed into the remaining interval.
+        let max_start = cutoff.saturating_sub(1).saturating_sub(last_offset);
         let requested_start = i64::from(current_delay) + micro_offset;
-        let min_start = if lookahead {
+        let min_start = if schedule.lookahead {
             i64::from(previous_delay) - i64::from(step_samples)
         } else {
             0
         };
         let start = requested_start.clamp(min_start, i64::from(max_start));
-        let origin = if lookahead {
+        let burst_horizon = horizon.min((i64::from(cutoff) - start).max(0) as u32);
+        let origin = if schedule.lookahead {
             i64::from(step_samples)
         } else {
             0
@@ -1141,7 +1152,7 @@ impl Renderer {
         if trigger_allowed {
             for hit in 1..count {
                 self.enqueue(ScheduledTrackAction {
-                    remaining: remaining_start + horizon * u32::from(hit) / u32::from(count),
+                    remaining: remaining_start + burst_horizon * u32::from(hit) / u32::from(count),
                     track: track as u8,
                     step: step as u8,
                     retrigger: true,
@@ -1151,19 +1162,36 @@ impl Renderer {
         }
     }
 
-    fn should_lookahead(
+    fn early_start_from_previous_boundary(
         &self,
         track: usize,
         step: usize,
         global_step: usize,
         step_samples: u32,
-    ) -> bool {
+    ) -> Option<u32> {
         let event = self.project.patterns[self.active_pattern].tracks[track].steps[step];
-        let Some(microtiming) = event.and_then(|event| event.microtiming()) else {
-            return false;
-        };
+        let microtiming = event.and_then(|event| event.microtiming())?;
         let current_delay = self.swing_delay(global_step, track, step_samples);
-        i64::from(current_delay) + i64::from(step_samples) * i64::from(microtiming.get()) / 100 < 0
+        let requested_start =
+            i64::from(current_delay) + i64::from(step_samples) * i64::from(microtiming.get()) / 100;
+        if requested_start >= 0 {
+            return None;
+        }
+        let previous_delay = self.swing_delay(global_step.wrapping_sub(1), track, step_samples);
+        let start = requested_start.max(i64::from(previous_delay) - i64::from(step_samples));
+        Some((i64::from(step_samples) + start) as u32)
+    }
+
+    fn transition_due_at(&self, global_step: usize) -> bool {
+        if global_step % 16 != 0 {
+            return false;
+        }
+        if self.queued_song.is_some() || self.queued_pattern.is_some() {
+            return true;
+        }
+        self.song_mode
+            && global_step > 0
+            && self.song_bar + 1 >= self.project.song[self.active_song].bars
     }
 
     pub(super) fn boundary(&mut self, global_step: usize) {
@@ -1200,6 +1228,18 @@ impl Renderer {
             let event = sequence.steps[step];
             let prearmed = self.early_armed[track] == Some(step as u8);
             let step_samples = self.clock.step_samples().round() as u32;
+            let next_global_step = global_step.wrapping_add(1);
+            let next_step = (step + 1) % sequence.step_count as usize;
+            let next_early_start = (!self.transition_due_at(next_global_step))
+                .then(|| {
+                    self.early_start_from_previous_boundary(
+                        track,
+                        next_step,
+                        next_global_step,
+                        step_samples,
+                    )
+                })
+                .flatten();
             if !prearmed {
                 let trigger_allowed = self.trigger_allowed_for(track, step, event);
                 self.schedule_track_actions(
@@ -1208,16 +1248,15 @@ impl Renderer {
                     global_step,
                     step_samples,
                     trigger_allowed,
-                    false,
+                    TrackActionSchedule {
+                        lookahead: false,
+                        next_early_start,
+                    },
                 );
             }
             self.early_armed[track] = None;
-            self.next_steps[track] = (step + 1) % sequence.step_count as usize;
-            let next_global_step = global_step.wrapping_add(1);
-            let next_step = self.next_steps[track];
-            if next_global_step % 16 != 0
-                && self.should_lookahead(track, next_step, next_global_step, step_samples)
-            {
+            self.next_steps[track] = next_step;
+            if next_early_start.is_some() {
                 let next_event =
                     self.project.patterns[self.active_pattern].tracks[track].steps[next_step];
                 let trigger_allowed = self.trigger_allowed_for(track, next_step, next_event);
@@ -1227,7 +1266,10 @@ impl Renderer {
                     next_global_step,
                     step_samples,
                     trigger_allowed,
-                    true,
+                    TrackActionSchedule {
+                        lookahead: true,
+                        next_early_start: None,
+                    },
                 );
                 self.early_armed[track] = Some(next_step as u8);
             }
