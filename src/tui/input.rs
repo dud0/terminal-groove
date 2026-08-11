@@ -2,8 +2,8 @@ use super::{
     controller::{
         change_octave, enter_error, enter_global_edit, global_id, global_shortcut,
         handle_file_input, handle_global_key, handle_new_confirm, handle_open_confirm,
-        handle_project_browser, handle_sidechain_key, handle_tempo_input, new_project,
-        project_browser_mode, request_new_project, save, save_as_mode, sync_project,
+        handle_overwrite_confirm, handle_project_browser, handle_sidechain_key, handle_tempo_input,
+        new_project, project_browser_mode, request_new_project, save, save_as_mode, sync_project,
         sync_project_with_smoothing,
     },
     controls::GLOBAL_CONTROLS,
@@ -33,6 +33,9 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             a.mode = Mode::Navigation;
         }
         return Ok(());
+    }
+    if matches!(a.mode, Mode::OverwriteConfirm { .. }) {
+        return handle_overwrite_confirm(a, audio, k);
     }
     if matches!(a.mode, Mode::FileInput(_, _)) {
         return handle_file_input(a, audio, k);

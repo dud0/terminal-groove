@@ -1589,6 +1589,13 @@ fn every_overlay_mode_has_a_visible_name() {
     assert_eq!(mode_name(&Mode::Help), "Help");
     assert_eq!(mode_name(&Mode::NewConfirm), "Unsaved confirmation");
     assert_eq!(
+        mode_name(&Mode::OverwriteConfirm {
+            path: PathBuf::from(".projects/song.groove.json"),
+            input: "song".into(),
+        }),
+        "Overwrite confirmation"
+    );
+    assert_eq!(
         mode_name(&Mode::LfoEdit {
             parameter: ParameterId::Cutoff,
             field: LfoField::Depth,
@@ -1619,6 +1626,33 @@ fn save_as_uses_the_gitignored_default_project_path() {
     );
     assert!(project_path_for_name(directory.path(), "bad/name").is_err());
     assert!(project_path_for_name(directory.path(), "").is_err());
+}
+
+#[test]
+fn save_as_overwrite_check_applies_to_every_existing_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let existing = directory.path().join("existing.groove.json");
+    let missing = directory.path().join("missing.groove.json");
+    std::fs::write(&existing, b"existing").unwrap();
+
+    assert!(save_as_needs_overwrite_confirmation(&existing).unwrap());
+    assert!(!save_as_needs_overwrite_confirmation(&missing).unwrap());
+}
+
+#[test]
+fn overwrite_confirmation_renders_destination_and_controls() {
+    let mut app = App::new(Project::new(), None);
+    app.mode = Mode::OverwriteConfirm {
+        path: PathBuf::from(".projects/existing.groove.json"),
+        input: "existing".into(),
+    };
+
+    let screen = rendered(&app, 120, 34);
+
+    assert!(screen.contains("Overwrite existing project?"));
+    assert!(screen.contains(".projects/existing.groove.json"));
+    assert!(screen.contains("Overwrite [Enter/O]"));
+    assert!(screen.contains("Cancel [Esc]"));
 }
 
 #[test]

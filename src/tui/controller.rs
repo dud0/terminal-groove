@@ -101,6 +101,10 @@ pub(super) fn save_path_for_name(name: &str) -> Result<PathBuf> {
     project_path_for_name(&project_directory()?, name)
 }
 
+pub(super) fn save_as_needs_overwrite_confirmation(destination: &Path) -> io::Result<bool> {
+    destination.try_exists()
+}
+
 pub(super) fn sync_project(a: &mut App, audio: &mut Audio) -> bool {
     sync_project_with_smoothing(a, audio, false)
 }
@@ -179,6 +183,38 @@ pub(super) fn save(a: &mut App) -> Result<()> {
     Ok(())
 }
 
+fn complete_save_as(a: &mut App, audio: &mut Audio, path: PathBuf) {
+    match persistence::save_atomic(&path, a.editor.project()) {
+        Ok(()) => {
+            a.path = Some(path.clone());
+            a.editor.mark_saved();
+            a.status = format!("Saved {}", path.display());
+            a.mode = Mode::Navigation;
+            if let Some(open) = a.pending_open.take() {
+                open_project(a, audio, open)
+            } else if a.pending_new {
+                a.pending_new = false;
+                new_project(a, audio)
+            } else if a.pending_quit {
+                a.quit = true
+            }
+        }
+        Err(e) => enter_error(a, e.to_string()),
+    }
+}
+
+pub(super) fn handle_overwrite_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    let Mode::OverwriteConfirm { path, input } = a.mode.clone() else {
+        return Ok(());
+    };
+    match k.code {
+        KeyCode::Enter | KeyCode::Char('o' | 'O') => complete_save_as(a, audio, path),
+        KeyCode::Esc => a.mode = Mode::FileInput(FileAction::SaveAs, input),
+        _ => {}
+    }
+    Ok(())
+}
+
 pub(super) fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
     let Mode::FileInput(FileAction::SaveAs, mut input) = a.mode.clone() else {
         return Ok(());
@@ -206,22 +242,13 @@ pub(super) fn handle_file_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
                     return Ok(());
                 }
             };
-            match persistence::save_atomic(&path, a.editor.project()) {
-                Ok(()) => {
-                    a.path = Some(path.clone());
-                    a.editor.mark_saved();
-                    a.status = format!("Saved {}", path.display());
-                    a.mode = Mode::Navigation;
-                    if let Some(open) = a.pending_open.take() {
-                        open_project(a, audio, open)
-                    } else if a.pending_new {
-                        a.pending_new = false;
-                        new_project(a, audio)
-                    } else if a.pending_quit {
-                        a.quit = true
-                    }
-                }
-                Err(e) => enter_error(a, e.to_string()),
+            match save_as_needs_overwrite_confirmation(&path) {
+                Ok(true) => a.mode = Mode::OverwriteConfirm { path, input },
+                Ok(false) => complete_save_as(a, audio, path),
+                Err(error) => enter_error(
+                    a,
+                    format!("Could not check whether {} exists: {error}", path.display()),
+                ),
             }
         }
         _ => {}

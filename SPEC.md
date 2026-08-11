@@ -503,12 +503,13 @@ The current mode is always named on screen. Modes are:
 - Track-length input
 - Project browser
 - Project-name input
+- Save As overwrite confirmation
 - Open, new-project, and quit confirmations
 - Error dialog
 - Help
 
 The project browser opened by `Ctrl+O` lists all regular, non-temporary files in `.projects/`, sorted by filename. Up/Down selects an entry, Home/End jump to the first/last entry, Enter opens it, and Esc closes the browser. A missing or empty `.projects/` directory is shown as empty. Explicit CLI project paths remain unchanged.
-Save As accepts a non-empty single filename component, writes it under `.projects/`, and appends `.groove.json` once if needed. Names containing `/` or `\\`, or equal to `.` or `..`, are rejected. The destination is shown before confirmation; the directory is created lazily on save.
+Save As accepts a non-empty single filename component, writes it under `.projects/`, and appends `.groove.json` once if needed. Names containing `/` or `\\`, or equal to `.` or `..`, are rejected. The destination is shown before confirmation; the directory is created lazily on save. When Save As targets an existing destination, the UI asks for overwrite confirmation before writing; `Enter` or `O` confirms and `Esc` returns to the name input with the name preserved. Ordinary Save to the current project path remains direct.
 
 Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice. Save failure leaves the current project dirty, shows an error, and clears any pending open/new/quit continuation so a later unrelated Save As cannot trigger it. Opening a project stops and resets playback, clears effects, loads the new engine state, resets undo/redo history, selects the global row, and marks the project clean.
 

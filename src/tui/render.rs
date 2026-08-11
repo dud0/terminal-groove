@@ -1,8 +1,8 @@
 use super::overlays::{
-    popup, popup_at, probability_popup_rect, quit_popup_rect, render_chord_popup,
-    render_generator_popup, render_lfo_popup, render_lfo_selector, render_pattern_popup,
-    render_project_browser, render_sidechain_popup, render_trigger_popup, swing_popup_rect,
-    tempo_popup_rect,
+    overwrite_popup_rect, popup, popup_at, probability_popup_rect, quit_popup_rect,
+    render_chord_popup, render_generator_popup, render_lfo_popup, render_lfo_selector,
+    render_pattern_popup, render_project_browser, render_sidechain_popup, render_trigger_popup,
+    swing_popup_rect, tempo_popup_rect,
 };
 use super::{
     controller::{PROJECT_EXTENSION, global_name, project_directory, project_path_for_name},
@@ -55,6 +55,7 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::TrackLengthInput(_) => "Track length input".into(),
         Mode::ProjectBrowser { .. } => "Project browser".into(),
         Mode::FileInput(_, _) => "Project-name input".into(),
+        Mode::OverwriteConfirm { .. } => "Overwrite confirmation".into(),
         Mode::OpenConfirm(_) => "Unsaved confirmation".into(),
         Mode::NewConfirm => "Unsaved confirmation".into(),
         Mode::Error(_) => "Error dialog".into(),
@@ -2282,6 +2283,12 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 &format!("Name: {input}_\nDestination: {destination}\nEnter confirms  Esc cancels"),
             );
         }
+        Mode::OverwriteConfirm { path, .. } => popup_at(
+            f,
+            overwrite_popup_rect(area),
+            "Overwrite existing project?",
+            &format!("{}\n\nOverwrite [Enter/O]  Cancel [Esc]", path.display()),
+        ),
         Mode::OpenConfirm(path) => popup(
             f,
             area,

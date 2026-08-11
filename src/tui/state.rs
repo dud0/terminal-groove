@@ -39,6 +39,10 @@ pub(crate) enum Mode {
         selected: usize,
     },
     FileInput(FileAction, String),
+    OverwriteConfirm {
+        path: PathBuf,
+        input: String,
+    },
     OpenConfirm(PathBuf),
     NewConfirm,
     Error(String),

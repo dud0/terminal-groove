@@ -1025,6 +1025,10 @@ pub(super) fn quit_popup_rect(area: Rect) -> Rect {
     }
 }
 
+pub(super) fn overwrite_popup_rect(area: Rect) -> Rect {
+    compact_popup_rect(area, 76, 5)
+}
+
 pub(super) fn tempo_popup_rect(area: Rect) -> Rect {
     const WIDTH: u16 = 77;
     const HEIGHT: u16 = 4;
