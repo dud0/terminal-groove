@@ -1,5 +1,21 @@
 use super::*;
+use super::{controller::*, controls::GLOBAL_CONTROLS, input::*, overlays::*, render::*, state::*};
+use crate::{
+    generator::{ChordShapePool, Target as GeneratorTarget},
+    model::{
+        CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, GlobalParameterId, LEAD_TRACK_INDEX,
+        LfoConfig, LfoDivision, LfoRate, ParameterId, ParameterValue, Percent, RIMSHOT_TRACK_INDEX,
+        STEP_BANK_SIZE, SYNTH_TRACK_START, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition,
+        Waveform,
+    },
+    reducer::Scope,
+};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
+use ratatui::{
+    layout::Rect,
+    style::{Color, Modifier},
+};
 
 fn rendered(app: &App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
