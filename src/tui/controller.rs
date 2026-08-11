@@ -1,6 +1,6 @@
 use super::{
     controls::{GLOBAL_CONTROLS, global_control},
-    state::{App, FileAction, Mode, ParameterBank, SidechainField},
+    state::{App, FileAction, Mode, ParameterBank, PatternPage, SidechainField},
 };
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
@@ -120,11 +120,13 @@ pub(super) fn sync_project_with_smoothing(
         ParameterSmoothing::Default
     };
     let pattern_map = a.editor.take_pattern_map();
+    let song_map = a.editor.take_song_map();
     if audio
-        .send(Audio::snapshot_with_smoothing_and_map(
+        .send(Audio::snapshot_with_smoothing_and_maps(
             a.editor.project(),
             smoothing,
             pattern_map,
+            song_map,
         ))
         .is_err()
     {
@@ -365,6 +367,12 @@ pub(super) fn reset_project_ui(a: &mut App) {
     a.pattern_cursor = 0;
     a.active_pattern = 0;
     a.queued_pattern = None;
+    a.pattern_page = PatternPage::Patterns;
+    a.song_cursor = 0;
+    a.song_mode = false;
+    a.active_song = 0;
+    a.queued_song = None;
+    a.song_bar = 0;
     a.playheads = [None; TRACK_COUNT];
     a.pending_open = None;
     a.pending_new = false;
@@ -694,9 +702,26 @@ pub(super) fn refresh_audio_status(a: &mut App, audio: &mut Audio) {
     a.paused = audio.status.paused.load(Ordering::Acquire);
     a.active_pattern = usize::from(audio.status.active_pattern.load(Ordering::Acquire))
         .min(a.editor.project.patterns.len() - 1);
+    if a.editor.pattern() != a.active_pattern {
+        a.editor.select_pattern(a.active_pattern);
+        if a.row > 0 {
+            let length = a
+                .editor
+                .active_steps(a.row - 1)
+                .map_or(1, |steps| steps.len());
+            a.step = a.step.min(length.saturating_sub(1));
+        }
+    }
     let queued = audio.status.queued_pattern.load(Ordering::Acquire);
     a.queued_pattern =
         (queued != u8::MAX).then_some(usize::from(queued).min(a.editor.project.patterns.len() - 1));
+    a.song_mode = audio.status.song_mode.load(Ordering::Acquire);
+    a.active_song = usize::from(audio.status.active_song.load(Ordering::Acquire))
+        .min(a.editor.project.song.len().saturating_sub(1));
+    let queued_song = audio.status.queued_song.load(Ordering::Acquire);
+    a.queued_song = (queued_song != u16::MAX)
+        .then_some(usize::from(queued_song).min(a.editor.project.song.len().saturating_sub(1)));
+    a.song_bar = audio.status.song_bar.load(Ordering::Acquire);
     for track in 0..TRACK_COUNT {
         let step = audio.status.playheads[track].load(Ordering::Acquire);
         a.playheads[track] =

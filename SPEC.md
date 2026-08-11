@@ -29,7 +29,6 @@ Playback supports start, pause, resume, stop, reset, live editing, drum triggers
 - Samples, sample import, or sample playback
 - MIDI input, output, or clock sync
 - WAV or other audio export
-- Song-mode playback or song-editing UI. The project retains a persisted song reference list for forward-compatible project data, but the MVP does not play or edit that list.
 - Time-signature changes
 - Microtiming or continuously variable event velocity
 - Polyphonic note entry outside the fixed Chord shape mapping, or oscillator detune
@@ -58,8 +57,9 @@ Playback supports start, pause, resume, stop, reset, live editing, drum triggers
 ### 2.2 Patterns
 
 - A project contains 1 through 100 dynamic patterns, numbered from 1. Each pattern owns the nine track sequences; instrument, mixer, global, and effect settings are shared. New projects contain one empty pattern.
-- The MVP plays patterns directly and does not play the persisted `song` reference list. Pattern edits keep that list's one-based references valid where possible.
+- Playback has persistent `DIRECT` and `SONG` transport modes. Direct mode loops the selected pattern. Song mode starts from a selected song entry, repeats its referenced pattern for its configured bar count, advances at bar boundaries, and stops/reset after the final entry. The actively displayed pattern always follows the confirmed audio pattern; queued selections do not change the editor view early. Pattern edits keep song references valid where possible.
 - `Ctrl+P` opens a horizontally organized pattern dialog. Left/right, `Home`, and `End` move a visual cursor without changing playback. `Enter` selects the cursor pattern while stopped or queues it for the next bar while playing, then closes the dialog. `N` inserts an empty pattern after the cursor, `D` duplicates it, `C` copies it, `X` cuts it, `V` pastes the copied pattern after the cursor, and `Delete` removes it. The final pattern cannot be removed and is reset to empty.
+- `Tab` in the pattern dialog opens the song page. Its entries are one-based pattern references plus 1–64 bars. Left/right, `Home`, and `End` select an entry; up/down changes bars; `[`/`]` change the referenced pattern; `Enter` selects or queues Song mode from that entry. `N`, `D`, `C`, `X`, `V`, and `Delete` insert, duplicate, copy, cut, paste, and remove song entries. The final song entry resets to `P001 × 1` instead of being removed.
 - The dialog marks the currently playing pattern with `▶`, the next queued pattern with `⏭`, and empty patterns with a muted style. The pattern strip scrolls horizontally when necessary.
 - Pattern insertion, deletion, and replacement rebase active and queued playback indexes so queued playback continues to refer to the same pattern where possible.
 
@@ -359,6 +359,11 @@ The application uses ordinary portable terminal press events. It must not requir
 | Pattern dialog | `N` / `D` | Insert an empty pattern / duplicate the cursor pattern |
 | Pattern dialog | `C` / `X` / `V` | Copy / cut / paste after the cursor |
 | Pattern dialog | `Delete` | Remove the cursor pattern, resetting the final pattern instead |
+| Pattern/song dialog | `Tab` | Switch between Patterns and Song pages |
+| Song dialog | Left/right, `Home`, `End` | Move the song-entry cursor |
+| Song dialog | Up/down / `[` / `]` | Change bars / referenced pattern |
+| Song dialog | `Enter` | Select or queue Song mode from the cursor |
+| Song dialog | `N` / `D` / `C` / `X` / `V` / `Delete` | Manage song entries |
 | Track | `o` | Audition selected track/step without editing |
 | Anywhere | `Ctrl+S` | Save, prompting if no current path exists |
 | Anywhere | `Ctrl+Shift+S` | Save as |
@@ -546,7 +551,7 @@ The top-level object is:
   "globals": {},
   "tracks": [],
   "patterns": [],
-  "song": []
+  "song": [{ "pattern": 1, "bars": 1 }]
 }
 ```
 

@@ -51,6 +51,12 @@ pub(crate) enum Mode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PatternPage {
+    Patterns,
+    Song,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ParameterBank {
     Params,
     Effects,
@@ -181,6 +187,12 @@ pub struct App {
     pub(super) pattern_cursor: usize,
     pub(super) active_pattern: usize,
     pub(super) queued_pattern: Option<usize>,
+    pub(super) pattern_page: PatternPage,
+    pub(super) song_cursor: usize,
+    pub(super) song_mode: bool,
+    pub(super) active_song: usize,
+    pub(super) queued_song: Option<usize>,
+    pub(super) song_bar: u8,
     pub(super) callback_overruns: u64,
     pub(super) max_callback_load_per_mille: u64,
     pub(super) fader_animations: Vec<FaderAnimation>,
@@ -235,6 +247,12 @@ impl App {
             pattern_cursor: 0,
             active_pattern: 0,
             queued_pattern: None,
+            pattern_page: PatternPage::Patterns,
+            song_cursor: 0,
+            song_mode: false,
+            active_song: 0,
+            queued_song: None,
+            song_bar: 0,
             callback_overruns: 0,
             max_callback_load_per_mille: 0,
             fader_animations: Vec::new(),

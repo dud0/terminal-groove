@@ -9,10 +9,14 @@ pub enum AudioCommand {
     SelectPattern {
         pattern: u8,
     },
+    SelectSong {
+        entry: u8,
+    },
     ReplaceProject {
         project: Box<AudioProject>,
         smoothing: ParameterSmoothing,
         pattern_map: PatternIndexMap,
+        song_map: super::SongIndexMap,
     },
     Audition {
         track: u8,
@@ -100,17 +104,24 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
             for playhead in &renderer.status.playheads {
                 playhead.store(u8::MAX, Ordering::Release);
             }
-            renderer.active_pattern = 0;
             renderer.queued_pattern = None;
-            renderer.status.active_pattern.store(0, Ordering::Release);
-            renderer
-                .status
-                .queued_pattern
-                .store(u8::MAX, Ordering::Release);
+            renderer.queued_song = None;
+            if renderer.song_mode {
+                renderer.activate_song(0);
+            } else {
+                renderer.activate_pattern(0);
+            }
         }
         AudioCommand::SelectPattern { pattern }
             if (pattern as usize) < renderer.project.patterns.len() =>
         {
+            renderer.song_mode = false;
+            renderer.queued_song = None;
+            renderer.status.song_mode.store(false, Ordering::Release);
+            renderer
+                .status
+                .queued_song
+                .store(u16::MAX, Ordering::Release);
             if renderer.playing {
                 renderer.queued_pattern = Some(pattern as usize);
                 renderer
@@ -122,12 +133,31 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
             }
         }
         AudioCommand::SelectPattern { .. } => {}
+        AudioCommand::SelectSong { entry } if (entry as usize) < renderer.project.song.len() => {
+            if renderer.playing {
+                renderer.queued_song = Some(entry as usize);
+                renderer.queued_pattern = None;
+                renderer
+                    .status
+                    .queued_pattern
+                    .store(u8::MAX, Ordering::Release);
+                renderer
+                    .status
+                    .queued_song
+                    .store(entry as u16, Ordering::Release);
+            } else {
+                renderer.song_mode = true;
+                renderer.activate_song(entry as usize);
+            }
+        }
+        AudioCommand::SelectSong { .. } => {}
         AudioCommand::ReplaceProject {
             project,
             smoothing,
             pattern_map,
+            song_map,
         } => {
-            renderer.replace_project(project, smoothing, pattern_map);
+            renderer.replace_project(project, smoothing, pattern_map, song_map);
         }
         AudioCommand::Audition { track, step } => renderer.audition(track as usize, step as usize),
         AudioCommand::AutoAudition { track, step } if !renderer.playing => {

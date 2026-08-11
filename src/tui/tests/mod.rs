@@ -253,6 +253,35 @@ fn pattern_dialog_renders_horizontal_plain_numbered_states() {
 }
 
 #[test]
+fn song_page_renders_transport_progress_and_inline_controls() {
+    let mut project = Project::new();
+    project.patterns.push(project.patterns[0].clone());
+    project.song = vec![
+        crate::model::SongEntry {
+            pattern: 1,
+            bars: 2,
+        },
+        crate::model::SongEntry {
+            pattern: 2,
+            bars: 3,
+        },
+    ];
+    let mut app = App::new(project, None);
+    app.mode = Mode::PatternDialog;
+    app.pattern_page = PatternPage::Song;
+    app.song_cursor = 1;
+    app.song_mode = true;
+    app.active_song = 0;
+    app.song_bar = 1;
+
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("Song (2) · SONG"));
+    assert!(screen.contains("P001×02") && screen.contains("P002×03"));
+    assert!(screen.contains("Playing entry 1 · bar 2/2"));
+    assert!(screen.contains("[/] pattern"));
+}
+
+#[test]
 fn generator_dialog_field_arrows_clamp_and_values_change_horizontally() {
     assert_eq!(move_generator_field(0, true), 0);
     assert_eq!(move_generator_field(0, false), 1);

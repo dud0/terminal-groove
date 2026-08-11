@@ -1,4 +1,4 @@
-pub use crate::model::PatternIndexMap;
+pub use crate::model::{PatternIndexMap, SongIndexMap};
 use crate::{
     dsp::{
         DcBlock, Delay, Lfo, MasterLimiter, Reverb, SidechainCompressor, Smoother, TrackEffectChain,
@@ -7,7 +7,7 @@ use crate::{
     model::{
         ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, Globals, Instrument,
         LfoAssignments, MAX_STEP_COUNT, ParameterId, Percent, Project, SYNTH_TRACK_START,
-        StepEvent, TRACK_COUNT, TrackEffects,
+        SongEntry, StepEvent, TRACK_COUNT, TrackEffects,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -56,6 +56,7 @@ pub struct AudioProject {
     globals: Globals,
     tracks: [AudioTrack; TRACK_COUNT],
     patterns: Box<[AudioPattern]>,
+    song: Box<[SongEntry]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +111,7 @@ impl AudioProject {
                 })
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
+            song: project.song.clone().into_boxed_slice(),
         }
     }
 }
@@ -117,11 +119,20 @@ impl AudioProject {
 struct Renderer {
     project: Box<AudioProject>,
     retire: Producer<Box<AudioProject>>,
-    pending: Option<(Box<AudioProject>, ParameterSmoothing, PatternIndexMap)>,
+    pending: Option<(
+        Box<AudioProject>,
+        ParameterSmoothing,
+        PatternIndexMap,
+        SongIndexMap,
+    )>,
     clock: StepClock,
     next_steps: [usize; TRACK_COUNT],
     active_pattern: usize,
     queued_pattern: Option<usize>,
+    song_mode: bool,
+    active_song: usize,
+    queued_song: Option<usize>,
+    song_bar: u8,
     playing: bool,
     sr: f32,
     status: Arc<AudioStatus>,
@@ -217,6 +228,10 @@ pub struct AudioStatus {
     pub non_finite: AtomicBool,
     pub active_pattern: AtomicU8,
     pub queued_pattern: AtomicU8,
+    pub song_mode: AtomicBool,
+    pub active_song: AtomicU8,
+    pub queued_song: std::sync::atomic::AtomicU16,
+    pub song_bar: AtomicU8,
     pub callback_overruns: AtomicU64,
     pub max_callback_duration_ns: AtomicU64,
     pub max_callback_load_per_mille: AtomicU64,
@@ -241,6 +256,10 @@ impl Default for AudioStatus {
             non_finite: AtomicBool::new(false),
             active_pattern: AtomicU8::new(0),
             queued_pattern: AtomicU8::new(u8::MAX),
+            song_mode: AtomicBool::new(false),
+            active_song: AtomicU8::new(0),
+            queued_song: std::sync::atomic::AtomicU16::new(u16::MAX),
+            song_bar: AtomicU8::new(0),
             callback_overruns: AtomicU64::new(0),
             max_callback_duration_ns: AtomicU64::new(0),
             max_callback_load_per_mille: AtomicU64::new(0),

@@ -2702,4 +2702,31 @@ mod tests {
         assert!((tom.tone - 0.65).abs() < f32::EPSILON);
         assert!((tom.decay - 0.12).abs() < f32::EPSILON);
     }
+
+    #[test]
+    fn song_transport_repeats_entries_then_stops_at_the_end() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        project.song = vec![
+            SongEntry { pattern: 1, bars: 2 },
+            SongEntry { pattern: 2, bars: 1 },
+        ];
+        let status = std::sync::Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status.clone());
+        renderer.command(AudioCommand::SelectSong { entry: 0 });
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary(0);
+        assert_eq!(renderer.active_pattern, 0);
+        renderer.boundary(16);
+        assert_eq!(renderer.active_pattern, 0);
+        assert_eq!(renderer.song_bar, 1);
+        renderer.boundary(32);
+        assert_eq!(renderer.active_pattern, 1);
+        assert_eq!(renderer.active_song, 1);
+        renderer.boundary(48);
+        assert!(!renderer.playing);
+        assert_eq!(renderer.active_song, 0);
+        assert_eq!(renderer.active_pattern, 0);
+        assert!(!status.running.load(std::sync::atomic::Ordering::Acquire));
+    }
 }

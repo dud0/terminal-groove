@@ -11,7 +11,9 @@ use super::{
         is_recipe_parameter, parameter_descriptors, parameter_recipe, scope_name,
         selected_chord_shape, selected_drum_recipe, visible_parameter_descriptors,
     },
-    state::{App, ChordField, GeneratorDialog, LfoField, Mode, ParameterBank, TriggerField},
+    state::{
+        App, ChordField, GeneratorDialog, LfoField, Mode, ParameterBank, PatternPage, TriggerField,
+    },
 };
 use crate::{
     audio::{Audio, AudioCommand},
@@ -114,6 +116,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             }
             KeyCode::Char('p' | 'P') => {
                 a.pattern_cursor = a.editor.pattern().min(a.editor.project.patterns.len() - 1);
+                a.pattern_page = PatternPage::Patterns;
                 a.mode = Mode::PatternDialog;
             }
             KeyCode::Char('q' | 'Q') => {
@@ -511,7 +514,7 @@ pub(super) fn commit_pattern(a: &mut App, audio: &mut Audio, pattern: usize) -> 
         a.status = "Audio command queue full; pattern switch rejected".into();
         return false;
     }
-    if pattern != previous && !a.editor.select_pattern(pattern) {
+    if !a.playing && pattern != previous && !a.editor.select_pattern(pattern) {
         return false;
     }
     if audio
@@ -546,8 +549,12 @@ pub(super) fn adjacent_pattern_in_count(pattern: usize, forward: bool, count: us
 }
 
 pub(super) fn handle_pattern_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    if a.pattern_page == PatternPage::Song {
+        return handle_song_dialog(a, audio, k);
+    }
     match k.code {
         KeyCode::Esc | KeyCode::Char('p' | 'P') => a.mode = Mode::Navigation,
+        KeyCode::Tab => a.pattern_page = PatternPage::Song,
         KeyCode::Left => {
             let pattern =
                 adjacent_pattern_in_count(a.pattern_cursor, false, a.editor.project.patterns.len());
@@ -597,6 +604,131 @@ pub(super) fn handle_pattern_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent)
             audio,
             |e, cursor| e.delete_pattern(cursor),
             "Deleted pattern",
+        ),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn commit_song(a: &mut App, audio: &mut Audio, entry: usize) -> bool {
+    if entry >= a.editor.project.song.len() || audio.available_commands() < 2 {
+        a.status = "Audio command queue full; song switch rejected".into();
+        return false;
+    }
+    if audio
+        .send(AudioCommand::SelectSong { entry: entry as u8 })
+        .is_err()
+    {
+        a.status = "Audio command queue full; song switch rejected".into();
+        return false;
+    }
+    if !a.playing {
+        let pattern = usize::from(a.editor.project.song[entry].pattern - 1);
+        a.editor.select_pattern(pattern);
+        a.active_pattern = pattern;
+        a.active_song = entry;
+        a.song_bar = 0;
+        a.song_mode = true;
+    }
+    a.status = if a.playing {
+        format!("Song entry {} queued for next bar", entry + 1)
+    } else {
+        format!("Song entry {} selected", entry + 1)
+    };
+    true
+}
+
+fn song_edit_at<F>(a: &mut App, audio: &mut Audio, f: F, message: &str)
+where
+    F: FnOnce(&mut Editor, usize) -> Result<bool, crate::reducer::EditError>,
+{
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; song edit rejected".into();
+        return;
+    }
+    match f(&mut a.editor, a.song_cursor) {
+        Ok(true) if sync_project(a, audio) => {
+            a.song_cursor = a.song_cursor.min(a.editor.project.song.len() - 1);
+            a.status = message.into();
+        }
+        Ok(false) => a.status = "Song entry unchanged".into(),
+        Err(error) => a.status = error.to_string(),
+        _ => {}
+    }
+}
+
+fn handle_song_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    let count = a.editor.project.song.len();
+    match k.code {
+        KeyCode::Esc | KeyCode::Char('p' | 'P') => a.mode = Mode::Navigation,
+        KeyCode::Tab | KeyCode::BackTab => a.pattern_page = PatternPage::Patterns,
+        KeyCode::Left => a.song_cursor = adjacent_pattern_in_count(a.song_cursor, false, count),
+        KeyCode::Right => a.song_cursor = adjacent_pattern_in_count(a.song_cursor, true, count),
+        KeyCode::Home => a.song_cursor = 0,
+        KeyCode::End => a.song_cursor = count - 1,
+        KeyCode::Up => song_edit_at(
+            a,
+            audio,
+            |e, cursor| e.change_song_bars(cursor, 1),
+            "Increased song bars",
+        ),
+        KeyCode::Down => song_edit_at(
+            a,
+            audio,
+            |e, cursor| e.change_song_bars(cursor, -1),
+            "Decreased song bars",
+        ),
+        KeyCode::Char('[') => song_edit_at(
+            a,
+            audio,
+            |e, cursor| e.change_song_pattern(cursor, -1),
+            "Previous song pattern",
+        ),
+        KeyCode::Char(']') => song_edit_at(
+            a,
+            audio,
+            |e, cursor| e.change_song_pattern(cursor, 1),
+            "Next song pattern",
+        ),
+        KeyCode::Enter => {
+            if commit_song(a, audio, a.song_cursor) {
+                a.mode = Mode::Navigation;
+            }
+        }
+        KeyCode::Char('n' | 'N') => song_edit_at(
+            a,
+            audio,
+            |e, cursor| e.insert_song_entry(cursor),
+            "Inserted song entry",
+        ),
+        KeyCode::Char('d' | 'D') => song_edit_at(
+            a,
+            audio,
+            |e, cursor| e.duplicate_song_entry(cursor),
+            "Duplicated song entry",
+        ),
+        KeyCode::Char('c' | 'C') => {
+            if a.editor.copy_song_entry(a.song_cursor) {
+                a.status = format!("Copied song entry {}", a.song_cursor + 1);
+            }
+        }
+        KeyCode::Char('x' | 'X') => song_edit_at(
+            a,
+            audio,
+            |e, cursor| e.cut_song_entry(cursor),
+            "Cut song entry",
+        ),
+        KeyCode::Char('v' | 'V') => song_edit_at(
+            a,
+            audio,
+            |e, cursor| e.paste_song_entry(cursor),
+            "Pasted song entry",
+        ),
+        KeyCode::Delete | KeyCode::Backspace => song_edit_at(
+            a,
+            audio,
+            |e, cursor| e.delete_song_entry(cursor),
+            "Deleted song entry",
         ),
         _ => {}
     }

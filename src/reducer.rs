@@ -1,8 +1,9 @@
 use crate::generator::{self, Config as GeneratorConfig, Target as GeneratorTarget};
 use crate::model::{
     ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, DrumRecipeSlot, LfoConfig,
-    MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterLocks, ParameterValue, Pattern,
-    PatternIndexMap, Percent, Project, Step, StepEvent, TrackKind, TriggerCondition, tie_source,
+    MAX_SONG_ENTRY_COUNT, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterLocks,
+    ParameterValue, Pattern, PatternIndexMap, Percent, Project, SongEntry, SongIndexMap, Step,
+    StepEvent, TrackKind, TriggerCondition, tie_source,
 };
 use std::{
     collections::VecDeque,
@@ -71,6 +72,8 @@ struct Revision {
     at: Instant,
     pattern_map: PatternIndexMap,
     inverse_pattern_map: PatternIndexMap,
+    song_map: SongIndexMap,
+    inverse_song_map: SongIndexMap,
 }
 
 #[derive(Clone, Default)]
@@ -192,8 +195,10 @@ pub struct Editor {
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
     pattern_clipboard: Option<Pattern>,
+    song_clipboard: Option<SongEntry>,
     step_clipboard: Option<StepClipboard>,
     pending_pattern_map: PatternIndexMap,
+    pending_song_map: SongIndexMap,
 }
 
 #[derive(Clone, Copy)]
@@ -356,8 +361,10 @@ impl Editor {
             undo: VecDeque::new(),
             redo: Vec::new(),
             pattern_clipboard: None,
+            song_clipboard: None,
             step_clipboard: None,
             pending_pattern_map: PatternIndexMap::identity(),
+            pending_song_map: SongIndexMap::identity(),
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -378,14 +385,19 @@ impl Editor {
         self.redo.clear();
         self.pattern = 0;
         self.pattern_clipboard = None;
+        self.song_clipboard = None;
         self.step_clipboard = None;
         self.pending_pattern_map = PatternIndexMap::identity();
+        self.pending_song_map = SongIndexMap::identity();
     }
     pub fn pattern(&self) -> usize {
         self.pattern
     }
     pub fn take_pattern_map(&mut self) -> PatternIndexMap {
         std::mem::replace(&mut self.pending_pattern_map, PatternIndexMap::identity())
+    }
+    pub fn take_song_map(&mut self) -> SongIndexMap {
+        std::mem::replace(&mut self.pending_song_map, SongIndexMap::identity())
     }
     pub fn select_pattern(&mut self, pattern: usize) -> bool {
         if pattern >= self.project.patterns.len() {
@@ -458,6 +470,8 @@ impl Editor {
             at: Instant::now(),
             pattern_map: PatternIndexMap::identity(),
             inverse_pattern_map: PatternIndexMap::identity(),
+            song_map: SongIndexMap::identity(),
+            inverse_song_map: SongIndexMap::identity(),
         });
         self.redo.clear();
     }
@@ -466,6 +480,13 @@ impl Editor {
         if let Some(revision) = self.undo.back_mut() {
             revision.pattern_map = map;
             revision.inverse_pattern_map = inverse;
+        }
+    }
+    fn record_song_map(&mut self, map: SongIndexMap, inverse: SongIndexMap) {
+        self.pending_song_map = map;
+        if let Some(revision) = self.undo.back_mut() {
+            revision.song_map = map;
+            revision.inverse_song_map = inverse;
         }
     }
     pub fn insert_pattern(&mut self, cursor: usize) -> Result<(bool, usize), EditError> {
@@ -594,6 +615,125 @@ impl Editor {
             Ok((fallback, active))
         })
     }
+
+    pub fn insert_song_entry(&mut self, cursor: usize) -> Result<bool, EditError> {
+        if cursor >= self.project.song.len() || self.project.song.len() >= MAX_SONG_ENTRY_COUNT {
+            return Ok(false);
+        }
+        let entry = SongEntry {
+            pattern: (self.pattern + 1) as u8,
+            bars: 1,
+        };
+        let changed = self.edit(None, |project, _| {
+            project.song.insert(cursor + 1, entry);
+            Ok(())
+        })?;
+        if changed {
+            self.record_song_map(
+                SongIndexMap::insert(cursor),
+                SongIndexMap::delete(cursor + 1),
+            );
+        }
+        Ok(changed)
+    }
+
+    pub fn duplicate_song_entry(&mut self, cursor: usize) -> Result<bool, EditError> {
+        let Some(entry) = self.project.song.get(cursor).copied() else {
+            return Ok(false);
+        };
+        if self.project.song.len() >= MAX_SONG_ENTRY_COUNT {
+            return Ok(false);
+        }
+        let changed = self.edit(None, |project, _| {
+            project.song.insert(cursor + 1, entry);
+            Ok(())
+        })?;
+        if changed {
+            self.record_song_map(
+                SongIndexMap::insert(cursor),
+                SongIndexMap::delete(cursor + 1),
+            );
+        }
+        Ok(changed)
+    }
+
+    pub fn copy_song_entry(&mut self, cursor: usize) -> bool {
+        let Some(entry) = self.project.song.get(cursor).copied() else {
+            return false;
+        };
+        self.song_clipboard = Some(entry);
+        true
+    }
+
+    pub fn paste_song_entry(&mut self, cursor: usize) -> Result<bool, EditError> {
+        let Some(entry) = self.song_clipboard else {
+            return Ok(false);
+        };
+        if cursor >= self.project.song.len() || self.project.song.len() >= MAX_SONG_ENTRY_COUNT {
+            return Ok(false);
+        }
+        let changed = self.edit(None, |project, _| {
+            project.song.insert(cursor + 1, entry);
+            Ok(())
+        })?;
+        if changed {
+            self.record_song_map(
+                SongIndexMap::insert(cursor),
+                SongIndexMap::delete(cursor + 1),
+            );
+        }
+        Ok(changed)
+    }
+
+    pub fn delete_song_entry(&mut self, cursor: usize) -> Result<bool, EditError> {
+        if cursor >= self.project.song.len() {
+            return Ok(false);
+        }
+        if self.project.song.len() == 1 {
+            return self.edit(None, |project, _| {
+                project.song[0] = SongEntry {
+                    pattern: 1,
+                    bars: 1,
+                };
+                Ok(())
+            });
+        }
+        let changed = self.edit(None, |project, _| {
+            project.song.remove(cursor);
+            Ok(())
+        })?;
+        if changed {
+            self.record_song_map(
+                SongIndexMap::delete(cursor),
+                SongIndexMap::insert_at(cursor),
+            );
+        }
+        Ok(changed)
+    }
+
+    pub fn cut_song_entry(&mut self, cursor: usize) -> Result<bool, EditError> {
+        if !self.copy_song_entry(cursor) {
+            return Ok(false);
+        }
+        self.delete_song_entry(cursor)
+    }
+
+    pub fn change_song_pattern(&mut self, cursor: usize, delta: i8) -> Result<bool, EditError> {
+        let count = self.project.patterns.len() as i16;
+        self.edit(None, |project, _| {
+            let entry = project.song.get_mut(cursor).ok_or(EditError::InvalidStep)?;
+            entry.pattern = (i16::from(entry.pattern) + i16::from(delta)).clamp(1, count) as u8;
+            Ok(())
+        })
+    }
+
+    pub fn change_song_bars(&mut self, cursor: usize, delta: i8) -> Result<bool, EditError> {
+        self.edit(None, |project, _| {
+            let entry = project.song.get_mut(cursor).ok_or(EditError::InvalidStep)?;
+            entry.bars = (i16::from(entry.bars) + i16::from(delta)).clamp(1, 64) as u8;
+            Ok(())
+        })
+    }
     pub fn edit<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
     where
         F: FnOnce(&mut Project, usize) -> Result<(), EditError>,
@@ -624,6 +764,8 @@ impl Editor {
                 at: now,
                 pattern_map: PatternIndexMap::identity(),
                 inverse_pattern_map: PatternIndexMap::identity(),
+                song_map: SongIndexMap::identity(),
+                inverse_song_map: SongIndexMap::identity(),
             });
         }
         self.redo.clear();
@@ -634,7 +776,9 @@ impl Editor {
             r.delta.swap(&mut self.project);
             std::mem::swap(&mut r.pattern, &mut self.pattern);
             self.pending_pattern_map = r.inverse_pattern_map;
+            self.pending_song_map = r.inverse_song_map;
             std::mem::swap(&mut r.pattern_map, &mut r.inverse_pattern_map);
+            std::mem::swap(&mut r.song_map, &mut r.inverse_song_map);
             self.redo.push(r);
             true
         } else {
@@ -646,7 +790,9 @@ impl Editor {
             r.delta.swap(&mut self.project);
             std::mem::swap(&mut r.pattern, &mut self.pattern);
             self.pending_pattern_map = r.inverse_pattern_map;
+            self.pending_song_map = r.inverse_song_map;
             std::mem::swap(&mut r.pattern_map, &mut r.inverse_pattern_map);
+            std::mem::swap(&mut r.song_map, &mut r.inverse_song_map);
             self.undo.push_back(r);
             true
         } else {
@@ -2546,5 +2692,43 @@ mod tests {
         assert!(editor.active_steps(0).unwrap()[0].is_none());
         assert!(editor.undo());
         assert!(editor.active_steps(0).unwrap()[0].is_some());
+    }
+
+    #[test]
+    fn song_entries_edit_clipboard_and_undo_are_atomic() {
+        let mut editor = Editor::new(Project::new());
+        editor.insert_song_entry(0).unwrap();
+        assert_eq!(editor.project.song.len(), 2);
+        assert_eq!(
+            editor.project.song[1],
+            SongEntry {
+                pattern: 1,
+                bars: 1
+            }
+        );
+        editor.change_song_bars(1, 3).unwrap();
+        editor.change_song_pattern(1, 1).unwrap();
+        assert_eq!(
+            editor.project.song[1],
+            SongEntry {
+                pattern: 1,
+                bars: 4
+            }
+        );
+        editor.copy_song_entry(1);
+        editor.paste_song_entry(1).unwrap();
+        assert_eq!(editor.project.song.len(), 3);
+        assert!(editor.undo());
+        assert_eq!(editor.project.song.len(), 2);
+        assert!(editor.delete_song_entry(0).unwrap());
+        assert_eq!(editor.project.song.len(), 1);
+        assert!(editor.delete_song_entry(0).unwrap());
+        assert_eq!(
+            editor.project.song,
+            vec![SongEntry {
+                pattern: 1,
+                bars: 1
+            }]
+        );
     }
 }

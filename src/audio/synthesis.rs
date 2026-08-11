@@ -1076,10 +1076,24 @@ impl Renderer {
         v.remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
     }
     pub(super) fn boundary(&mut self, global_step: usize) {
-        if global_step % 16 == 0
-            && let Some(pattern) = self.queued_pattern
-        {
-            self.activate_pattern(pattern);
+        let mut transitioned = false;
+        if global_step % 16 == 0 {
+            if let Some(entry) = self.queued_song {
+                self.activate_song(entry);
+                transitioned = true;
+            } else if let Some(pattern) = self.queued_pattern {
+                self.activate_pattern(pattern);
+                transitioned = true;
+            } else if self.song_mode && global_step > 0 {
+                let previous_pattern = self.active_pattern;
+                if !self.advance_song() {
+                    self.command(crate::audio::AudioCommand::Stop);
+                    return;
+                }
+                transitioned = self.active_pattern != previous_pattern;
+            }
+        }
+        if transitioned {
             for voice in &mut self.synth {
                 voice.gate_off();
                 voice.active = false;

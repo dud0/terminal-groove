@@ -1,4 +1,6 @@
-use super::{AudioCommand, AudioProject, AudioStatus, ParameterSmoothing, PatternIndexMap};
+use super::{
+    AudioCommand, AudioProject, AudioStatus, ParameterSmoothing, PatternIndexMap, SongIndexMap,
+};
 use crate::model::Project;
 use cpal::{Stream, StreamError};
 use rtrb::{Consumer, Producer};
@@ -82,27 +84,47 @@ impl Audio {
         &self.log_path
     }
     pub fn snapshot(project: &Project) -> AudioCommand {
-        Self::snapshot_with_smoothing_and_map(
+        Self::snapshot_with_smoothing_and_maps(
             project,
             ParameterSmoothing::Default,
             PatternIndexMap::identity(),
+            SongIndexMap::identity(),
         )
     }
     pub fn snapshot_with_smoothing(
         project: &Project,
         smoothing: ParameterSmoothing,
     ) -> AudioCommand {
-        Self::snapshot_with_smoothing_and_map(project, smoothing, PatternIndexMap::identity())
+        Self::snapshot_with_smoothing_and_maps(
+            project,
+            smoothing,
+            PatternIndexMap::identity(),
+            SongIndexMap::identity(),
+        )
     }
     pub fn snapshot_with_smoothing_and_map(
         project: &Project,
         smoothing: ParameterSmoothing,
         pattern_map: PatternIndexMap,
     ) -> AudioCommand {
+        Self::snapshot_with_smoothing_and_maps(
+            project,
+            smoothing,
+            pattern_map,
+            SongIndexMap::identity(),
+        )
+    }
+    pub fn snapshot_with_smoothing_and_maps(
+        project: &Project,
+        smoothing: ParameterSmoothing,
+        pattern_map: PatternIndexMap,
+        song_map: SongIndexMap,
+    ) -> AudioCommand {
         AudioCommand::ReplaceProject {
             project: Box::new(AudioProject::from_project(project)),
             smoothing,
             pattern_map,
+            song_map,
         }
     }
 }

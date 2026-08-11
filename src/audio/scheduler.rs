@@ -3,7 +3,8 @@ use super::{
 };
 use crate::dsp::Lfo;
 use crate::model::{
-    MAX_STEP_COUNT, ParameterId, ParameterLocks, PatternIndexMap, StepEvent, TriggerCondition,
+    MAX_STEP_COUNT, ParameterId, ParameterLocks, PatternIndexMap, SongIndexMap, StepEvent,
+    TriggerCondition,
 };
 use std::sync::atomic::Ordering;
 
@@ -140,9 +141,10 @@ impl Renderer {
         project: Box<AudioProject>,
         smoothing: ParameterSmoothing,
         pattern_map: PatternIndexMap,
+        song_map: SongIndexMap,
     ) {
         if self.retire.slots() == 0 {
-            self.pending = Some((project, smoothing, pattern_map));
+            self.pending = Some((project, smoothing, pattern_map, song_map));
             return;
         }
         let old_active_pattern = self.active_pattern;
@@ -150,6 +152,13 @@ impl Renderer {
         let queued_pattern = self
             .queued_pattern
             .map(|index| pattern_map.rebase(index, project.patterns.len()));
+        let active_song = song_map.rebase(self.active_song, project.song.len());
+        let queued_song = self
+            .queued_song
+            .map(|index| song_map.rebase(index, project.song.len()));
+        let song_bar = self
+            .song_bar
+            .min(project.song[active_song].bars.saturating_sub(1));
         self.reconcile_lfos(&project);
         Self::invalidate_replaced_scheduled_actions(
             &mut self.scheduled,
@@ -167,6 +176,9 @@ impl Renderer {
         }
         self.active_pattern = active_pattern;
         self.queued_pattern = queued_pattern;
+        self.active_song = active_song;
+        self.queued_song = queued_song;
+        self.song_bar = song_bar;
         self.prune_scheduled_actions();
         self.rebuild_lfo_destinations();
         self.status
@@ -176,6 +188,14 @@ impl Renderer {
             queued_pattern.map_or(u8::MAX, |pattern| pattern as u8),
             Ordering::Release,
         );
+        self.status
+            .active_song
+            .store(active_song as u8, Ordering::Release);
+        self.status.queued_song.store(
+            queued_song.map_or(u16::MAX, |entry| entry as u16),
+            Ordering::Release,
+        );
+        self.status.song_bar.store(self.song_bar, Ordering::Release);
         let smoothing_samples = smoothing.samples(self.sr);
         for (track, next) in self.next_steps.iter_mut().enumerate() {
             if *next >= self.project.patterns[self.active_pattern].tracks[track].step_count as usize
@@ -195,10 +215,10 @@ impl Renderer {
     }
 
     pub(super) fn apply_pending(&mut self) -> bool {
-        let Some((project, smoothing, map)) = self.pending.take() else {
+        let Some((project, smoothing, pattern_map, song_map)) = self.pending.take() else {
             return true;
         };
-        self.replace_project(project, smoothing, map);
+        self.replace_project(project, smoothing, pattern_map, song_map);
         self.pending.is_none()
     }
 
@@ -211,6 +231,39 @@ impl Renderer {
             .active_pattern
             .store(pattern as u8, Ordering::Release);
         self.status.queued_pattern.store(u8::MAX, Ordering::Release);
+    }
+
+    pub(super) fn activate_song(&mut self, entry: usize) {
+        let entry = entry.min(self.project.song.len().saturating_sub(1));
+        self.song_mode = true;
+        self.active_song = entry;
+        self.queued_song = None;
+        self.song_bar = 0;
+        self.activate_pattern(usize::from(self.project.song[entry].pattern - 1));
+        self.status.song_mode.store(true, Ordering::Release);
+        self.status
+            .active_song
+            .store(entry as u8, Ordering::Release);
+        self.status.queued_song.store(u16::MAX, Ordering::Release);
+        self.status.song_bar.store(0, Ordering::Release);
+    }
+
+    pub(super) fn advance_song(&mut self) -> bool {
+        let entry = self.project.song[self.active_song];
+        if self.song_bar + 1 < entry.bars {
+            self.song_bar += 1;
+            let pattern = usize::from(entry.pattern - 1);
+            if self.active_pattern != pattern {
+                self.activate_pattern(pattern);
+            }
+            self.status.song_bar.store(self.song_bar, Ordering::Release);
+            true
+        } else if self.active_song + 1 < self.project.song.len() {
+            self.activate_song(self.active_song + 1);
+            true
+        } else {
+            false
+        }
     }
 
     pub(super) fn reset_lfos(&mut self) {

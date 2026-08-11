@@ -1887,11 +1887,23 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     } else {
         "STOP"
     };
-    let pattern_state = format!(
-        "{} / {}",
-        a.editor.pattern() + 1,
-        a.editor.project.patterns.len()
-    );
+    let pattern_state = if a.song_mode {
+        let entry = &a.editor.project.song[a.active_song];
+        format!(
+            "SONG {} / {} · P{} · bar {}/{}",
+            a.active_song + 1,
+            a.editor.project.song.len(),
+            entry.pattern,
+            a.song_bar + 1,
+            entry.bars
+        )
+    } else {
+        format!(
+            "P{} / {}",
+            a.editor.pattern() + 1,
+            a.editor.project.patterns.len()
+        )
+    };
     let mut header_spans = vec![
         Span::styled(
             " terminal-groove ",

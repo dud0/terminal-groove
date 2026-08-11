@@ -1,6 +1,8 @@
 use super::{
     render::{fader_segments, render_centered},
-    state::{App, ChordField, GeneratorDialog, LfoField, SidechainField, TriggerField},
+    state::{
+        App, ChordField, GeneratorDialog, LfoField, PatternPage, SidechainField, TriggerField,
+    },
 };
 use crate::{
     generator::Target as GeneratorTarget,
@@ -407,6 +409,10 @@ pub(super) fn render_chord_control(
 }
 
 pub(super) fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
+    if a.pattern_page == PatternPage::Song {
+        render_song_popup(f, area, a);
+        return;
+    }
     let height = 7.min(area.height.saturating_sub(4));
     let width = area.width.saturating_sub(8).max(24);
     let popup_area = Rect {
@@ -493,6 +499,104 @@ pub(super) fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) 
             height: inner.height.saturating_sub(help_y.saturating_sub(inner.y)),
             ..inner
         },
+    );
+}
+
+fn render_song_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
+    let height = 8.min(area.height.saturating_sub(4));
+    let width = area.width.saturating_sub(8).max(24);
+    let popup_area = Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y,
+        width,
+        height,
+    };
+    f.render_widget(Clear, popup_area);
+    let block = Block::bordered().title(format!(
+        "Song ({}) · {}",
+        a.editor.project.song.len(),
+        if a.song_mode { "SONG" } else { "DIRECT" }
+    ));
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+    let cell_width = 14usize;
+    let cursor_x = a.song_cursor.saturating_mul(cell_width);
+    let visible_width = usize::from(inner.width);
+    let scroll_x = cursor_x
+        .saturating_add(cell_width)
+        .saturating_sub(visible_width)
+        .min(cursor_x)
+        .min(usize::from(u16::MAX));
+    let cells = a
+        .editor
+        .project
+        .song
+        .iter()
+        .enumerate()
+        .flat_map(|(index, entry)| {
+            let cursor = index == a.song_cursor;
+            let active = a.song_mode && index == a.active_song;
+            let queued = a.queued_song == Some(index);
+            let marker = match (active, queued) {
+                (true, true) => "▶⏭",
+                (true, false) => "▶ ",
+                (false, true) => "⏭ ",
+                (false, false) => "  ",
+            };
+            let style = if cursor {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let marker_style = if cursor {
+                style
+            } else if active {
+                Style::default()
+                    .fg(Color::LightGreen)
+                    .add_modifier(Modifier::BOLD)
+            } else if queued {
+                Style::default()
+                    .fg(Color::LightYellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                style
+            };
+            [
+                Span::styled(marker, marker_style),
+                Span::styled(
+                    format!("{:>2} P{:03}×{:02} ", index + 1, entry.pattern, entry.bars),
+                    style,
+                ),
+            ]
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(
+        Paragraph::new(Line::from(cells)).scroll((0, scroll_x as u16)),
+        Rect {
+            height: 1.min(inner.height),
+            ..inner
+        },
+    );
+    let progress = if a.song_mode {
+        format!(
+            "Playing entry {} · bar {}/{}",
+            a.active_song + 1,
+            a.song_bar + 1,
+            a.editor.project.song[a.active_song].bars
+        )
+    } else {
+        "Direct pattern transport".into()
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(progress),
+            Line::from("▶ playing  ⏭ next  ·  ←/→ Home End select · ↑/↓ bars · [/] pattern"),
+            Line::from("Enter play from entry · N insert · D duplicate · C copy · X cut · V paste · Delete remove · Tab patterns · Esc close"),
+        ]),
+        Rect { y: inner.y.saturating_add(2), height: inner.height.saturating_sub(2), ..inner },
     );
 }
 

@@ -17,6 +17,7 @@ pub const LEAD_TRACK_INDEX: usize = SYNTH_TRACK_START + 2;
 pub const TRACK_COUNT: usize = 9;
 pub const MIN_PATTERN_COUNT: usize = 1;
 pub const MAX_PATTERN_COUNT: usize = 100;
+pub const MAX_SONG_ENTRY_COUNT: usize = 256;
 
 /// Deterministic old-pattern-index to new-pattern-index transform.
 ///
@@ -71,6 +72,64 @@ impl PatternIndexMap {
         } else {
             usize::from(mapped).min(next_count - 1)
         }
+    }
+}
+
+/// Deterministic old-song-entry-index to new-song-entry-index transform.
+///
+/// Song entries are editor-visible transport positions, so insertions and
+/// removals must keep the audio thread on the same entry where possible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SongIndexMap {
+    kind: SongIndexMapKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SongIndexMapKind {
+    Identity,
+    InsertAfter(u8),
+    InsertAt(u8),
+    Delete(u8),
+}
+
+impl SongIndexMap {
+    pub fn identity() -> Self {
+        Self {
+            kind: SongIndexMapKind::Identity,
+        }
+    }
+
+    pub fn insert(after: usize) -> Self {
+        Self {
+            kind: SongIndexMapKind::InsertAfter(after as u8),
+        }
+    }
+
+    pub fn insert_at(at: usize) -> Self {
+        Self {
+            kind: SongIndexMapKind::InsertAt(at as u8),
+        }
+    }
+
+    pub fn delete(at: usize) -> Self {
+        Self {
+            kind: SongIndexMapKind::Delete(at as u8),
+        }
+    }
+
+    pub(crate) fn rebase(self, index: usize, next_count: usize) -> usize {
+        if next_count == 0 {
+            return 0;
+        }
+        let mapped = match self.kind {
+            SongIndexMapKind::Identity => index,
+            SongIndexMapKind::InsertAfter(at) if index > usize::from(at) => index + 1,
+            SongIndexMapKind::InsertAt(at) if index >= usize::from(at) => index + 1,
+            SongIndexMapKind::Delete(at) if index > usize::from(at) => index - 1,
+            SongIndexMapKind::Delete(at) if index == usize::from(at) => index,
+            _ => index,
+        };
+        mapped.min(next_count - 1)
     }
 }
 
@@ -1880,7 +1939,7 @@ impl Project {
         if !(MIN_PATTERN_COUNT..=MAX_PATTERN_COUNT).contains(&self.patterns.len()) {
             return Err(ValidationError::PatternCount(self.patterns.len()));
         }
-        if self.song.is_empty() || self.song.len() > 256 {
+        if self.song.is_empty() || self.song.len() > MAX_SONG_ENTRY_COUNT {
             return Err(ValidationError::TrackCount);
         }
         for entry in &self.song {
