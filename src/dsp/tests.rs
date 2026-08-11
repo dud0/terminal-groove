@@ -617,20 +617,22 @@ mod tests {
 
     #[test]
     fn bit_crusher_quantizes_and_holds_stereo_until_the_next_capture() {
-        let mut effects = TrackEffects::default();
-        effects.bit_crusher.bits = crate::model::Percent::new(100).unwrap();
-        effects.bit_crusher.rate = crate::model::Percent::new(100).unwrap();
-        effects.bit_crusher.mix = crate::model::Percent::new(100).unwrap();
-        let mut chain = TrackEffectChain::new(48_000);
-        chain.configure(effects, ParameterLocks::default(), 0);
+        for (rate, held_frames) in [(50, 7), (100, 63)] {
+            let mut effects = TrackEffects::default();
+            effects.bit_crusher.bits = crate::model::Percent::new(100).unwrap();
+            effects.bit_crusher.rate = crate::model::Percent::new(rate).unwrap();
+            effects.bit_crusher.mix = crate::model::Percent::new(100).unwrap();
+            let mut chain = TrackEffectChain::new(48_000);
+            chain.configure(effects, ParameterLocks::default(), 0);
 
-        assert_eq!(chain.process_stereo(0.8, -0.8), (1.0, -1.0));
-        for _ in 0..62 {
-            assert_eq!(chain.process_stereo(0.1, -0.1), (1.0, -1.0));
+            assert_eq!(chain.process_stereo(0.8, -0.8), (1.0, -1.0));
+            for _ in 0..held_frames {
+                assert_eq!(chain.process_stereo(0.1, -0.1), (1.0, -1.0));
+            }
+            assert!(chain.is_active());
+            assert_eq!(chain.process_stereo(0.0, 0.0), (0.0, 0.0));
+            assert!(!chain.is_active());
         }
-        assert!(chain.is_active());
-        assert_eq!(chain.process_stereo(0.0, 0.0), (0.0, 0.0));
-        assert!(!chain.is_active());
         assert_eq!(TrackEffectChain::bit_crush_sample(f32::NAN, 2), 0.0);
     }
 

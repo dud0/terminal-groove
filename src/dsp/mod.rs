@@ -669,12 +669,17 @@ impl TrackEffectChain {
             let bits = bit_crusher_bit_depth(self.bit_crusher_bits.next_value());
             let rate = self.bit_crusher_rate.next_value();
             self.update_bit_crusher_cache(rate);
-            self.bit_crusher_phase += self.bit_crusher_rate_increment;
-            if !self.bit_crusher_has_sample || self.bit_crusher_phase >= 1.0 {
-                self.bit_crusher_phase = self.bit_crusher_phase.fract();
+            if !self.bit_crusher_has_sample {
                 self.bit_crusher_held_l = Self::bit_crush_sample(distorted_l, bits);
                 self.bit_crusher_held_r = Self::bit_crush_sample(distorted_r, bits);
                 self.bit_crusher_has_sample = true;
+            } else {
+                self.bit_crusher_phase += self.bit_crusher_rate_increment;
+                if self.bit_crusher_phase >= 1.0 {
+                    self.bit_crusher_phase = self.bit_crusher_phase.fract();
+                    self.bit_crusher_held_l = Self::bit_crush_sample(distorted_l, bits);
+                    self.bit_crusher_held_r = Self::bit_crush_sample(distorted_r, bits);
+                }
             }
             let output = (
                 finite_or_zero(
