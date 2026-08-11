@@ -152,13 +152,17 @@ impl Renderer {
         let queued_pattern = self
             .queued_pattern
             .map(|index| pattern_map.rebase(index, project.patterns.len()));
+        let active_song_removed = song_map.removes(self.active_song);
         let active_song = song_map.rebase(self.active_song, project.song.len());
         let queued_song = self
             .queued_song
             .map(|index| song_map.rebase(index, project.song.len()));
-        let song_bar = self
-            .song_bar
-            .min(project.song[active_song].bars.saturating_sub(1));
+        let song_bar = if active_song_removed {
+            0
+        } else {
+            self.song_bar
+                .min(project.song[active_song].bars.saturating_sub(1))
+        };
         self.reconcile_lfos(&project);
         Self::invalidate_replaced_scheduled_actions(
             &mut self.scheduled,

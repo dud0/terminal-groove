@@ -115,9 +115,7 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
         AudioCommand::SelectPattern { pattern }
             if (pattern as usize) < renderer.project.patterns.len() =>
         {
-            renderer.song_mode = false;
             renderer.queued_song = None;
-            renderer.status.song_mode.store(false, Ordering::Release);
             renderer
                 .status
                 .queued_song
@@ -129,6 +127,8 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
                     .queued_pattern
                     .store(pattern, Ordering::Release);
             } else {
+                renderer.song_mode = false;
+                renderer.status.song_mode.store(false, Ordering::Release);
                 renderer.activate_pattern(pattern as usize);
             }
         }

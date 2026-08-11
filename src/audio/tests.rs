@@ -2729,4 +2729,57 @@ mod tests {
         assert_eq!(renderer.active_pattern, 0);
         assert!(!status.running.load(std::sync::atomic::Ordering::Acquire));
     }
+
+    #[test]
+    fn queued_direct_switch_keeps_song_status_until_the_boundary() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        project.song = vec![SongEntry {
+            pattern: 1,
+            bars: 2,
+        }];
+        let status = std::sync::Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status.clone());
+        renderer.command(AudioCommand::SelectSong { entry: 0 });
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary(0);
+        renderer.command(AudioCommand::SelectPattern { pattern: 1 });
+
+        assert!(renderer.song_mode);
+        assert!(status.song_mode.load(std::sync::atomic::Ordering::Acquire));
+        renderer.boundary(16);
+        assert!(!renderer.song_mode);
+        assert!(!status.song_mode.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(renderer.active_pattern, 1);
+    }
+
+    #[test]
+    fn deleting_the_active_song_entry_restarts_its_replacement_at_bar_one() {
+        let mut project = Project::new();
+        project.song = vec![
+            SongEntry {
+                pattern: 1,
+                bars: 4,
+            },
+            SongEntry {
+                pattern: 1,
+                bars: 4,
+            },
+        ];
+        let status = std::sync::Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.active_song = 0;
+        renderer.song_bar = 2;
+        project.song.remove(0);
+
+        renderer.replace_project(
+            Box::new(AudioProject::from_project(&project)),
+            ParameterSmoothing::Default,
+            PatternIndexMap::identity(),
+            SongIndexMap::delete(0),
+        );
+
+        assert_eq!(renderer.active_song, 0);
+        assert_eq!(renderer.song_bar, 0);
+    }
 }

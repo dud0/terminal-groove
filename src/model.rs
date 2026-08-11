@@ -131,6 +131,10 @@ impl SongIndexMap {
         };
         mapped.min(next_count - 1)
     }
+
+    pub(crate) fn removes(self, index: usize) -> bool {
+        matches!(self.kind, SongIndexMapKind::Delete(at) if index == usize::from(at))
+    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]

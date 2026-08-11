@@ -1082,6 +1082,8 @@ impl Renderer {
                 self.activate_song(entry);
                 transitioned = true;
             } else if let Some(pattern) = self.queued_pattern {
+                self.song_mode = false;
+                self.status.song_mode.store(false, Ordering::Release);
                 self.activate_pattern(pattern);
                 transitioned = true;
             } else if self.song_mode && global_step > 0 {
