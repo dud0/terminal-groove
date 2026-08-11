@@ -28,5 +28,7 @@ The current strict schema uses `format_version: 21`; unsupported and unknown ver
 
 The output stage uses fixed +6 dB makeup gain and a stereo-linked lookahead limiter at -1 dBFS, giving patterns competitive playback level without adding a master-volume setting.
 
+Press `Ctrl+R` from the sequencer or an editor to start a live take, and press it again to stop. Recording is independent of transport and captures the final limited internal stereo master—including auditions, effect tails, pauses, and silence—at the active device sample rate. Takes are stereo 24-bit PCM WAV files in `.recordings/`, named `<project>-<unix_timestamp_ms>.wav` (`untitled` for an unsaved project); recording continues until manually stopped or the application exits.
+
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for implementation boundaries and
 [`docs/AUDIO_PERFORMANCE.md`](docs/AUDIO_PERFORMANCE.md) for callback benchmark evidence.

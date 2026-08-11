@@ -12,7 +12,7 @@ use super::{
 };
 use crate::tui::DIRECT_PERCENTAGE_HINT;
 use crate::{
-    audio::Audio,
+    audio::{Audio, RecordingState},
     model::{
         ChordShape, ChorusMode, DelayDivision, GlobalParameterId, ParameterId, ParameterValue,
         PitchClass, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
@@ -80,7 +80,7 @@ pub(super) fn help_available(mode: &Mode) -> bool {
 const HELP_TEXT: &str =
     "CORE  Space play/pause · . stop/reset · ? help · Esc close help
       Ctrl+N new project · Ctrl+O browse projects · Ctrl+S save · Ctrl+Shift+S save as
-      Ctrl+Q quit · Ctrl+Z undo · Ctrl+Y redo · Ctrl+C/X/V copy/cut/paste selected step
+      Ctrl+Q quit · Ctrl+R record WAV · Ctrl+Z undo · Ctrl+Y redo · Ctrl+C/X/V copy/cut/paste selected step
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
 SEQUENCER  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
@@ -1940,9 +1940,14 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         } else {
             ""
         };
+        let recording = match a.recording_state {
+            RecordingState::Idle => "",
+            RecordingState::Recording => "\n● REC  [Ctrl+R] Stop recording",
+            RecordingState::Finalizing => "\nWAV FINALIZING  [Ctrl+R] unavailable",
+        };
         f.render_widget(
             Paragraph::new(format!(
-                "terminal-groove needs 120x34\nCurrent: {}x{}\n[Ctrl+Q] Quit{help_hint}",
+                "terminal-groove needs 120x34\nCurrent: {}x{}\n[Ctrl+Q] Quit  [Ctrl+R] Record WAV{help_hint}{recording}",
                 area.width, area.height,
             ))
             .block(Block::bordered().title("Terminal too small")),
@@ -2000,6 +2005,23 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
+        match a.recording_state {
+            RecordingState::Idle => Span::raw(""),
+            RecordingState::Recording => Span::styled(
+                " ● REC ",
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            RecordingState::Finalizing => Span::styled(
+                " WAV FINALIZING ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        },
         Span::raw(format!(
             " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
             device_name, a.editor.project.globals.tempo_bpm

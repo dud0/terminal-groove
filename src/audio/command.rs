@@ -26,6 +26,8 @@ pub enum AudioCommand {
         track: u8,
         step: u8,
     },
+    StartRecording,
+    StopRecording,
 }
 
 pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
@@ -164,6 +166,8 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
             renderer.audition(track as usize, step as usize)
         }
         AudioCommand::AutoAudition { .. } => {}
+        AudioCommand::StartRecording => renderer.recording.start(),
+        AudioCommand::StopRecording => renderer.recording.stop(),
     }
 }
 

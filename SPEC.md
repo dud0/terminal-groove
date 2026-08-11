@@ -24,11 +24,13 @@ The fixed track order is:
 
 Playback supports start, pause, resume, stop, reset, live editing, drum triggers, synth notes and ties, per-step locks, per-track mixing and sends, eligible parameter LFOs, tempo/effects/key/scale configuration, non-destructive audition, up to 100 patterns, session undo/redo, versioned human-readable JSON, and default or explicitly selected audio output.
 
+Manual live recording captures the final limited stereo master to a 24-bit PCM WAV at the active output-device sample rate. Recording is independent of transport and therefore includes auditions, effect tails, pauses, and silence until manually stopped.
+
 ### 1.2 Explicitly excluded from the MVP
 
 - Samples, sample import, or sample playback
 - MIDI input, output, or clock sync
-- WAV or other audio export
+- Offline, faster-than-real-time bounce/export
 - Time-signature changes
 - Continuously variable event velocity
 - Polyphonic note entry outside the fixed Chord shape mapping, or oscillator detune
@@ -376,6 +378,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `Ctrl+Shift+S` | Save as |
 | Anywhere | `Ctrl+O` | Open project browser |
 | Anywhere | `Ctrl+Q` | Quit, with dirty confirmation |
+| Sequencer/editor modes | `Ctrl+R` | Start or stop live WAV recording |
 | Anywhere | `Ctrl+Z` | Undo |
 | Anywhere | `Ctrl+Y` | Redo |
 | Track Sequencer/Parameter mode | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy, cut, or paste the selected step exactly; paste requires the same track kind |
@@ -473,7 +476,7 @@ Adding or replacing a trigger or note automatically auditions it while transport
 
 At `120x34` or larger, the normal screen contains:
 
-1. Header: one metadata-only line containing the application name, project filename or `Untitled`, dirty marker, audio device/status, transport state, pattern state, and tempo. If the current audio stream has had callback deadline overruns, the header also shows a text-visible warning badge with the cumulative count and maximum callback load percentage. Persistent command shortcut hints are not shown there; the `?` overlay contains the complete key map.
+1. Header: one metadata-only line containing the application name, a text-visible `● REC` badge while recording or `WAV FINALIZING` while a take is being closed, project filename or `Untitled`, dirty marker, audio device/status, transport state, pattern state, and tempo. If the current audio stream has had callback deadline overruns, the header also shows a text-visible warning badge with the cumulative count and maximum callback load percentage. Persistent command shortcut hints are not shown there; the `?` overlay contains the complete key map.
 2. Global row: all ten global controls and current values; their local shortcuts are shown in the detail cards.
 3. Eight variable-length sequencer track blocks: track name, mute state, absolute step range, and compact fixed-width step cells. The displayed range communicates the track length.
 4. A selected-control panel: vertical parameter faders for the selected track, or ten global parameter cards when the global row is selected. The global cards use the same centered, capped-width, borderless-card geometry as track parameters, with grouped headings for `CLOCK` (Tempo), `DELAY` (Delay division and feedback), `REVERB` (Time, tone, pre-delay, and return), `DUCKING`, and `SCALE` (Key and scale). Each group has a distinct color. The cards show a tempo numeric readout, delay-division/key/scale selectors, and faders for delay feedback, reverb time, reverb tone, reverb pre-delay, and reverb return. Global faders use their model ranges (`0–95%`, `0.2–10.0 s`, `0–100%`, `0–200 ms`, and `0–100%`) and show exact values with units beside the fader; every card retains its local shortcut. The active global card uses the same reverse styling and double side outline as an active track parameter.
@@ -502,7 +505,7 @@ Each pitched row includes its current input octave in the track label (for examp
 
 The sequencer grid uses 32 fixed-width cells per physical line with a visible divider after each 16-step bank. Steps 33 through 64 use a continuation line. Cells beyond a track's length are blank and cannot be selected. The detail panel is only as tall as its faders or global cards require, and all remaining vertical space is assigned to the sequencer. When expanded track blocks still exceed the pattern panel height, the panel scrolls by complete track blocks to keep the selected track visible. Wider terminals do not stretch individual step cells.
 
-When the terminal is smaller than `120x34`, replace the main layout with the current size, required size, and quit/help keys. The project and audio engine remain active so resizing restores the normal view.
+When the terminal is smaller than `120x34`, replace the main layout with the current size, required size, quit/help/recording keys, and the active `● REC` or `WAV FINALIZING` state. The project and audio engine remain active so resizing restores the normal view.
 
 ### 6.2 Modes and overlays
 
@@ -711,6 +714,8 @@ Use one binary package with testable modules for model/validation, reducer and h
 - The main thread owns terminal input, rendering, dialogs, undo/redo, file I/O, and the canonical editable project.
 - CPAL's audio callback owns transport timing, a mirrored engine project, voices, filters, effects, and sample conversion.
 - UI-to-audio communication uses a preallocated bounded SPSC queue of typed commands. Transport, pattern selection, and audition commands are small; project edits are converted on the main thread into immutable boxed project snapshots before being queued.
+- Live recording uses a dedicated named writer thread and a preallocated lock-free SPSC queue sized for two seconds of stereo frames at the active sample rate. The callback taps the final limited internal stereo pair before mono or multichannel device mapping. It sends raw finite `f32` frames and an ordered end marker only; the writer thread clamps and converts interleaved samples to signed 24-bit PCM, checkpoints the WAV header about once per second, explicitly flushes and finalizes the file, and reports completion outside the callback.
+- One recording-queue slot is reserved for the ordered end marker. Queue exhaustion stops capture instead of introducing gaps and retains a contiguous prefix. File creation happens before the callback receives its allocation-free start command. Disk, encoding, RIFF-size, and queue-overflow failures stop and finalize the partial take where possible. Application shutdown stops the callback producer, drains accepted frames, finalizes the take, and joins the writer thread.
 - Independent per-track playheads and transport telemetry return through atomics or a second bounded channel where intermediate redundant playhead updates may be dropped.
 - Each non-empty CPAL callback measures elapsed monotonic time from before command draining/rendering through completion. Its deadline is the current output frame count divided by the selected sample rate, not a hard-coded buffer size. The callback records maximum duration in nanoseconds and maximum elapsed/deadline load in per-mille relaxed atomics, and increments a relaxed cumulative overrun counter only when elapsed time is strictly greater than that deadline. These diagnostics are allocation-free, lock-free, non-blocking, and free of callback formatting or logging; all three counters reset when a new stream is opened.
 - Project files are parsed and validated on the main thread. Opening or creating a project queues a stop followed by its immutable snapshot; the callback applies the snapshot at a command boundary and reuses its preallocated audio state.
@@ -727,6 +732,12 @@ Use one binary package with testable modules for model/validation, reducer and h
 - The repository includes an ignored diagnostic saturated fixture: `cargo test --release audio::tests::saturated_callback_benchmark -- --ignored --nocapture`. For each 128-, 256-, and 512-frame buffer at 44.1, 48, and 96 kHz, it runs five trials with 128 warm-up and 512 measured callbacks, pools the samples, and reports median, p95, p99, maximum, and median nanoseconds/frame. The supported reference-machine completion target is p95 callback load no higher than 50% for every 44.1/48 kHz configuration. Results at 96 kHz are measured best effort and do not gate completion. Timing has no automated assertion because it is host-dependent; automated tests enforce correctness and callback allocation safety.
 - Queue exhaustion is handled on the UI side before committing the model change.
 - CPAL stream errors are forwarded to the UI through a non-blocking error path and shown prominently.
+
+### 10.3.1 Live recording files and state
+
+`Ctrl+R` starts recording from the sequencer and editor modes; another `Ctrl+R` stops it and begins asynchronous finalization. Playback pause, Stop/reset, project changes, and auditions do not stop a take. Exit stops and finalizes an active take. A second start is rejected while finalization is pending.
+
+Recordings are written below the current working directory in `.recordings/`. Names use `<project>-<unix_timestamp_ms>.wav`, remove a trailing `.groove.json`, replace unsafe filename characters, and use `untitled` for an unsaved or empty name. A numeric suffix is added on collision and existing files are never overwritten. Start and completion statuses show the full destination. Creation failure leaves recording stopped; later failures show an actionable error and partial-take path.
 
 ### 10.4 Audio format and scheduling
 

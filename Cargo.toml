@@ -11,6 +11,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 cpal = "0.17"
 crossterm = "0.29"
+hound = "3.5"
 ratatui = { version = "0.30", features = ["crossterm"] }
 rtrb = "0.3"
 serde = { version = "1", features = ["derive"] }

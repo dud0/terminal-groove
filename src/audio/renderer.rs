@@ -111,7 +111,8 @@ impl Renderer {
             song_bar: 0,
             playing: false,
             sr: sr as f32,
-            status,
+            status: status.clone(),
+            recording: super::recording::RecordingProducer::disconnected(status),
             drums: std::array::from_fn(|i| {
                 DrumVoice::new(
                     [

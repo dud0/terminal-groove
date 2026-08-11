@@ -63,6 +63,7 @@ pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result
             }
         }
     }
+    audio.shutdown_recording();
     Ok(())
 }
 

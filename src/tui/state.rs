@@ -1,6 +1,7 @@
 use super::render::ValueOrigin;
 use crate::tui::DIRECT_PARAMETER_RAMP;
 use crate::{
+    audio::RecordingState,
     generator::{ChordShapePool, Target as GeneratorTarget},
     model::{
         ChordShape, DrumRecipeSlot, GlobalParameterId, ParameterId, Percent, Project, TRACK_COUNT,
@@ -197,6 +198,7 @@ pub struct App {
     pub(super) song_bar: u8,
     pub(super) callback_overruns: u64,
     pub(super) max_callback_load_per_mille: u64,
+    pub(super) recording_state: RecordingState,
     pub(super) fader_animations: Vec<FaderAnimation>,
 }
 
@@ -257,6 +259,7 @@ impl App {
             song_bar: 0,
             callback_overruns: 0,
             max_callback_load_per_mille: 0,
+            recording_state: RecordingState::Idle,
             fader_animations: Vec::new(),
         }
     }

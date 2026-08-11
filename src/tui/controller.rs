@@ -694,6 +694,21 @@ pub(super) fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
     Ok(())
 }
 pub(super) fn refresh_audio_status(a: &mut App, audio: &mut Audio) {
+    a.recording_state = audio.recording_state();
+    if let Some(event) = audio.poll_recording_event() {
+        a.recording_state = crate::audio::RecordingState::Idle;
+        a.status = match event.result {
+            Ok(()) => format!(
+                "Recorded {} stereo frames to {}",
+                event.frames,
+                event.path.display()
+            ),
+            Err(error) => format!(
+                "Recording stopped: {error}; partial take retained at {}",
+                event.path.display()
+            ),
+        };
+    }
     a.playing = audio.status.running.load(Ordering::Acquire);
     a.paused = audio.status.paused.load(Ordering::Acquire);
     a.active_pattern = usize::from(audio.status.active_pattern.load(Ordering::Acquire))

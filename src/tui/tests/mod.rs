@@ -1043,6 +1043,40 @@ fn metadata_header_is_one_line_without_persistent_shortcut_hints() {
 }
 
 #[test]
+fn recording_badges_are_text_visible_in_full_and_small_layouts() {
+    let mut app = App::new(Project::new(), None);
+    app.recording_state = crate::audio::RecordingState::Recording;
+    assert!(rendered(&app, 120, 34).contains("● REC"));
+    let small = rendered(&app, 80, 20);
+    assert!(small.contains("● REC"));
+    assert!(small.contains("Ctrl+R"));
+
+    app.recording_state = crate::audio::RecordingState::Finalizing;
+    assert!(rendered(&app, 120, 34).contains("WAV FINALIZING"));
+    assert!(rendered(&app, 80, 20).contains("WAV FINALIZING"));
+}
+
+#[test]
+fn recording_completion_and_error_statuses_remain_visible() {
+    let mut app = App::new(Project::new(), None);
+    app.status = "Recorded 128 stereo frames to /work/.recordings/take.wav".into();
+    assert!(rendered(&app, 120, 34).contains("Recorded 128 stereo frames"));
+
+    app.status =
+        "Recording stopped: disk full; partial take retained at /work/.recordings/take.wav".into();
+    let screen = rendered(&app, 160, 34);
+    assert!(screen.contains("Recording stopped: disk full"));
+    assert!(screen.contains("partial take retained"));
+}
+
+#[test]
+fn help_lists_live_wav_recording_shortcut() {
+    let mut app = App::new(Project::new(), None);
+    app.mode = Mode::Help;
+    assert!(rendered(&app, 120, 34).contains("Ctrl+R record WAV"));
+}
+
+#[test]
 fn persistent_audio_overload_badge_preserves_transient_status() {
     let clean = App::new(Project::new(), None);
     assert!(!rendered(&clean, 120, 34).contains("audio overload"));

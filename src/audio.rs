@@ -166,6 +166,7 @@ struct Renderer {
     condition_rng: [u32; TRACK_COUNT],
     probability_rng: [u32; TRACK_COUNT],
     preview_scheduled: [Option<PreviewAction>; 24],
+    recording: recording::RecordingProducer,
 }
 
 const NON_CHORD_TRACK_COUNT: usize = TRACK_COUNT - 1;
@@ -204,6 +205,7 @@ struct PreviewAction {
 mod command;
 mod effects;
 mod queue;
+mod recording;
 mod renderer;
 mod scheduler;
 mod synthesis;
@@ -218,6 +220,7 @@ use effects::render;
 #[cfg(test)]
 use effects::{modulated_percent, pitch_modulated_frequency};
 pub use queue::{Audio, QueueFull};
+pub use recording::{RecordingEvent, RecordingState};
 #[cfg(test)]
 use voices::{ArpeggioState, CHORD_GROUP_SIZE, DRUM_SILENCE, DrumEnvelope, KickPitchEnvelope};
 use voices::{ChordVoicePool, DrumVoice, SynthVoice};
@@ -237,6 +240,9 @@ pub struct AudioStatus {
     pub callback_overruns: AtomicU64,
     pub max_callback_duration_ns: AtomicU64,
     pub max_callback_load_per_mille: AtomicU64,
+    pub recording_active: AtomicBool,
+    pub recording_finalizing: AtomicBool,
+    pub recording_stop_requested: AtomicBool,
 }
 
 const AUDIO_LOG_FILE_NAME: &str = "terminal-groove-audio.log";
@@ -265,6 +271,9 @@ impl Default for AudioStatus {
             callback_overruns: AtomicU64::new(0),
             max_callback_duration_ns: AtomicU64::new(0),
             max_callback_load_per_mille: AtomicU64::new(0),
+            recording_active: AtomicBool::new(false),
+            recording_finalizing: AtomicBool::new(false),
+            recording_stop_requested: AtomicBool::new(false),
         }
     }
 }
@@ -383,6 +392,8 @@ fn open_inner(
     let channels = config.channels as usize;
     let sr = config.sample_rate;
     let status = Arc::new(AudioStatus::default());
+    let (recording_worker, recording_producer) =
+        recording::RecordingWorker::spawn(sr, status.clone())?;
     let (producer, consumer) = RingBuffer::new(256);
     let (retire_producer, retired) = RingBuffer::new(32);
     let (error_producer, error_consumer) = RingBuffer::new(AUDIO_ERROR_QUEUE_SIZE);
@@ -399,6 +410,7 @@ fn open_inner(
                 render_status,
                 retire_producer,
             );
+            renderer.recording = recording_producer;
             let mut commands = consumer;
             device.build_output_stream(
                 &config,
@@ -428,6 +440,7 @@ fn open_inner(
                 render_status,
                 retire_producer,
             );
+            renderer.recording = recording_producer;
             let mut commands = consumer;
             device.build_output_stream(
                 &config,
@@ -457,6 +470,7 @@ fn open_inner(
                 render_status,
                 retire_producer,
             );
+            renderer.recording = recording_producer;
             let mut commands = consumer;
             device.build_output_stream(
                 &config,
@@ -487,7 +501,11 @@ fn open_inner(
         producer,
         retired,
         error_consumer,
-        default_audio_log_path(),
+        queue::AudioResources {
+            log_path: default_audio_log_path(),
+            sample_rate: sr,
+            recording_worker,
+        },
     ))
 }
 

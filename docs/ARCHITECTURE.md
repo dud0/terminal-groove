@@ -15,6 +15,13 @@ The callback owns voices, sequencing state, smoothers, and effects. Replaced sna
 retirement queue and are destroyed by the UI thread. Status returns through atomics; stream errors
 use a bounded queue and are logged outside the callback.
 
+Live recording taps each final limited stereo frame before CPAL channel mapping. The callback sends
+frames and an ordered end marker through a preallocated two-second SPSC queue to a named WAV writer
+thread. That worker performs sample conversion, disk I/O, periodic header checkpointing, and final
+header updates. The UI creates a unique destination and prepares the encoder before issuing the
+allocation-free callback start command. Completion or failure returns as an event containing the
+path and accepted frame count; recording state itself is transport-independent.
+
 ## Layer boundaries
 
 - `model`: persisted types, bounds, compatibility, defaults, and validation.
@@ -23,6 +30,7 @@ use a bounded queue and are logged outside the callback.
 - `engine`: transport-independent timing and gate decisions.
 - `dsp`: allocation-free signal-processing primitives.
 - `audio`: CPAL integration, snapshots, scheduling, voices, and rendering.
+- `audio::recording`: bounded live-master capture and asynchronous 24-bit WAV writing.
 - `tui`: Ratatui rendering, modes, input, file operations, and synchronization.
 
 Song references are intentionally persisted and maintained during structural pattern edits before
@@ -45,6 +53,11 @@ The callback must not allocate, destroy project snapshots, block, lock, access f
 messages. Keep live and audition state independent, while sharing plain allocation-free routing
 calculations where sidechain, mute, and tail semantics remain explicit. Prefer fixed arrays,
 bounded queues, cached mappings, and control-rate coefficient updates.
+
+Recording never performs file access, allocation, formatting, waits, or sample conversion in the
+callback. One capture-queue slot is reserved for its end marker; exhaustion ends the take instead
+of dropping a frame, so any retained audio is a contiguous prefix. Stream shutdown drops the
+callback producer before the writer's final drain and joins the writer thread.
 
 Allocation safety is automated; timing measurements are host-dependent. See
 `AUDIO_PERFORMANCE.md` for the reference fixture and results.

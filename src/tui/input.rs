@@ -30,6 +30,26 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
+    if k.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(k.code, KeyCode::Char('r' | 'R'))
+        && matches!(
+            a.mode,
+            Mode::Navigation
+                | Mode::ParameterEdit(_)
+                | Mode::LfoEdit { .. }
+                | Mode::ChordEdit { .. }
+                | Mode::TriggerEdit { .. }
+                | Mode::SwingEdit
+                | Mode::TrackProbabilityEdit
+                | Mode::GlobalEdit(_)
+                | Mode::SidechainEdit { .. }
+                | Mode::TempoInput(_)
+                | Mode::TrackLengthInput(_)
+        )
+    {
+        toggle_recording(a, audio);
+        return Ok(());
+    }
     if matches!(a.mode, Mode::Error(_)) {
         if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
             a.mode = Mode::Navigation;
@@ -386,6 +406,33 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         _ => {}
     }
     Ok(())
+}
+
+fn toggle_recording(a: &mut App, audio: &mut Audio) {
+    match audio.recording_state() {
+        crate::audio::RecordingState::Idle => {
+            match audio.start_project_recording(a.path.as_deref()) {
+                Ok(path) => {
+                    a.recording_state = crate::audio::RecordingState::Recording;
+                    a.status = format!("Recording to {}", path.display());
+                }
+                Err(error) => a.status = format!("Could not start recording: {error}"),
+            }
+        }
+        crate::audio::RecordingState::Recording => match audio.stop_recording() {
+            Ok(()) => {
+                a.recording_state = crate::audio::RecordingState::Finalizing;
+                a.status = audio.recording_path().map_or_else(
+                    || "Finalizing WAV".into(),
+                    |path| format!("Finalizing WAV {}", path.display()),
+                );
+            }
+            Err(error) => a.status = format!("Could not stop recording: {error}"),
+        },
+        crate::audio::RecordingState::Finalizing => {
+            a.status = "WAV finalization is still in progress".into()
+        }
+    }
 }
 
 fn handle_shared_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> bool {

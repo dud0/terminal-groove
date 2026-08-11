@@ -298,6 +298,8 @@ mod tests {
         assert_eq!(allocator_counts(), before);
 
         let callback_commands = [
+            AudioCommand::StartRecording,
+            AudioCommand::StopRecording,
             AudioCommand::Audition { track: 6, step: 0 },
             Audio::snapshot(&project),
             AudioCommand::Stop,
@@ -318,6 +320,51 @@ mod tests {
             );
             assert_eq!(allocator_counts(), before);
         }
+    }
+
+    #[test]
+    fn stopped_mono_callback_records_the_internal_stereo_audition() {
+        let mut project = performance_project();
+        project.tracks[0].pan = Percent::new(0).unwrap();
+        let status = Arc::new(AudioStatus::default());
+        let (retire, _retired) = RingBuffer::new(32);
+        let mut renderer = Renderer::new_with_retirement(
+            Box::new(AudioProject::from_project(&project)),
+            48_000,
+            status.clone(),
+            retire,
+        );
+        let (recording, mut captured) = RingBuffer::new(600);
+        renderer.recording = recording::RecordingProducer::new(recording, status);
+        renderer.command(AudioCommand::StartRecording);
+        renderer.command(AudioCommand::Audition { track: 0, step: 0 });
+        let (command_producer, mut commands) = RingBuffer::new(1);
+        drop(command_producer);
+        let mut mono = vec![0.0_f32; 512];
+        render(
+            &mut mono,
+            1,
+            48_000,
+            &renderer.status.clone(),
+            &mut renderer,
+            &mut commands,
+            |sample| sample,
+        );
+        renderer.command(AudioCommand::StopRecording);
+
+        let mut frames = Vec::new();
+        while let Ok(item) = captured.pop() {
+            match item {
+                recording::RecordingItem::Frame(left, right) => frames.push((left, right)),
+                recording::RecordingItem::End { overflowed } => {
+                    assert!(!overflowed);
+                    break;
+                }
+            }
+        }
+        assert_eq!(frames.len(), 512);
+        assert!(frames.iter().any(|(left, right)| left != right));
+        assert!(!renderer.playing);
     }
 
     #[test]

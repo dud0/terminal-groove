@@ -125,6 +125,7 @@ pub(super) fn render<T: Copy, F: Fn(f32) -> T>(
     }
     for frame in out.chunks_mut(channels) {
         let (l, r) = renderer.next();
+        renderer.recording.capture(l, r);
         if !frame.is_empty() {
             frame[0] = convert(if channels == 1 { (l + r) * 0.5 } else { l })
         }
