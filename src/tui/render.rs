@@ -1240,7 +1240,7 @@ pub(super) fn global_fader_segments(
     Some((normalized * 10.0).round() as usize)
 }
 
-fn global_selector_data(
+pub(super) fn global_selector_data(
     g: &crate::model::Globals,
     id: GlobalParameterId,
 ) -> Option<(Vec<String>, usize)> {
@@ -1260,11 +1260,11 @@ fn global_selector_data(
                 .unwrap_or_default(),
         )),
         GlobalParameterId::Scale => Some((
-            [Scale::Major, Scale::NaturalMinor]
+            Scale::ALL.iter().map(ToString::to_string).collect(),
+            Scale::ALL
                 .iter()
-                .map(ToString::to_string)
-                .collect(),
-            usize::from(g.scale == Scale::NaturalMinor),
+                .position(|scale| *scale == g.scale)
+                .unwrap_or_default(),
         )),
         GlobalParameterId::Tempo
         | GlobalParameterId::DelayFeedback

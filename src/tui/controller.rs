@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
-    model::{DelayDivision, GlobalParameterId, Percent, Project, Scale, TRACK_COUNT},
+    model::{DelayDivision, GlobalParameterId, Percent, Project, TRACK_COUNT},
     persistence,
     reducer::Scope,
 };
@@ -595,12 +595,8 @@ pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
                 GlobalParameterId::Key => edit_global(a, audio, id, move |g| {
                     g.key = g.key.shifted(selector_direction)
                 }),
-                GlobalParameterId::Scale => edit_global(a, audio, id, |g| {
-                    g.scale = if g.scale == Scale::Major {
-                        Scale::NaturalMinor
-                    } else {
-                        Scale::Major
-                    }
+                GlobalParameterId::Scale => edit_global(a, audio, id, move |g| {
+                    g.scale = g.scale.shifted(selector_direction)
                 }),
                 GlobalParameterId::Tempo => {}
                 GlobalParameterId::Ducking => {}

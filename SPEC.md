@@ -328,9 +328,9 @@ The final output stage applies DC blocking, fixed +6 dB makeup gain, and a stere
 | Reverb pre-delay | 0–200 ms | 20 ms | Up/down by 1 ms and Shift+up/down by 10 ms |
 | Reverb return | 0–100% | 30% | Percentage direct entry, or up/down by 1% and Shift+up/down by 10% |
 | Key | C, C#, D, D#, E, F, F#, G, G#, A, A#, B | C | Up/down moves chromatically |
-| Scale | Major, natural minor | Major | Up/down or the shortcut toggles the value |
+| Scale | Major, Dorian, Phrygian, Lydian, Mixolydian, natural minor, Locrian | Major | Up/down selects the adjacent mode and clamps at either end |
 
-Enharmonic keys use sharp names in the MVP. Major uses semitone offsets `[0, 2, 4, 5, 7, 9, 11, 12]`; natural minor uses `[0, 2, 3, 5, 7, 8, 10, 12]`.
+Enharmonic keys use sharp names in the MVP. Scale selector order is Major, Dorian, Phrygian, Lydian, Mixolydian, natural minor, and Locrian. Their semitone offsets are respectively `[0, 2, 4, 5, 7, 9, 11, 12]`, `[0, 2, 3, 5, 7, 9, 10, 12]`, `[0, 1, 3, 5, 7, 8, 10, 12]`, `[0, 2, 4, 6, 7, 9, 11, 12]`, `[0, 2, 4, 5, 7, 9, 10, 12]`, `[0, 2, 3, 5, 7, 8, 10, 12]`, and `[0, 1, 3, 5, 6, 8, 10, 12]`.
 
 Global parameters cannot be parameter-locked.
 
@@ -427,7 +427,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Global | `p` | Edit reverb pre-delay |
 | Global | `m` | Edit reverb return |
 | Global | `k` | Edit musical key |
-| Global | `s` | Toggle/edit scale |
+| Global | `s` | Edit scale |
 | Global | `d` | Edit kick sidechain ducking |
 
 Shortcuts are resolved by selected section, so repeated letters do not conflict.
@@ -583,6 +583,8 @@ The top-level object is:
 ```
 
 `delay_division` accepts the stable strings `thirty_second`, `sixteenth_triplet`, `sixteenth`, `eighth_triplet`, `eighth`, `eighth_dotted`, `quarter_triplet`, `quarter`, `quarter_dotted`, `half`, and `bar`.
+
+`scale` accepts the stable strings `major`, `dorian`, `phrygian`, `lydian`, `mixolydian`, `natural_minor`, and `locrian`.
 
 `tracks` contains exactly nine entries in the fixed instrument order. Every track stores:
 

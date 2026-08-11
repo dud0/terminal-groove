@@ -364,14 +364,42 @@ impl fmt::Display for PitchClass {
 #[serde(rename_all = "snake_case")]
 pub enum Scale {
     Major,
+    Dorian,
+    Phrygian,
+    Lydian,
+    Mixolydian,
     NaturalMinor,
+    Locrian,
 }
 impl Scale {
+    pub const ALL: [Self; 7] = [
+        Self::Major,
+        Self::Dorian,
+        Self::Phrygian,
+        Self::Lydian,
+        Self::Mixolydian,
+        Self::NaturalMinor,
+        Self::Locrian,
+    ];
+
     pub const fn offsets(self) -> [i32; 8] {
         match self {
             Self::Major => [0, 2, 4, 5, 7, 9, 11, 12],
+            Self::Dorian => [0, 2, 3, 5, 7, 9, 10, 12],
+            Self::Phrygian => [0, 1, 3, 5, 7, 8, 10, 12],
+            Self::Lydian => [0, 2, 4, 6, 7, 9, 11, 12],
+            Self::Mixolydian => [0, 2, 4, 5, 7, 9, 10, 12],
             Self::NaturalMinor => [0, 2, 3, 5, 7, 8, 10, 12],
+            Self::Locrian => [0, 1, 3, 5, 6, 8, 10, 12],
         }
+    }
+
+    pub fn shifted(self, delta: i32) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|scale| *scale == self)
+            .expect("every scale is listed in Scale::ALL") as i32;
+        Self::ALL[(index + delta).clamp(0, Self::ALL.len() as i32 - 1) as usize]
     }
 }
 impl fmt::Display for Scale {
@@ -381,7 +409,12 @@ impl fmt::Display for Scale {
             "{}",
             match self {
                 Self::Major => "Major",
+                Self::Dorian => "Dorian",
+                Self::Phrygian => "Phrygian",
+                Self::Lydian => "Lydian",
+                Self::Mixolydian => "Mixolydian",
                 Self::NaturalMinor => "Natural minor",
+                Self::Locrian => "Locrian",
             }
         )
     }
@@ -3102,6 +3135,27 @@ mod tests {
         p.globals.scale = Scale::NaturalMinor;
         assert_eq!(p.note_midi(3, 3), Some(60));
     }
+
+    #[test]
+    fn scales_have_expected_offsets_and_clamped_selector_order() {
+        let cases = [
+            (Scale::Major, [0, 2, 4, 5, 7, 9, 11, 12]),
+            (Scale::Dorian, [0, 2, 3, 5, 7, 9, 10, 12]),
+            (Scale::Phrygian, [0, 1, 3, 5, 7, 8, 10, 12]),
+            (Scale::Lydian, [0, 2, 4, 6, 7, 9, 11, 12]),
+            (Scale::Mixolydian, [0, 2, 4, 5, 7, 9, 10, 12]),
+            (Scale::NaturalMinor, [0, 2, 3, 5, 7, 8, 10, 12]),
+            (Scale::Locrian, [0, 1, 3, 5, 6, 8, 10, 12]),
+        ];
+        assert_eq!(
+            Scale::ALL.map(|scale| scale.offsets()),
+            cases.map(|(_, offsets)| offsets)
+        );
+        assert_eq!(Scale::Major.shifted(-1), Scale::Major);
+        assert_eq!(Scale::Major.shifted(1), Scale::Dorian);
+        assert_eq!(Scale::Locrian.shifted(1), Scale::Locrian);
+        assert_eq!(Scale::Locrian.shifted(-1), Scale::NaturalMinor);
+    }
     #[test]
     fn diatonic_triads_are_close_position_and_cross_octaves() {
         let mut project = Project::new();
@@ -3475,7 +3529,7 @@ mod tests {
     #[test]
     fn all_keys_map_degrees() {
         for key in PitchClass::ALL {
-            for scale in [Scale::Major, Scale::NaturalMinor] {
+            for scale in Scale::ALL {
                 let mut p = Project::new();
                 p.globals.key = key;
                 p.globals.scale = scale;

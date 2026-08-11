@@ -1685,6 +1685,33 @@ fn global_editor_left_and_right_cycle_controls() {
 }
 
 #[test]
+fn scale_selector_lists_all_modes_and_marks_the_current_mode() {
+    let mut app = App::new(Project::new(), None);
+    app.editor
+        .edit(None, |project, _| {
+            project.globals.scale = crate::model::Scale::Mixolydian;
+            Ok(())
+        })
+        .unwrap();
+
+    let (choices, selected) =
+        global_selector_data(&app.editor.project().globals, GlobalParameterId::Scale).unwrap();
+    assert_eq!(
+        choices,
+        [
+            "Major",
+            "Dorian",
+            "Phrygian",
+            "Lydian",
+            "Mixolydian",
+            "Natural minor",
+            "Locrian"
+        ]
+    );
+    assert_eq!(selected, 4);
+}
+
+#[test]
 fn step_cells_show_note_octaves_and_locks() {
     assert_eq!(step_cell(None), " . ");
     assert_eq!(
