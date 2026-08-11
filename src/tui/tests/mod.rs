@@ -1527,6 +1527,79 @@ fn global_cards_show_all_local_shortcuts() {
 }
 
 #[test]
+fn global_cards_use_semantic_groups_and_track_card_geometry() {
+    let app = App::new(Project::new(), None);
+    let lines = rendered_lines(&app, 120, 34);
+
+    assert!(lines[17].contains("CLOCK"));
+    assert!(lines[17].contains("DELAY"));
+    assert!(lines[17].contains("REVERB"));
+    assert!(lines[17].contains("DUCKING"));
+    assert!(lines[17].contains("SCALE"));
+    assert!(!lines[18].contains("┌"));
+    assert!(!lines[18].contains("┬"));
+    assert!(lines[29].contains("Tempo"));
+    assert!(lines[30].contains("[t]"));
+
+    let backend = TestBackend::new(120, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+    let group_heading = &terminal.backend().buffer().content[17 * 120..18 * 120];
+    assert!(
+        group_heading[10..20]
+            .iter()
+            .any(|cell| cell.symbol() == "C" && cell.fg == Color::Cyan)
+    );
+    assert!(
+        group_heading[20..40]
+            .iter()
+            .any(|cell| cell.symbol() == "D" && cell.fg == Color::LightBlue)
+    );
+    assert!(
+        group_heading[40..80]
+            .iter()
+            .any(|cell| cell.symbol() == "R" && cell.fg == Color::Magenta)
+    );
+    assert!(
+        group_heading[80..90]
+            .iter()
+            .any(|cell| cell.symbol() == "D" && cell.fg == Color::Red)
+    );
+    assert!(
+        group_heading[90..110]
+            .iter()
+            .any(|cell| cell.symbol() == "S" && cell.fg == Color::Green)
+    );
+}
+
+#[test]
+fn global_controls_keep_related_groups_contiguous() {
+    use super::controls::GlobalParameterGroup;
+
+    let groups = GLOBAL_CONTROLS
+        .iter()
+        .map(|control| control.group)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        groups,
+        vec![
+            GlobalParameterGroup::Clock,
+            GlobalParameterGroup::Delay,
+            GlobalParameterGroup::Delay,
+            GlobalParameterGroup::Reverb,
+            GlobalParameterGroup::Reverb,
+            GlobalParameterGroup::Reverb,
+            GlobalParameterGroup::Reverb,
+            GlobalParameterGroup::Ducking,
+            GlobalParameterGroup::Scale,
+            GlobalParameterGroup::Scale,
+        ]
+    );
+}
+
+#[test]
 fn global_navigation_row_omits_local_shortcuts() {
     let text = global_control_text(&Project::new().globals);
     assert!(text.iter().all(|control| !control.starts_with('[')));

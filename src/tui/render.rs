@@ -1295,84 +1295,98 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
         return;
     }
     let g = &a.editor.project.globals;
+
+    let slot_width = (inner.width / GLOBAL_CONTROLS.len() as u16).min(10);
+    let bank_width = slot_width.saturating_mul(GLOBAL_CONTROLS.len() as u16);
+    let bank = Rect {
+        x: inner.x + inner.width.saturating_sub(bank_width) / 2,
+        y: inner.y + 1,
+        width: bank_width,
+        height: inner.height.saturating_sub(1),
+    };
+
+    let mut group_start = 0;
+    while group_start < GLOBAL_CONTROLS.len() {
+        let group = GLOBAL_CONTROLS[group_start].group;
+        let group_end = GLOBAL_CONTROLS[group_start..]
+            .iter()
+            .position(|control| control.group != group)
+            .map(|offset| group_start + offset)
+            .unwrap_or(GLOBAL_CONTROLS.len());
+        let group_area = Rect {
+            x: bank.x + slot_width * group_start as u16,
+            y: inner.y,
+            width: slot_width * (group_end - group_start) as u16,
+            height: 1,
+        };
+        render_centered(
+            f,
+            group.label(),
+            group_area,
+            Style::default()
+                .fg(group.color())
+                .add_modifier(Modifier::BOLD),
+        );
+        group_start = group_end;
+    }
+
     for (index, control) in GLOBAL_CONTROLS.iter().enumerate() {
         let id = control.id;
-        let x = inner.x + inner.width * index as u16 / GLOBAL_CONTROLS.len() as u16;
-        let next_x = inner.x + inner.width * (index + 1) as u16 / GLOBAL_CONTROLS.len() as u16;
         let slot = Rect {
-            x,
-            y: inner.y,
-            width: next_x.saturating_sub(x),
-            height: inner.height,
+            x: bank.x + slot_width * index as u16,
+            y: bank.y,
+            width: slot_width,
+            height: bank.height,
         };
         let active = matches!(&a.mode, Mode::GlobalEdit(active_id) if *active_id == id)
             || matches!(&a.mode, Mode::TempoInput(_) if id == GlobalParameterId::Tempo)
             || matches!(&a.mode, Mode::SidechainEdit { .. } if id == GlobalParameterId::Ducking);
         let block = if active {
-            Block::bordered()
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT)
                 .border_type(BorderType::Double)
                 .border_style(
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 )
-                .title_style(
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .reversed()
-                        .add_modifier(Modifier::BOLD),
-                )
-                .title(global_display_name(id))
                 .style(Style::default().reversed())
         } else {
-            Block::bordered().title(global_display_name(id))
+            Block::default()
         };
-        let content = block.inner(slot);
+        let content = if active {
+            block.inner(slot)
+        } else {
+            Rect {
+                x: slot.x + 1,
+                y: slot.y,
+                width: slot.width.saturating_sub(2),
+                height: slot.height,
+            }
+        };
         f.render_widget(block, slot);
+        let group_color = control.group.color();
         let style = if active {
             Style::default()
-                .fg(Color::LightCyan)
+                .fg(group_color)
                 .reversed()
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
-                .fg(Color::LightCyan)
+                .fg(group_color)
                 .add_modifier(Modifier::BOLD)
-        };
-        let shortcut_area = Rect {
-            x: content.x,
-            y: content.y + content.height.saturating_sub(1),
-            width: content.width,
-            height: content.height.min(1),
-        };
-        render_centered(
-            f,
-            &format!("[{}]", global_shortcut_text(id)),
-            shortcut_area,
-            style,
-        );
-
-        let body = Rect {
-            x: content.x,
-            y: content.y,
-            width: content.width,
-            height: content.height.saturating_sub(1),
         };
         if let Some(filled) = global_fader_segments(g, id) {
             render_centered(
                 f,
                 &global_value_text(g, id),
-                Rect { height: 1, ..body },
+                Rect {
+                    height: 1,
+                    ..content
+                },
                 style,
             );
-            let fader_area = Rect {
-                y: body.y + 1,
-                height: body.height.saturating_sub(1),
-                ..body
-            };
-            let height = fader_area.height.min(10);
-            let start_y = fader_area.y + fader_area.height.saturating_sub(height) / 2;
-            for segment in 0..height {
+            for segment in 0..10 {
                 let is_filled = usize::from(segment) >= 10usize.saturating_sub(filled);
                 let segment_style = if active || is_filled {
                     style
@@ -1383,19 +1397,56 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
                     f,
                     if is_filled { "███" } else { "···" },
                     Rect {
-                        x: fader_area.x,
-                        y: start_y + segment,
-                        width: fader_area.width,
+                        x: content.x,
+                        y: content.y + 1 + segment,
+                        width: content.width,
                         height: 1,
                     },
                     segment_style,
                 );
             }
         } else if let Some((choices, selected)) = global_selector_data(g, id) {
-            render_lfo_selector(f, body, &choices, selected, style);
+            render_lfo_selector(
+                f,
+                Rect {
+                    height: 11,
+                    ..content
+                },
+                &choices,
+                selected,
+                style,
+            );
         } else {
-            render_centered(f, &global_value_text(g, id), body, style);
+            render_centered(
+                f,
+                &global_value_text(g, id),
+                Rect {
+                    height: 1,
+                    ..content
+                },
+                style,
+            );
         }
+        render_centered(
+            f,
+            global_display_name(id),
+            Rect {
+                y: content.y + 11,
+                height: 1,
+                ..content
+            },
+            style,
+        );
+        render_centered(
+            f,
+            &format!("[{}]", global_shortcut_text(id)),
+            Rect {
+                y: content.y + 12,
+                height: 1,
+                ..content
+            },
+            style,
+        );
     }
 }
 
@@ -1862,7 +1913,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         );
         return;
     }
-    let details_height = if a.row == 0 { 18 } else { 16 };
+    let details_height = 16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
