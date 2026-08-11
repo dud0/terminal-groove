@@ -1,4 +1,3 @@
-
 use super::*;
 use ratatui::{Terminal, backend::TestBackend};
 

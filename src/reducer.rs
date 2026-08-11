@@ -142,6 +142,46 @@ impl ProjectDelta {
             std::mem::swap(song, &mut project.song);
         }
     }
+
+    /// Extend a coalesced revision with regions touched by a newer edit while
+    /// retaining the oldest value for regions already represented.
+    fn merge_earliest(&mut self, newer: Self) {
+        if self.globals.is_none() {
+            self.globals = newer.globals;
+        }
+        for (index, track) in newer.tracks {
+            if !self.tracks.iter().any(|(existing, _)| *existing == index) {
+                self.tracks.push((index, track));
+            }
+        }
+
+        match (&mut self.patterns, newer.patterns) {
+            (Some(_), _) => {}
+            (slot @ None, Some(mut patterns)) => {
+                for (pattern, track, steps) in self.sequences.drain(..) {
+                    patterns[pattern].tracks[track].steps = steps;
+                }
+                *slot = Some(patterns);
+            }
+            (None, None) => {
+                for (pattern, track, steps) in newer.sequences {
+                    if !self
+                        .sequences
+                        .iter()
+                        .any(|(existing_pattern, existing_track, _)| {
+                            *existing_pattern == pattern && *existing_track == track
+                        })
+                    {
+                        self.sequences.push((pattern, track, steps));
+                    }
+                }
+            }
+        }
+
+        if self.song.is_none() {
+            self.song = newer.song;
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoalesceKey(pub usize, pub usize, pub u8);
@@ -698,6 +738,8 @@ impl Editor {
             });
         if merge {
             let r = self.undo.back_mut().unwrap();
+            r.delta
+                .merge_earliest(ProjectDelta::between(before, &self.project));
             r.at = now;
         } else {
             if self.undo.len() == 256 {
@@ -2134,6 +2176,57 @@ mod tests {
                 .locks()
                 .percent(ParameterId::FlangerFeedback)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn coalescing_preserves_the_earliest_value_for_every_touched_region() {
+        let mut editor = Editor::new(Project::new());
+        editor.toggle_event(0, 0).unwrap();
+        editor.end_coalescing();
+        let key = Some(CoalesceKey(0, 0, ParameterId::Level as u8));
+
+        editor
+            .set_parameter(
+                0,
+                0,
+                Scope::Base,
+                ParameterId::Level,
+                ParameterValue::Percent(Percent::new(30).unwrap()),
+                key,
+            )
+            .unwrap();
+        editor
+            .set_parameter(
+                0,
+                0,
+                Scope::Lock,
+                ParameterId::Level,
+                ParameterValue::Percent(Percent::new(40).unwrap()),
+                key,
+            )
+            .unwrap();
+
+        assert!(editor.undo());
+        assert_eq!(editor.project.tracks[0].level, Percent::new(80).unwrap());
+        assert_eq!(
+            editor.active_steps(0).unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .locks()
+                .get(ParameterId::Level),
+            None
+        );
+
+        assert!(editor.redo());
+        assert_eq!(editor.project.tracks[0].level, Percent::new(30).unwrap());
+        assert_eq!(
+            editor.active_steps(0).unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .locks()
+                .get(ParameterId::Level),
+            Some(ParameterValue::Percent(Percent::new(40).unwrap()))
         );
     }
 
