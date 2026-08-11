@@ -1,7 +1,7 @@
 # terminal-groove MVP specification
 
 Status: implementation-ready MVP specification  
-Target: Linux-first terminal application  
+Target: Linux and macOS terminal application
 Application and executable name: `terminal-groove`
 
 ## 1. Product definition
@@ -698,12 +698,13 @@ Baseline:
 - Clap 4 derive API for CLI parsing
 - A structured error crate such as `thiserror`; application-level context may use `anyhow`
 
-Linux setup documentation must include Rust installation and:
+Platform setup documentation must include Rust installation and the platform-specific audio prerequisites:
 
-- Debian/Ubuntu: `libasound2-dev`
-- Fedora: `alsa-lib-devel`
+- Linux Debian/Ubuntu: `libasound2-dev`
+- Linux Fedora: `alsa-lib-devel`
+- macOS: no separate audio development package; CPAL uses CoreAudio
 
-Install Rust and the ALSA development package before building on a new Linux system. The repository's current toolchain and dependency versions are listed above and are verified by the build and test commands in `AGENTS.md`.
+Install Rust and the relevant platform audio prerequisites before building on a new system. The repository's current toolchain and dependency versions are listed above and are verified by the build and test commands in `AGENTS.md`.
 
 ### 10.2 Package organization
 
@@ -743,7 +744,7 @@ Recordings are written below the current working directory in `.recordings/`. Na
 
 - Use the selected device's default output configuration and sample rate, requesting the
   automatic or explicitly selected callback buffer described in section 9.
-- Support the common `f32`, `i16`, and `u16` device sample formats; reject other formats clearly in the Linux-first MVP.
+- Support the common `f32`, `i16`, and `u16` device sample formats; reject other formats clearly.
 - Render all DSP as `f32` stereo internally and convert only at the final device boundary.
 - Allocate voices, filter state, delay memory, and reverb buffers before stream playback.
 - Drain pending edits at the beginning of each callback. Step-affecting edits received before a step boundary apply at that boundary.
@@ -790,4 +791,4 @@ Cover bounded oscillator pitch, ADSR timing, filter stability, finite drum outpu
 
 ## 13. MVP completion criteria
 
-The MVP is complete when all automated tests pass and every manual acceptance scenario succeeds on a current Linux desktop using ALSA directly or through the system's configured sound-server bridge. The implementation must match the documented keyboard map and JSON schema, generate all sound procedurally, keep audio scheduling independent from TUI redraw timing, and leave no hidden editing mode or silent data-loss path.
+The MVP is complete when all automated tests pass and every manual acceptance scenario succeeds on a current Linux desktop using ALSA directly or through the system's configured sound-server bridge, and on macOS using CoreAudio. The implementation must match the documented keyboard map and JSON schema, generate all sound procedurally, keep audio scheduling independent from TUI redraw timing, and leave no hidden editing mode or silent data-loss path.

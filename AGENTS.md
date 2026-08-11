@@ -16,14 +16,14 @@ The authoritative behavior is documented in `SPEC.md`. Unit tests currently live
 
 ## Build, Test, and Development Commands
 
-- `cargo run --release -- --audio-device null`: run safely with ALSA's null output.
+- `cargo run --release -- --audio-device null`: run safely with ALSA's null output on Linux.
 - `cargo run --release -- --list-audio-devices`: list exact device names accepted by the CLI.
 - `cargo test`: run all unit, persistence, and documentation tests.
 - `cargo fmt --all -- --check`: verify standard Rust formatting.
 - `cargo clippy --all-targets -- -D warnings`: enforce lint-clean code.
 - `cargo build --release`: produce the optimized binary at `target/release/terminal-groove`.
 
-Install `libasound2-dev` on Debian/Ubuntu or `alsa-lib-devel` on Fedora before building.
+On Linux, install `libasound2-dev` on Debian/Ubuntu or `alsa-lib-devel` on Fedora before building. macOS uses CoreAudio and needs no separate audio development package.
 
 ## Coding Style & Naming Conventions
 

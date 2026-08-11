@@ -1,10 +1,10 @@
 # terminal-groove
 
-A Linux-first, real-time terminal groovebox. It provides nine independently looping 1–64-step sequences, procedural drum voices including Tom, Cymbal, and Rimshot, a monophonic resonant Bass synth, a polyphonic Chord synth with two alternating four-voice groups, a monophonic Lead synth, strict versioned JSON projects, undo/redo, parameter locks, and per-parameter LFOs. Chord sequencer degrees produce diatonic shapes with inversions and optional arpeggiation.
+A real-time terminal groovebox for Linux and macOS. It provides nine independently looping 1–64-step sequences, procedural drum voices including Tom, Cymbal, and Rimshot, a monophonic resonant Bass synth, a polyphonic Chord synth with two alternating four-voice groups, a monophonic Lead synth, strict versioned JSON projects, undo/redo, parameter locks, and per-parameter LFOs. Chord sequencer degrees produce diatonic shapes with inversions and optional arpeggiation.
 
 ## Build prerequisites
 
-Install Rust 1.85 or newer with [rustup](https://rustup.rs/), plus ALSA development headers:
+Install Rust 1.85 or newer with [rustup](https://rustup.rs/). On Linux, also install the ALSA development headers:
 
 ```sh
 # Debian / Ubuntu
@@ -13,6 +13,8 @@ sudo apt install libasound2-dev
 # Fedora
 sudo dnf install alsa-lib-devel
 ```
+
+On macOS, CPAL uses CoreAudio and no separate audio development package is required.
 
 Then build and test:
 

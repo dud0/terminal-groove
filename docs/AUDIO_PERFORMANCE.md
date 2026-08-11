@@ -2,7 +2,7 @@
 
 Date: 2026-08-09
 
-## Reference environment and method
+## Linux reference environment and method
 
 - CPU: Intel Core i5-1145G7, 4 cores / 8 threads
 - OS/architecture: Linux x86_64
@@ -59,3 +59,5 @@ The elevated 96 kHz tail latency remains best-effort host-scheduling evidence ra
 Wall-clock timing is a controlled local engineering measurement, not an automated regression proof or a universal dropout guarantee. Ordinary tests enforce deterministic finite output and callback allocation/deallocation safety under saturated DSP, audition, replacement, Stop/Play, and retirement-queue pressure; they contain no host-dependent timing limit.
 
 The earlier release binary completed a 5 minute 30 second saturated ALSA `null` run at 44.1 kHz and 512 frames with zero reported overruns. A 128-frame exploratory run reported two overruns. A new controlled ten-minute device run was not performed as part of this code-only pass; the acceptance procedure requires recording both 512-frame and, where supported, 128-frame results without claiming universal dropout freedom.
+
+The application is also verified on macOS, where CPAL uses CoreAudio. The measurements above are Linux-only reference data and do not claim equivalent performance across every macOS device or configuration.
