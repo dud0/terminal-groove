@@ -696,10 +696,6 @@ pub(super) fn refresh_audio_status(a: &mut App, audio: &mut Audio) {
             (step < a.editor.active_steps(track).unwrap().len() as u8).then_some(step as usize);
     }
     a.callback_overruns = audio.status.callback_overruns.load(Ordering::Relaxed);
-    a.max_callback_duration_ns = audio
-        .status
-        .max_callback_duration_ns
-        .load(Ordering::Relaxed);
     a.max_callback_load_per_mille = audio
         .status
         .max_callback_load_per_mille

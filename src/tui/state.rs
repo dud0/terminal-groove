@@ -178,7 +178,6 @@ pub struct App {
     pub(super) active_pattern: usize,
     pub(super) queued_pattern: Option<usize>,
     pub(super) callback_overruns: u64,
-    pub(super) max_callback_duration_ns: u64,
     pub(super) max_callback_load_per_mille: u64,
     pub(super) fader_animations: Vec<FaderAnimation>,
 }
@@ -233,7 +232,6 @@ impl App {
             active_pattern: 0,
             queued_pattern: None,
             callback_overruns: 0,
-            max_callback_duration_ns: 0,
             max_callback_load_per_mille: 0,
             fader_animations: Vec::new(),
         }

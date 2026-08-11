@@ -16,11 +16,6 @@ pub fn exp_map_f32(percent: f32, min: f32, max: f32) -> f32 {
     min * (max / min).powf(percent.clamp(0.0, 100.0) / 100.0)
 }
 
-pub fn equal_power_pan(pan: f32) -> (f32, f32) {
-    let angle = pan.clamp(0.0, 100.0) * std::f32::consts::FRAC_PI_2 / 100.0;
-    (angle.cos(), angle.sin())
-}
-
 /// A preallocated kick-keyed envelope follower used to generate a shared ducking gain.
 #[derive(Clone, Copy, Debug)]
 pub struct SidechainCompressor {
@@ -60,7 +55,8 @@ impl SidechainCompressor {
         self.gain = 1.0;
     }
 
-    pub fn envelope(&self) -> f32 {
+    #[cfg(test)]
+    fn envelope(&self) -> f32 {
         self.envelope
     }
 
@@ -146,7 +142,8 @@ impl Lfo {
         self.smoothed = 0.0;
     }
 
-    pub fn value(&self) -> f32 {
+    #[cfg(test)]
+    fn value(&self) -> f32 {
         self.smoothed
     }
 
@@ -1157,10 +1154,6 @@ impl Adsr {
         self.stage = EnvStage::Idle;
         self.value = 0.0;
     }
-    pub fn next_sample(&mut self) -> f32 {
-        self.next_sample_modulated(0.0, 0.0, 0.0, 0.0)
-    }
-
     pub fn next_sample_modulated(
         &mut self,
         attack_offset: f32,
@@ -1328,13 +1321,9 @@ impl BassVcaEnvelope {
         !self.gate && self.value <= 0.001
     }
 
+    #[cfg(test)]
     pub fn value(&self) -> f32 {
         self.value
-    }
-
-    pub fn reset(&mut self) {
-        self.value = 0.0;
-        self.gate = false;
     }
 
     pub fn next_sample(&mut self) -> f32 {
@@ -1384,6 +1373,7 @@ impl BassFilterEnvelope {
         self.coefficient = (-6.907_755 / (seconds * self.sample_rate).max(1.0)).exp();
     }
 
+    #[cfg(test)]
     pub fn value(&self) -> f32 {
         self.value
     }
@@ -1463,125 +1453,6 @@ impl BassAccentEnvelope {
             self.stage = BassAccentStage::Idle;
         }
         self.value
-    }
-}
-
-pub struct Svf {
-    ic1: f32,
-    ic2: f32,
-}
-impl Svf {
-    pub fn new() -> Self {
-        Self { ic1: 0.0, ic2: 0.0 }
-    }
-    pub fn lowpass(&mut self, input: f32, cutoff: f32, q: f32, sr: f32) -> f32 {
-        let g = (PI * (cutoff / sr).clamp(0.0001, 0.45)).tan();
-        let k = 1.0 / q.clamp(0.1, 20.0);
-        let a1 = 1.0 / (1.0 + g * (g + k));
-        let v1 = a1 * (self.ic1 + g * (input - self.ic2));
-        let v2 = self.ic2 + g * v1;
-        self.ic1 = 2.0 * v1 - self.ic1;
-        self.ic2 = 2.0 * v2 - self.ic2;
-        if v2.is_finite() {
-            v2
-        } else {
-            self.ic1 = 0.0;
-            self.ic2 = 0.0;
-            0.0
-        }
-    }
-}
-impl Default for Svf {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// A compact nonlinear four-stage ladder used by the Chord and Lead voices.
-pub struct LadderFilter {
-    stages: [f32; 4],
-    coefficient: f32,
-    feedback: f32,
-    coefficient_step: f32,
-    feedback_step: f32,
-    parameter_smoothing_remaining: u8,
-    cached_cutoff: f32,
-    cached_resonance: f32,
-    cached_sr: f32,
-}
-
-impl LadderFilter {
-    pub fn new() -> Self {
-        Self {
-            stages: [0.0; 4],
-            coefficient: 0.0,
-            feedback: 0.0,
-            coefficient_step: 0.0,
-            feedback_step: 0.0,
-            parameter_smoothing_remaining: 0,
-            cached_cutoff: f32::NAN,
-            cached_resonance: f32::NAN,
-            cached_sr: f32::NAN,
-        }
-    }
-
-    pub fn lowpass(&mut self, input: f32, cutoff: f32, resonance: f32, sr: f32) -> f32 {
-        self.set_parameters(cutoff, resonance, sr);
-        self.process(input)
-    }
-
-    pub fn set_parameters(&mut self, cutoff: f32, resonance: f32, sr: f32) {
-        self.set_parameters_smoothed(cutoff, resonance, sr, 0);
-    }
-
-    pub fn set_parameters_smoothed(&mut self, cutoff: f32, resonance: f32, sr: f32, samples: u8) {
-        if cutoff == self.cached_cutoff
-            && resonance == self.cached_resonance
-            && sr == self.cached_sr
-        {
-            return;
-        }
-        let initialize = !self.cached_sr.is_finite() || samples == 0;
-        self.cached_cutoff = cutoff;
-        self.cached_resonance = resonance;
-        self.cached_sr = sr;
-        let target_coefficient = 1.0 - (-2.0 * PI * cutoff.clamp(20.0, sr * 0.45) / sr).exp();
-        let target_feedback = resonance.clamp(0.0, 1.0) * 3.85;
-        if initialize {
-            self.coefficient = target_coefficient;
-            self.feedback = target_feedback;
-            self.parameter_smoothing_remaining = 0;
-        } else {
-            self.coefficient_step = (target_coefficient - self.coefficient) / f32::from(samples);
-            self.feedback_step = (target_feedback - self.feedback) / f32::from(samples);
-            self.parameter_smoothing_remaining = samples;
-        }
-    }
-
-    pub fn process(&mut self, input: f32) -> f32 {
-        if self.parameter_smoothing_remaining > 0 {
-            self.coefficient += self.coefficient_step;
-            self.feedback += self.feedback_step;
-            self.parameter_smoothing_remaining -= 1;
-        }
-        let mut stage_input = (input - self.stages[3] * self.feedback).tanh();
-        for stage in &mut self.stages {
-            *stage += self.coefficient * (stage_input - stage.tanh());
-            stage_input = stage.tanh();
-        }
-        let output = self.stages[3];
-        if output.is_finite() {
-            output
-        } else {
-            self.stages = [0.0; 4];
-            0.0
-        }
-    }
-}
-
-impl Default for LadderFilter {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -2014,6 +1885,7 @@ impl StereoChorus {
         (input * DRY + left * WET, input * DRY + right * WET)
     }
 
+    #[cfg(test)]
     pub fn process(&mut self, input: f32) -> (f32, f32) {
         self.process_stereo(input, input)
     }
@@ -2773,15 +2645,6 @@ mod tests {
         let mut filter = Sh101Filter::new();
         filter.set_parameters_smoothed(1_000.0, 1.0, 96_000.0, 0);
         assert_impulse_decays(|input| filter.process(input));
-    }
-    #[test]
-    fn filter_finite() {
-        let mut f = Svf::new();
-        for c in [20., 20000., 30000.] {
-            for _ in 0..1000 {
-                assert!(f.lowpass(1., c, 10., 44100.).is_finite())
-            }
-        }
     }
     #[test]
     fn drum_biquad_filters_are_finite_and_reject_dc() {

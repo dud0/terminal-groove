@@ -908,10 +908,9 @@ mod tests {
         }
         let project = performance_project();
         eprintln!(
-            "audio fixture: os={} arch={} rustc={} profile={}",
+            "audio fixture: os={} arch={} profile={}",
             std::env::consts::OS,
             std::env::consts::ARCH,
-            option_env!("RUSTC_VERSION").unwrap_or("unknown"),
             if cfg!(debug_assertions) {
                 "debug"
             } else {

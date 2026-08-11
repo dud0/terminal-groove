@@ -201,7 +201,7 @@ fn pattern_delete_normalizes_step_for_the_new_active_pattern() {
     app.step = 15;
     app.pattern_cursor = 0;
 
-    app.editor.delete_pattern_at(0).unwrap();
+    app.editor.delete_pattern(0).unwrap();
     normalize_cursor(&mut app);
 
     assert_eq!(app.step, 3);

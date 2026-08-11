@@ -124,7 +124,8 @@ impl Rng {
     }
 }
 
-pub fn generate(project: &Project, config: Config) -> Generated {
+#[cfg(test)]
+fn generate(project: &Project, config: Config) -> Generated {
     generate_for_pattern(project, 0, config)
 }
 

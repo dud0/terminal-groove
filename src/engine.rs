@@ -43,7 +43,6 @@ impl StepClock {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GateAction {
-    None,
     Trigger {
         degree: u8,
         octave: u8,

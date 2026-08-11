@@ -1,10 +1,10 @@
 pub mod audio;
-pub mod dsp;
-pub mod engine;
-pub mod generator;
+mod dsp;
+mod engine;
+mod generator;
 pub mod model;
 pub mod persistence;
-pub mod reducer;
+mod reducer;
 pub mod tui;
 
 #[cfg(test)]

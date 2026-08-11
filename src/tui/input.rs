@@ -565,36 +565,33 @@ pub(super) fn handle_pattern_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent)
         KeyCode::Char('n' | 'N') => pattern_edit_at(
             a,
             audio,
-            |e, cursor| e.insert_pattern_at(cursor),
+            |e, cursor| e.insert_pattern(cursor),
             "Inserted pattern",
         ),
         KeyCode::Char('d') | KeyCode::Char('D') => pattern_edit_at(
             a,
             audio,
-            |e, cursor| e.duplicate_pattern_at(cursor),
+            |e, cursor| e.duplicate_pattern(cursor),
             "Duplicated pattern",
         ),
         KeyCode::Char('c' | 'C') => {
-            if a.editor.copy_pattern_at(a.pattern_cursor) {
+            if a.editor.copy_pattern(a.pattern_cursor) {
                 a.status = format!("Copied pattern {}", a.pattern_cursor + 1);
             }
         }
-        KeyCode::Char('x' | 'X') => pattern_edit_at(
-            a,
-            audio,
-            |e, cursor| e.cut_pattern_at(cursor),
-            "Cut pattern",
-        ),
+        KeyCode::Char('x' | 'X') => {
+            pattern_edit_at(a, audio, |e, cursor| e.cut_pattern(cursor), "Cut pattern")
+        }
         KeyCode::Char('v' | 'V') => pattern_edit_at(
             a,
             audio,
-            |e, cursor| e.paste_pattern_at(cursor),
+            |e, cursor| e.paste_pattern(cursor),
             "Pasted pattern",
         ),
         KeyCode::Delete | KeyCode::Backspace => pattern_edit_at(
             a,
             audio,
-            |e, cursor| e.delete_pattern_at(cursor),
+            |e, cursor| e.delete_pattern(cursor),
             "Deleted pattern",
         ),
         _ => {}
