@@ -1788,6 +1788,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.19",
+ "unicode-width",
 ]
 
 [[package]]

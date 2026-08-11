@@ -1,8 +1,8 @@
 use super::overlays::{
-    overwrite_popup_rect, popup, popup_at, probability_popup_rect, quit_popup_rect,
-    render_chord_popup, render_generator_popup, render_lfo_popup, render_lfo_selector,
-    render_pattern_popup, render_project_browser, render_sidechain_popup, render_trigger_popup,
-    swing_popup_rect, tempo_popup_rect,
+    overwrite_destination, overwrite_popup_rect, popup, popup_at, probability_popup_rect,
+    quit_popup_rect, render_chord_popup, render_generator_popup, render_lfo_popup,
+    render_lfo_selector, render_pattern_popup, render_project_browser, render_sidechain_popup,
+    render_trigger_popup, swing_popup_rect, tempo_popup_rect,
 };
 use super::{
     controller::{PROJECT_EXTENSION, global_name, project_directory, project_path_for_name},
@@ -2283,12 +2283,17 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 &format!("Name: {input}_\nDestination: {destination}\nEnter confirms  Esc cancels"),
             );
         }
-        Mode::OverwriteConfirm { path, .. } => popup_at(
-            f,
-            overwrite_popup_rect(area),
-            "Overwrite existing project?",
-            &format!("{}\n\nOverwrite [Enter/O]  Cancel [Esc]", path.display()),
-        ),
+        Mode::OverwriteConfirm { path, .. } => {
+            let destination = path.display().to_string();
+            let popup_area = overwrite_popup_rect(area, &destination);
+            let destination = overwrite_destination(&destination, popup_area);
+            popup_at(
+                f,
+                popup_area,
+                "Overwrite existing project?",
+                &format!("{destination}\n\nOverwrite [Enter/O]  Cancel [Esc]"),
+            )
+        }
         Mode::OpenConfirm(path) => popup(
             f,
             area,

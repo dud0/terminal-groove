@@ -16,6 +16,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 use std::path::PathBuf;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(super) fn render_trigger_popup(
     f: &mut ratatui::Frame,
@@ -1025,8 +1026,52 @@ pub(super) fn quit_popup_rect(area: Rect) -> Rect {
     }
 }
 
-pub(super) fn overwrite_popup_rect(area: Rect) -> Rect {
-    compact_popup_rect(area, 76, 5)
+pub(super) fn overwrite_popup_rect(area: Rect, destination: &str) -> Rect {
+    const WIDTH: u16 = 76;
+    const FIXED_HEIGHT: u16 = 4;
+    let width = WIDTH.min(area.width);
+    let inner_width = usize::from(width.saturating_sub(2));
+    let destination_lines = wrapped_line_count(destination, inner_width);
+    let height = destination_lines
+        .saturating_add(FIXED_HEIGHT)
+        .min(area.height);
+    compact_popup_rect(area, width, height)
+}
+
+pub(super) fn overwrite_destination(destination: &str, popup_area: Rect) -> String {
+    let inner_width = usize::from(popup_area.width.saturating_sub(2));
+    let destination_lines = usize::from(popup_area.height.saturating_sub(4).max(1));
+    truncate_to_width(destination, inner_width.saturating_mul(destination_lines))
+}
+
+fn wrapped_line_count(text: &str, width: usize) -> u16 {
+    if width == 0 {
+        return 1;
+    }
+    text.lines()
+        .map(|line| UnicodeWidthStr::width(line).div_ceil(width).max(1))
+        .sum::<usize>()
+        .min(usize::from(u16::MAX)) as u16
+}
+
+fn truncate_to_width(text: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_owned();
+    }
+    let ellipsis_width = UnicodeWidthChar::width('…').unwrap_or(1);
+    let limit = width.saturating_sub(ellipsis_width);
+    let mut result = String::new();
+    let mut used = 0usize;
+    for character in text.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used.saturating_add(character_width) > limit {
+            break;
+        }
+        result.push(character);
+        used += character_width;
+    }
+    result.push('…');
+    result
 }
 
 pub(super) fn tempo_popup_rect(area: Rect) -> Rect {

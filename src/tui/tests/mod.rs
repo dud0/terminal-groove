@@ -1071,6 +1071,15 @@ fn compact_dialog_rectangles_fit_their_content() {
     assert_eq!(generator_popup_rect(area), Rect::new(31, 9, 58, 15));
     assert_eq!(swing_popup_rect(area), Rect::new(36, 14, 48, 6));
     assert_eq!(probability_popup_rect(area), Rect::new(36, 14, 48, 6));
+    assert_eq!(
+        overwrite_popup_rect(area, "/tmp/existing.groove.json"),
+        Rect::new(22, 14, 76, 5)
+    );
+    let long_destination = "x".repeat(150);
+    assert_eq!(
+        overwrite_popup_rect(area, &long_destination),
+        Rect::new(22, 13, 76, 7)
+    );
 
     assert_eq!(
         trigger_popup_rect(Rect::new(0, 0, 200, 50)),
@@ -1651,6 +1660,20 @@ fn overwrite_confirmation_renders_destination_and_controls() {
 
     assert!(screen.contains("Overwrite existing project?"));
     assert!(screen.contains(".projects/existing.groove.json"));
+    assert!(screen.contains("Overwrite [Enter/O]"));
+    assert!(screen.contains("Cancel [Esc]"));
+}
+
+#[test]
+fn overwrite_confirmation_keeps_controls_visible_for_long_destinations() {
+    let mut app = App::new(Project::new(), None);
+    app.mode = Mode::OverwriteConfirm {
+        path: PathBuf::from(format!("/{}", "x".repeat(5_000))),
+        input: "long".into(),
+    };
+
+    let screen = rendered(&app, 120, 34);
+
     assert!(screen.contains("Overwrite [Enter/O]"));
     assert!(screen.contains("Cancel [Esc]"));
 }
