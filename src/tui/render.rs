@@ -36,7 +36,7 @@ pub(super) fn scope_name(scope: Scope) -> &'static str {
 
 pub(super) fn mode_name(mode: &Mode) -> String {
     match mode {
-        Mode::Navigation => "Navigation".into(),
+        Mode::Navigation => "Sequencer".into(),
         Mode::PatternDialog => "Pattern dialog".into(),
         Mode::GeneratorDialog(_) => "Pattern idea generator".into(),
         Mode::ParameterEdit(parameter) => {
@@ -83,30 +83,31 @@ const HELP_TEXT: &str =
       Ctrl+Q quit · Ctrl+Z undo · Ctrl+Y redo · Ctrl+C/X/V copy/cut/paste selected step
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
-NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
-           ~ select global row · Shift+1..9 select track · Enter toggle/insert · Backspace/Delete clear
+SEQUENCER  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
+           Tab parameters · ~ globals · Shift+1..9 tracks · Enter event · Del clear · Esc BASE
            g pattern generator · o audition selected step
            Shift+Delete clear selected track
-EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
+EVENTS & TRACKS  m mute · l length · Shift+D double
                  A accent/default · Shift+G Bass/Lead slide · Shift+T microtiming/condition/retrigger · Shift+S swing · Shift+Q probability
                  Hat 1/2 Closed/Open · Tom 1/2/3 Low/Medium/High · 0 clear recipe locks
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
 PARAMETERS  v level · n pan · y delay send · b reverb send
-           Tab PARAMS/EFFECTS · EFFECTS: d drive · t tone · x distortion mix
+           Tab/Shift+Tab sequencer mode · Shift+← PARAMS · Shift+→ EFFECTS
+           p BASE/LOCK · PageUp/Down step · Shift+PageUp/Down step bank
+           EFFECTS: d drive · t tone · x distortion mix
            EFFECTS: r/e/f/M phaser rate/depth/feedback/mix
            EFFECTS: R rate · q delay · E depth · F feedback · N flanger mix
            Kick: u tune · d decay · a attack
            Snare: u tune · t tone · s snappy · Hat recipes: u tune · d decay
            Tom recipes/Cymbal/Rimshot: u tune · t tone · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
-           Chord/Lead: w osc mix · P pulse · u sub · i pitch LFO
+           Chord/Lead: w osc mix · P pulse · u sub · O noise · i pitch LFO
            Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR
            Chord: h chorus · e spread
-           Parameter edit: PageUp/Down step · Shift+L LFO · [`/1–9/0] percent
-           ↑/↓ adjust · ←/→ switch parameter · Enter/Esc finish · Backspace/Delete remove lock/LFO
+           Shift+L LFO · [`/1–9/0] percent · ↑/↓ adjust · ←/→ switch parameter
+           Enter/Esc finish · Backspace/Delete remove lock/LFO
 GLOBAL  t tempo · y delay division · f feedback · r reverb time
-        b reverb tone · p pre-delay · m reverb return · k key · s scale · ←/→ select · ↑/↓ adjust
-Help is available from navigation and track editors with ?; Esc in navigation resets scope to BASE.";
+        b reverb tone · p pre-delay · m reverb return · k key · s scale · ←/→ select · ↑/↓ adjust";
 
 pub(super) fn track_label(t: &crate::model::Track) -> String {
     if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
@@ -373,7 +374,7 @@ const SUB_OSCILLATOR_PARAMETER: ParameterDescriptor = ParameterDescriptor {
 const NOISE_PARAMETER: ParameterDescriptor = ParameterDescriptor {
     id: ParameterId::Noise,
     label: "Noise",
-    shortcut: "o",
+    shortcut: "O",
     group: ParameterGroup::Instrument,
 };
 const PITCH_PARAMETER: ParameterDescriptor = ParameterDescriptor {
@@ -641,7 +642,7 @@ const CHORD_PARAMETERS: [ParameterDescriptor; 18] = [
     ParameterDescriptor {
         id: ParameterId::Noise,
         label: "Noise",
-        shortcut: "o",
+        shortcut: "O",
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
@@ -2193,9 +2194,12 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             ""
         };
         status_lines.push(Line::from(format!(
-            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..9] track{percentage_hint}{lfo_hint}  [Enter/Esc] finish{removal_hint}",
+            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..9] track{percentage_hint}{lfo_hint}  [Tab/Enter/Esc] finish{removal_hint}",
             physical_parameter_readout(a, track, a.step, parameter),
         )));
+        status_lines.push(Line::from(
+            "[←/→] control  [Shift+←/→] PARAMS/EFFECTS  [Shift+PageUp/Down] step bank",
+        ));
     } else if matches!(a.mode, Mode::LfoEdit { .. }) {
         status_lines.push(Line::from(
             "Track-level LFO · [←/→] field  [↑/↓] adjust  [Shift+↑/↓] ±10% fields  [`/1–9/0] phase/free rate/depth  [Backspace/Del] remove  [Enter/Esc] finish",

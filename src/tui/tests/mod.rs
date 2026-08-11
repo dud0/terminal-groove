@@ -65,6 +65,11 @@ fn parameter_shortcuts_follow_track_context() {
         parameter_shortcut(TrackKind::Chord, 'R'),
         Some(ParameterId::Resonance)
     );
+    assert_eq!(
+        parameter_shortcut(TrackKind::Chord, 'O'),
+        Some(ParameterId::Noise)
+    );
+    assert_eq!(parameter_shortcut(TrackKind::Chord, 'o'), None);
     assert_eq!(parameter_shortcut(TrackKind::Chord, 't'), None);
 }
 #[test]
@@ -115,16 +120,36 @@ fn parameter_banks_are_contextual_and_model_compatible() {
     }));
 }
 #[test]
-fn tab_switches_parameter_bank_and_selects_first_control_while_editing() {
+fn parameter_mode_enters_the_remembered_bank_and_bank_selection_activates_its_first_control() {
     let mut app = App::new(Project::new(), None);
     app.row = 1;
-    app.mode = Mode::ParameterEdit(ParameterId::Level);
-    toggle_parameter_bank(&mut app);
+    enter_parameter_mode(&mut app);
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Level));
+
+    select_parameter_bank(&mut app, ParameterBank::Effects);
     assert_eq!(app.parameter_bank, ParameterBank::Effects);
     assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::DistortionDrive));
-    toggle_parameter_bank(&mut app);
+
+    finish_parameter_edit(&mut app);
+    enter_parameter_mode(&mut app);
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::DistortionDrive));
+
+    select_parameter_bank(&mut app, ParameterBank::Params);
     assert_eq!(app.parameter_bank, ParameterBank::Params);
     assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Level));
+}
+
+#[test]
+fn parameter_mode_requires_a_selected_track_and_global_jump_preserves_the_bank() {
+    let mut app = App::new(Project::new(), None);
+    app.parameter_bank = ParameterBank::Effects;
+    enter_parameter_mode(&mut app);
+    assert_eq!(app.mode, Mode::Navigation);
+    assert_eq!(app.status, "Select a track to edit parameters");
+
+    app.row = 1;
+    select_global(&mut app);
+    assert_eq!(app.parameter_bank, ParameterBank::Effects);
 }
 
 #[test]
@@ -633,10 +658,12 @@ fn waveform_editor_switches_between_its_two_values() {
 }
 
 #[test]
-fn parameter_editing_passes_audition_key_to_global_handler() {
+fn parameter_editing_passes_only_shared_transport_and_audition_keys() {
     assert!(parameter_edit_passthrough(KeyCode::Char('o')));
-    assert!(parameter_edit_passthrough(KeyCode::Char('A')));
-    assert!(parameter_edit_passthrough(KeyCode::Char('G')));
+    assert!(parameter_edit_passthrough(KeyCode::Char(' ')));
+    assert!(parameter_edit_passthrough(KeyCode::Char('.')));
+    assert!(!parameter_edit_passthrough(KeyCode::Char('A')));
+    assert!(!parameter_edit_passthrough(KeyCode::Char('G')));
 }
 
 #[test]
@@ -928,10 +955,11 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
     let screen = rendered(&app, 240, 60);
 
     assert!(screen.contains("PATTERNS  Ctrl+P open dialog"));
-    assert!(screen.contains("NAVIGATION  ↑/↓ rows"));
+    assert!(screen.contains("SEQUENCER  ↑/↓ rows"));
     assert!(screen.contains("Shift+Delete clear selected track"));
-    assert!(screen.contains("EVENTS & TRACKS  p BASE/LOCK"));
+    assert!(screen.contains("EVENTS & TRACKS  m mute"));
     assert!(screen.contains("PARAMETERS  v level"));
+    assert!(screen.contains("Shift+← PARAMS · Shift+→ EFFECTS"));
     assert!(screen.contains("GLOBAL  t tempo"));
     assert!(screen.contains("m reverb return"));
     assert!(screen.contains("Ctrl+Shift+S save as"));
@@ -942,7 +970,7 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
 
     let minimum_screen = rendered(&app, 120, 34);
     assert!(minimum_screen.contains("GLOBAL  t tempo"));
-    assert!(minimum_screen.contains("Esc in navigation resets scope to BASE"));
+    assert!(minimum_screen.contains("Esc BASE"));
 }
 
 #[test]
@@ -1762,7 +1790,7 @@ fn input_octave_adjustment_clamps_to_supported_range() {
 
 #[test]
 fn every_overlay_mode_has_a_visible_name() {
-    assert_eq!(mode_name(&Mode::Navigation), "Navigation");
+    assert_eq!(mode_name(&Mode::Navigation), "Sequencer");
     assert_eq!(
         mode_name(&Mode::TempoInput(String::new())),
         "Tempo numeric input"

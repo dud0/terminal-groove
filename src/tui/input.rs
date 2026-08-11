@@ -171,11 +171,14 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         }
         return Ok(());
     }
-    if matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_))
-        && a.row > 0
-        && matches!(k.code, KeyCode::Tab | KeyCode::BackTab)
+    if matches!(k.code, KeyCode::Tab | KeyCode::BackTab)
+        && matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_))
     {
-        toggle_parameter_bank(a);
+        if a.mode == Mode::Navigation {
+            enter_parameter_mode(a);
+        } else {
+            finish_parameter_edit(a);
+        }
         return Ok(());
     }
     if matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_)) && global_jump(k) {
@@ -209,17 +212,13 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     if matches!(a.mode, Mode::GlobalEdit(_)) && handle_global_key(a, audio, k)? {
         return Ok(());
     }
+    if handle_shared_key(a, audio, k) {
+        return Ok(());
+    }
+    if a.mode != Mode::Navigation {
+        return Ok(());
+    }
     match k.code {
-        KeyCode::Char('?') => a.mode = Mode::Help,
-        KeyCode::Char(' ') => {
-            if audio.send(AudioCommand::PlayPause).is_ok() {
-                a.playing = !a.playing;
-                a.paused = !a.playing;
-                a.status = if a.playing { "Playing" } else { "Paused" }.into()
-            } else {
-                a.status = "Audio command queue full".into()
-            }
-        }
         KeyCode::Char('g') => {
             let track = a.row.saturating_sub(1).min(TRACK_COUNT - 1);
             let defaults = GeneratorConfig::default();
@@ -241,29 +240,6 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 field: 0,
             });
             a.status = "Generator ready".into();
-        }
-        KeyCode::Char('.') => {
-            if audio.send(AudioCommand::Stop).is_ok() {
-                a.playing = false;
-                a.paused = false;
-                a.playheads = [None; TRACK_COUNT];
-                a.status = "Stopped and reset".into()
-            } else {
-                a.status = "Audio command queue full".into()
-            }
-        }
-        KeyCode::Char('o') if a.row > 0 => {
-            if audio
-                .send(AudioCommand::Audition {
-                    track: (a.row - 1) as u8,
-                    step: a.step as u8,
-                })
-                .is_ok()
-            {
-                a.status = "Auditioning selection".into()
-            } else {
-                a.status = "Audio command queue full".into()
-            }
         }
         KeyCode::Up => {
             move_step_vertical(a, false);
@@ -312,14 +288,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 sync_project(a, audio);
             }
         }
-        KeyCode::Char('p') if a.row > 0 => {
-            a.scope = if a.scope == Scope::Base {
-                Scope::Lock
-            } else {
-                Scope::Base
-            }
-        }
-        KeyCode::Char('m') if a.row > 0 && a.parameter_bank == ParameterBank::Params => {
+        KeyCode::Char('m') if a.row > 0 => {
             let ti = a.row - 1;
             if audio.available_commands() == 0 {
                 a.status = "Audio command queue full; edit rejected".into();
@@ -394,11 +363,6 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         }
         KeyCode::Char('[') if is_pitched_track_row(a.row) => change_octave(a, audio, -1),
         KeyCode::Char(']') if is_pitched_track_row(a.row) => change_octave(a, audio, 1),
-        KeyCode::Char(c) if a.row > 0 && active_parameter_shortcut(a, c).is_some() => {
-            if let Some(parameter) = active_parameter_shortcut(a, c) {
-                enter_parameter_edit(a, parameter);
-            }
-        }
         KeyCode::Char('t') if is_pitched_track_row(a.row) => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.toggle_tie(track, step)) {
@@ -422,6 +386,51 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         _ => {}
     }
     Ok(())
+}
+
+fn handle_shared_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> bool {
+    match k.code {
+        KeyCode::Char('?') => {
+            a.mode = Mode::Help;
+            true
+        }
+        KeyCode::Char(' ') => {
+            if audio.send(AudioCommand::PlayPause).is_ok() {
+                a.playing = !a.playing;
+                a.paused = !a.playing;
+                a.status = if a.playing { "Playing" } else { "Paused" }.into();
+            } else {
+                a.status = "Audio command queue full".into();
+            }
+            true
+        }
+        KeyCode::Char('.') => {
+            if audio.send(AudioCommand::Stop).is_ok() {
+                a.playing = false;
+                a.paused = false;
+                a.playheads = [None; TRACK_COUNT];
+                a.status = "Stopped and reset".into();
+            } else {
+                a.status = "Audio command queue full".into();
+            }
+            true
+        }
+        KeyCode::Char('o') if a.row > 0 => {
+            if audio
+                .send(AudioCommand::Audition {
+                    track: (a.row - 1) as u8,
+                    step: a.step as u8,
+                })
+                .is_ok()
+            {
+                a.status = "Auditioning selection".into();
+            } else {
+                a.status = "Audio command queue full".into();
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn move_step(a: &mut App, forward: bool) {
@@ -474,7 +483,6 @@ pub(super) fn select_global(a: &mut App) {
     a.editor.end_coalescing();
     a.row = 0;
     a.scope = Scope::Base;
-    a.parameter_bank = ParameterBank::Params;
     a.mode = Mode::Navigation;
 }
 
@@ -1138,12 +1146,16 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
     }
     match k.code {
         KeyCode::PageUp | KeyCode::PageDown => {
-            move_step_page(a, k.code == KeyCode::PageDown);
+            if k.modifiers.contains(KeyModifiers::SHIFT) {
+                move_step_bank(a, k.code == KeyCode::PageDown);
+            } else {
+                move_step_page(a, k.code == KeyCode::PageDown);
+            }
             Ok(true)
         }
         KeyCode::Left => {
             if k.modifiers.contains(KeyModifiers::SHIFT) {
-                move_step_bank(a, false);
+                select_parameter_bank(a, ParameterBank::Params);
             } else {
                 move_parameter_editor(a, false);
             }
@@ -1151,7 +1163,7 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
         }
         KeyCode::Right => {
             if k.modifiers.contains(KeyModifiers::SHIFT) {
-                move_step_bank(a, true);
+                select_parameter_bank(a, ParameterBank::Effects);
             } else {
                 move_parameter_editor(a, true);
             }
@@ -1309,9 +1321,7 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
             Ok(true)
         }
         KeyCode::Enter | KeyCode::Esc => {
-            a.editor.end_coalescing();
-            a.mode = Mode::Navigation;
-            a.status = "Parameter editing finished".into();
+            finish_parameter_edit(a);
             Ok(true)
         }
         KeyCode::Backspace | KeyCode::Delete if parameter == ParameterId::Pitch => {
@@ -1365,11 +1375,7 @@ pub(super) const fn parameter_upper_bound(parameter: ParameterId) -> u8 {
 pub(super) fn parameter_edit_passthrough(key: KeyCode) -> bool {
     matches!(
         key,
-        KeyCode::Char(' ')
-            | KeyCode::Char('.')
-            | KeyCode::Char('o')
-            | KeyCode::Char('A')
-            | KeyCode::Char('G')
+        KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o')
     )
 }
 
@@ -2009,12 +2015,26 @@ pub(super) fn active_parameter_shortcut(a: &App, c: char) -> Option<ParameterId>
         .map(|descriptor| descriptor.id)
 }
 
-pub(super) fn toggle_parameter_bank(a: &mut App) {
+pub(super) fn enter_parameter_mode(a: &mut App) {
+    if a.row == 0 {
+        a.status = "Select a track to edit parameters".into();
+        return;
+    }
+    let parameter =
+        visible_parameter_descriptors(a.parameter_bank, a.editor.project.tracks[a.row - 1].kind)[0]
+            .id;
+    enter_parameter_edit(a, parameter);
+}
+
+pub(super) fn finish_parameter_edit(a: &mut App) {
     a.editor.end_coalescing();
-    a.parameter_bank = match a.parameter_bank {
-        ParameterBank::Params => ParameterBank::Effects,
-        ParameterBank::Effects => ParameterBank::Params,
-    };
+    a.mode = Mode::Navigation;
+    a.status = "Parameter editing finished".into();
+}
+
+pub(super) fn select_parameter_bank(a: &mut App, bank: ParameterBank) {
+    a.editor.end_coalescing();
+    a.parameter_bank = bank;
     a.parameter_recipe = DrumRecipeSlot::ONE;
     if let Mode::ParameterEdit(_) = a.mode {
         let parameter = visible_parameter_descriptors(
