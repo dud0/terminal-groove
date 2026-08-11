@@ -1046,6 +1046,17 @@ fn parameter_editor_hints_match_scope_and_parameter_capabilities() {
 }
 
 #[test]
+fn parameter_navigation_hints_fit_the_two_line_status_area() {
+    let mut app = App::new(Project::new(), None);
+    app.row = 1;
+    app.mode = Mode::ParameterEdit(ParameterId::Level);
+
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("S+←→ bank"));
+    assert!(screen.contains("S+Pg bank"));
+}
+
+#[test]
 fn lfo_modal_and_fader_badge_render_at_minimum_size() {
     let mut project = Project::new();
     project.tracks[SYNTH_TRACK_START].lfos.set(

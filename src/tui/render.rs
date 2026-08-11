@@ -2193,13 +2193,13 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         } else {
             ""
         };
+        let extended_hints =
+            (chunks[4].width >= 180).then(|| format!("{percentage_hint}{lfo_hint}{removal_hint}"));
         status_lines.push(Line::from(format!(
-            "{} · [↑/↓] ±1  [Shift+↑/↓] ±10  [PageUp/Down] step  [Shift+1..9] track{percentage_hint}{lfo_hint}  [Tab/Enter/Esc] finish{removal_hint}",
+            "{} · ↑↓ ±1/10 · ←→ param · S+←→ bank · Pg step · S+Pg bank · Tab/Esc{}",
             physical_parameter_readout(a, track, a.step, parameter),
+            extended_hints.unwrap_or_default(),
         )));
-        status_lines.push(Line::from(
-            "[←/→] control  [Shift+←/→] PARAMS/EFFECTS  [Shift+PageUp/Down] step bank",
-        ));
     } else if matches!(a.mode, Mode::LfoEdit { .. }) {
         status_lines.push(Line::from(
             "Track-level LFO · [←/→] field  [↑/↓] adjust  [Shift+↑/↓] ±10% fields  [`/1–9/0] phase/free rate/depth  [Backspace/Del] remove  [Enter/Esc] finish",
