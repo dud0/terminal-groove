@@ -14,6 +14,28 @@ use std::sync::{Arc, atomic::Ordering};
 
 const BASS_OUTPUT_GAIN: f32 = 0.8;
 
+#[derive(Default)]
+struct MixBus {
+    dry_l: f32,
+    dry_r: f32,
+    delay_l: f32,
+    delay_r: f32,
+    reverb_l: f32,
+    reverb_r: f32,
+}
+
+impl MixBus {
+    #[inline]
+    fn add(&mut self, left: f32, right: f32, delay_send: f32, reverb_send: f32, gain: f32) {
+        self.dry_l += left * gain;
+        self.dry_r += right * gain;
+        self.delay_l += left * delay_send * gain;
+        self.delay_r += right * delay_send * gain;
+        self.reverb_l += left * reverb_send * gain;
+        self.reverb_r += right * reverb_send * gain;
+    }
+}
+
 /// The SH-101 filter is calibrated for 50% keyboard tracking around C3.  A
 /// reference-centered mapping keeps the existing cutoff control useful while
 /// making higher notes naturally brighter and lower notes darker.
@@ -571,12 +593,7 @@ impl Renderer {
             self.advance_scheduled();
         }
         self.advance_chord_arpeggios();
-        let mut dry_l = 0.0;
-        let mut dry_r = 0.0;
-        let mut delay_l = 0.0;
-        let mut delay_r = 0.0;
-        let mut reverb_l = 0.0;
-        let mut reverb_r = 0.0;
+        let mut mix = MixBus::default();
         for i in 0..super::DRUM_TRACK_COUNT {
             let (x, delay_send, reverb_send, pan) = Self::render_drum_input(
                 &mut self.drums[i],
@@ -596,12 +613,7 @@ impl Renderer {
                 self.sidechain
                     .process_stereo(effect_l * gain, effect_r * gain);
             }
-            dry_l += effect_l * pl * gain;
-            dry_r += effect_r * pr * gain;
-            delay_l += effect_l * pl * delay_send * gain;
-            delay_r += effect_r * pr * delay_send * gain;
-            reverb_l += effect_l * pl * reverb_send * gain;
-            reverb_r += effect_r * pr * reverb_send * gain;
+            mix.add(effect_l * pl, effect_r * pr, delay_send, reverb_send, gain);
         }
         let duck_gain = self.sidechain.current_gain();
         for i in 0..super::DRUM_TRACK_COUNT {
@@ -622,12 +634,7 @@ impl Renderer {
                 self.preview_lfo_offsets[i][ParameterId::Level as usize],
             ) / 100.0;
             let gain = level.powi(2);
-            dry_l += effect_l * pl * gain;
-            dry_r += effect_r * pr * gain;
-            delay_l += effect_l * pl * delay_send * gain;
-            delay_r += effect_r * pr * delay_send * gain;
-            reverb_l += effect_l * pl * reverb_send * gain;
-            reverb_r += effect_r * pr * reverb_send * gain;
+            mix.add(effect_l * pl, effect_r * pr, delay_send, reverb_send, gain);
         }
         for i in [0, 2] {
             let track = i + super::SYNTH_TRACK_START;
@@ -644,12 +651,13 @@ impl Renderer {
                 self.lfo_offsets[track][ParameterId::Level as usize],
             ) / 100.0;
             let gain = self.mute[track].next_value() * level.powi(2);
-            dry_l += effect_l * duck_gain * pl * gain;
-            dry_r += effect_r * duck_gain * pr * gain;
-            delay_l += effect_l * duck_gain * pl * ds * gain;
-            delay_r += effect_r * duck_gain * pr * ds * gain;
-            reverb_l += effect_l * duck_gain * pl * rs * gain;
-            reverb_r += effect_r * duck_gain * pr * rs * gain;
+            mix.add(
+                effect_l * duck_gain * pl,
+                effect_r * duck_gain * pr,
+                ds,
+                rs,
+                gain,
+            );
             if !self.preview_activity[track] {
                 continue;
             }
@@ -669,12 +677,7 @@ impl Renderer {
                 self.preview_lfo_offsets[track][ParameterId::Level as usize],
             ) / 100.0;
             let gain = level.powi(2);
-            dry_l += effect_l * pl * gain;
-            dry_r += effect_r * pr * gain;
-            delay_l += effect_l * pl * ds * gain;
-            delay_r += effect_r * pr * ds * gain;
-            reverb_l += effect_l * pl * rs * gain;
-            reverb_r += effect_r * pr * rs * gain;
+            mix.add(effect_l * pl, effect_r * pr, ds, rs, gain);
         }
         // Chord groups overlap during release.  Keep their post-effect mixer
         // controls separate so a new lock cannot change an older tail's level
@@ -706,12 +709,7 @@ impl Renderer {
             let (chorus_l, chorus_r) = self.chord.choruses[group].process_stereo(left, right);
             let (effect_l, effect_r) = self.chord_effects[group].process_stereo(chorus_l, chorus_r);
             let gain = chord_mute * duck_gain * level.powi(2);
-            dry_l += effect_l * gain;
-            dry_r += effect_r * gain;
-            delay_l += effect_l * delay_send * gain;
-            delay_r += effect_r * delay_send * gain;
-            reverb_l += effect_l * reverb_send * gain;
-            reverb_r += effect_r * reverb_send * gain;
+            mix.add(effect_l, effect_r, delay_send, reverb_send, gain);
         }
 
         if self.preview_activity[chord_track] {
@@ -743,21 +741,16 @@ impl Renderer {
                 let (effect_l, effect_r) =
                     self.preview_chord_effects[group].process_stereo(chorus_l, chorus_r);
                 let gain = level.powi(2);
-                dry_l += effect_l * gain;
-                dry_r += effect_r * gain;
-                delay_l += effect_l * delay_send * gain;
-                delay_r += effect_r * delay_send * gain;
-                reverb_l += effect_l * reverb_send * gain;
-                reverb_r += effect_r * reverb_send * gain;
+                mix.add(effect_l, effect_r, delay_send, reverb_send, gain);
             }
         }
 
-        let (dl, dr) = self.delay.process(delay_l, delay_r);
-        let (rl, rr) = self.reverb.process(reverb_l, reverb_r);
+        let (dl, dr) = self.delay.process(mix.delay_l, mix.delay_r);
+        let (rl, rr) = self.reverb.process(mix.reverb_l, mix.reverb_r);
         let reverb_return = self.reverb_return.next_value();
         let (l, r) = self.dc.process(
-            dry_l + dl * 0.45 + rl * reverb_return,
-            dry_r + dr * 0.45 + rr * reverb_return,
+            mix.dry_l + dl * 0.45 + rl * reverb_return,
+            mix.dry_r + dr * 0.45 + rr * reverb_return,
         );
         if !(l.is_finite() && r.is_finite()) {
             self.status.non_finite.store(true, Ordering::Release);
@@ -786,7 +779,23 @@ impl Renderer {
 
 #[cfg(test)]
 mod tests {
-    use super::sh101_keyboard_tracked_cutoff;
+    use super::{MixBus, sh101_keyboard_tracked_cutoff};
+
+    #[test]
+    fn mix_bus_routes_dry_and_send_gains_without_state_or_allocation() {
+        let mut mix = MixBus::default();
+        mix.add(0.5, -0.25, 0.4, 0.2, 0.8);
+        for (actual, expected) in [
+            (mix.dry_l, 0.4),
+            (mix.dry_r, -0.2),
+            (mix.delay_l, 0.16),
+            (mix.delay_r, -0.08),
+            (mix.reverb_l, 0.08),
+            (mix.reverb_r, -0.04),
+        ] {
+            assert!((actual - expected).abs() < f32::EPSILON * 2.0);
+        }
+    }
 
     #[test]
     fn sh101_keyboard_tracking_is_centered_on_c3_and_moves_cutoff_by_half_octaves() {
