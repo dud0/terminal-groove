@@ -589,6 +589,11 @@ mod tests {
                 feedback: crate::model::Percent::new(90).unwrap(),
                 mix: crate::model::Percent::new(100).unwrap(),
             },
+            bit_crusher: crate::model::BitCrusherParameters {
+                bits: crate::model::Percent::new(100).unwrap(),
+                rate: crate::model::Percent::new(100).unwrap(),
+                mix: crate::model::Percent::new(100).unwrap(),
+            },
         };
         chain.configure(effects, ParameterLocks::default(), 0);
         let mut stereo = false;
@@ -598,6 +603,35 @@ mod tests {
             stereo |= (left - right).abs() > 0.000_001;
         }
         assert!(stereo);
+    }
+
+    #[test]
+    fn bit_crusher_mappings_cover_the_documented_range() {
+        assert_eq!(bit_crusher_bit_depth(0.0), 16);
+        assert_eq!(bit_crusher_bit_depth(50.0), 9);
+        assert_eq!(bit_crusher_bit_depth(100.0), 2);
+        assert_eq!(bit_crusher_rate_divisor(0.0), 1.0);
+        assert!((bit_crusher_rate_divisor(50.0) - 8.0).abs() < 0.000_001);
+        assert!((bit_crusher_rate_divisor(100.0) - 64.0).abs() < 0.000_01);
+    }
+
+    #[test]
+    fn bit_crusher_quantizes_and_holds_stereo_until_the_next_capture() {
+        let mut effects = TrackEffects::default();
+        effects.bit_crusher.bits = crate::model::Percent::new(100).unwrap();
+        effects.bit_crusher.rate = crate::model::Percent::new(100).unwrap();
+        effects.bit_crusher.mix = crate::model::Percent::new(100).unwrap();
+        let mut chain = TrackEffectChain::new(48_000);
+        chain.configure(effects, ParameterLocks::default(), 0);
+
+        assert_eq!(chain.process_stereo(0.8, -0.8), (1.0, -1.0));
+        for _ in 0..62 {
+            assert_eq!(chain.process_stereo(0.1, -0.1), (1.0, -1.0));
+        }
+        assert!(chain.is_active());
+        assert_eq!(chain.process_stereo(0.0, 0.0), (0.0, 0.0));
+        assert!(!chain.is_active());
+        assert_eq!(TrackEffectChain::bit_crush_sample(f32::NAN, 2), 0.0);
     }
 
     #[test]
@@ -859,6 +893,11 @@ mod tests {
                 depth: crate::model::Percent::new(70).unwrap(),
                 feedback: crate::model::Percent::new(65).unwrap(),
                 mix: crate::model::Percent::new(55).unwrap(),
+            },
+            bit_crusher: crate::model::BitCrusherParameters {
+                bits: crate::model::Percent::new(70).unwrap(),
+                rate: crate::model::Percent::new(45).unwrap(),
+                mix: crate::model::Percent::new(50).unwrap(),
             },
         };
         let mut first = TrackEffectChain::new(8_000);

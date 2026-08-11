@@ -40,6 +40,7 @@ mod tests {
                 feedback: Percent::new(65).unwrap(),
                 mix: Percent::new(60).unwrap(),
             },
+            bit_crusher: Default::default(),
         };
         let lfo = Some(LfoConfig {
             enabled: true,

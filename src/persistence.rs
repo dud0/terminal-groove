@@ -282,6 +282,9 @@ mod tests {
         assert_eq!(value["tracks"][7]["instrument"]["sub_oscillator"], 0);
         assert_eq!(value["tracks"][0]["effects"]["flanger"]["rate"], 25);
         assert_eq!(value["tracks"][0]["effects"]["flanger"]["delay"], 18);
+        assert_eq!(value["tracks"][0]["effects"]["bit_crusher"]["bits"], 50);
+        assert_eq!(value["tracks"][0]["effects"]["bit_crusher"]["rate"], 50);
+        assert_eq!(value["tracks"][0]["effects"]["bit_crusher"]["mix"], 0);
         assert_eq!(value["tracks"][8]["kind"], "lead");
         assert_eq!(value["tracks"][8]["name"], "Lead");
         assert_eq!(value["tracks"][8]["reverb_send"], 20);
@@ -605,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn current_schema_defaults_missing_flanger_and_effect_schema_is_strict() {
+    fn current_schema_defaults_missing_effects_and_effect_schema_is_strict() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("effects.groove.json");
         let mut value = serde_json::to_value(Project::new()).unwrap();
@@ -613,6 +616,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("flanger");
+        value["tracks"][0]["effects"]
+            .as_object_mut()
+            .unwrap()
+            .remove("bit_crusher");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.format_version, 21);
@@ -620,9 +627,14 @@ mod tests {
             loaded.tracks[0].effects.flanger,
             crate::model::FlangerParameters::default()
         );
+        assert_eq!(
+            loaded.tracks[0].effects.bit_crusher,
+            crate::model::BitCrusherParameters::default()
+        );
         save_atomic(&path, &loaded).unwrap();
         let saved = fs::read_to_string(&path).unwrap();
         assert!(saved.contains("\"flanger\""));
+        assert!(saved.contains("\"bit_crusher\""));
 
         let mut value = serde_json::to_value(Project::new()).unwrap();
         value["tracks"][0]["effects"]["distortion"]["drive"] = 101.into();
@@ -637,6 +649,17 @@ mod tests {
         value["tracks"][0]["effects"]["phaser"] =
             serde_json::to_value(crate::model::PhaserParameters::default()).unwrap();
         value["tracks"][0]["effects"]["flanger"]["unexpected"] = 1.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+
+        value["tracks"][0]["effects"]["flanger"] =
+            serde_json::to_value(crate::model::FlangerParameters::default()).unwrap();
+        value["tracks"][0]["effects"]["bit_crusher"]["bits"] = 101.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+
+        value["tracks"][0]["effects"]["bit_crusher"]["bits"] = 50.into();
+        value["tracks"][0]["effects"]["bit_crusher"]["unexpected"] = 1.into();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
     }
@@ -663,6 +686,46 @@ mod tests {
             load(&path),
             Err(ProjectIoError::Validation { .. })
         ));
+    }
+
+    #[test]
+    fn bit_crusher_settings_and_locks_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bit-crusher.groove.json");
+        let mut project = Project::new();
+        project.tracks[0].effects.bit_crusher = crate::model::BitCrusherParameters {
+            bits: crate::model::Percent::new(73).unwrap(),
+            rate: crate::model::Percent::new(92).unwrap(),
+            mix: crate::model::Percent::new(48).unwrap(),
+        };
+        project.patterns[0].tracks[0].steps[0] = Some(crate::model::StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
+            locks: crate::model::ParameterLocks::from_pairs([
+                (
+                    crate::model::ParameterId::BitCrusherBits,
+                    crate::model::ParameterValue::Percent(crate::model::Percent::new(80).unwrap()),
+                ),
+                (
+                    crate::model::ParameterId::BitCrusherRate,
+                    crate::model::ParameterValue::Percent(crate::model::Percent::new(65).unwrap()),
+                ),
+                (
+                    crate::model::ParameterId::BitCrusherMix,
+                    crate::model::ParameterValue::Percent(crate::model::Percent::new(55).unwrap()),
+                ),
+            ]),
+        });
+
+        save_atomic(&path, &project).unwrap();
+        assert_eq!(load(&path).unwrap(), project);
+        let saved = fs::read_to_string(path).unwrap();
+        assert!(saved.contains("\"bit_crusher_bits\""));
+        assert!(saved.contains("\"bit_crusher_rate\""));
+        assert!(saved.contains("\"bit_crusher_mix\""));
     }
 
     #[test]

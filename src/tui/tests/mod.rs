@@ -114,7 +114,7 @@ fn parameter_banks_are_contextual_and_model_compatible() {
     }
 
     let effects = effect_descriptors();
-    assert_eq!(effects.len(), 12);
+    assert_eq!(effects.len(), 15);
     assert!(effects.iter().all(|descriptor| {
         descriptor.id.is_valid_for(TrackKind::Kick) && !descriptor.id.supports_lfo(TrackKind::Kick)
     }));
@@ -170,6 +170,48 @@ fn effects_bank_does_not_claim_pitched_note_keys() {
         Some(ParameterId::FlangerDelay)
     );
     assert_eq!(parameter_upper_bound(ParameterId::FlangerFeedback), 90);
+    assert_eq!(
+        active_parameter_shortcut(&app, 'b'),
+        Some(ParameterId::BitCrusherBits)
+    );
+    assert_eq!(
+        active_parameter_shortcut(&app, 's'),
+        Some(ParameterId::BitCrusherRate)
+    );
+    assert_eq!(
+        active_parameter_shortcut(&app, 'm'),
+        Some(ParameterId::BitCrusherMix)
+    );
+}
+
+#[test]
+fn bit_crusher_readouts_show_physical_reduction() {
+    let mut app = App::new(Project::new(), None);
+    app.row = 1;
+    assert_eq!(
+        physical_parameter_readout(&app, 0, 0, ParameterId::BitCrusherBits),
+        "9-bit quantization · BASE"
+    );
+    assert_eq!(
+        physical_parameter_readout(&app, 0, 0, ParameterId::BitCrusherRate),
+        "÷8.0 sample rate · BASE"
+    );
+    assert_eq!(
+        physical_parameter_readout(&app, 0, 0, ParameterId::BitCrusherMix),
+        "0% wet · BASE"
+    );
+}
+
+#[test]
+fn effects_bank_renders_bit_crusher_at_minimum_size() {
+    let mut app = App::new(Project::new(), None);
+    app.row = 1;
+    app.parameter_bank = ParameterBank::Effects;
+    app.mode = Mode::ParameterEdit(ParameterId::BitCrusherBits);
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("BIT CRUSHER"));
+    assert!(screen.contains("9-bit quantization · BASE"));
+    assert!(screen.contains("[b]B"));
 }
 
 #[test]

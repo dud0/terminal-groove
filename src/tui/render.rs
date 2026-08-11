@@ -94,7 +94,7 @@ EVENTS & TRACKS  m mute · l length · Shift+D double
 PARAMETERS  v level · n pan · y delay send · b reverb send
            Tab/Shift+Tab sequencer mode · Shift+← PARAMS · Shift+→ EFFECTS
            p BASE/LOCK · PageUp/Down step · Shift+PageUp/Down step bank
-           EFFECTS: d drive · t tone · x distortion mix
+           EFFECTS: d/t/x distortion drive/tone/mix · b/s/m crusher bits/rate/mix
            EFFECTS: r/e/f/M phaser rate/depth/feedback/mix
            EFFECTS: R rate · q delay · E depth · F feedback · N flanger mix
            Kick: u tune · d decay · a attack
@@ -281,6 +281,7 @@ pub(super) enum ParameterGroup {
     Filter,
     Envelope,
     Distortion,
+    BitCrusher,
     Phaser,
     Flanger,
 }
@@ -293,6 +294,7 @@ impl ParameterGroup {
             Self::Filter => "FILTER",
             Self::Envelope => "ENVELOPE",
             Self::Distortion => "DISTORTION",
+            Self::BitCrusher => "BIT CRUSHER",
             Self::Phaser => "PHASER",
             Self::Flanger => "FLANGER",
         }
@@ -305,6 +307,7 @@ impl ParameterGroup {
             Self::Filter => Color::Magenta,
             Self::Envelope => Color::Yellow,
             Self::Distortion => Color::Red,
+            Self::BitCrusher => Color::LightMagenta,
             Self::Phaser => Color::Blue,
             Self::Flanger => Color::LightBlue,
         }
@@ -758,7 +761,7 @@ pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescr
     }
 }
 
-const EFFECT_PARAMETERS: [ParameterDescriptor; 12] = [
+const EFFECT_PARAMETERS: [ParameterDescriptor; 15] = [
     ParameterDescriptor {
         id: ParameterId::DistortionDrive,
         label: "Drive",
@@ -776,6 +779,24 @@ const EFFECT_PARAMETERS: [ParameterDescriptor; 12] = [
         label: "Mix",
         shortcut: "x",
         group: ParameterGroup::Distortion,
+    },
+    ParameterDescriptor {
+        id: ParameterId::BitCrusherBits,
+        label: "Bits",
+        shortcut: "b",
+        group: ParameterGroup::BitCrusher,
+    },
+    ParameterDescriptor {
+        id: ParameterId::BitCrusherRate,
+        label: "Rate",
+        shortcut: "s",
+        group: ParameterGroup::BitCrusher,
+    },
+    ParameterDescriptor {
+        id: ParameterId::BitCrusherMix,
+        label: "Mix",
+        shortcut: "m",
+        group: ParameterGroup::BitCrusher,
     },
     ParameterDescriptor {
         id: ParameterId::PhaserRate,
@@ -1039,6 +1060,17 @@ pub(super) fn physical_parameter_readout(
                     )
                 }
                 (_, ParameterId::DistortionMix) => format!("{value}% wet"),
+                (_, ParameterId::BitCrusherBits) => {
+                    format!(
+                        "{}-bit quantization",
+                        crate::dsp::bit_crusher_bit_depth(value as f32)
+                    )
+                }
+                (_, ParameterId::BitCrusherRate) => format!(
+                    "÷{:.1} sample rate",
+                    crate::dsp::bit_crusher_rate_divisor(value as f32)
+                ),
+                (_, ParameterId::BitCrusherMix) => format!("{value}% wet"),
                 (_, ParameterId::PhaserRate) => {
                     format!("{:.2} Hz", crate::dsp::exp_map(value, 0.05, 8.0))
                 }
@@ -1734,7 +1766,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             height: 1,
         };
         render_centered(f, descriptor.label, label_area, style);
-        let origin_label = match origin {
+        let full_origin_label = match origin {
             ValueOrigin::Base => "BASE",
             ValueOrigin::Lock => "LOCK",
         };
@@ -1743,6 +1775,18 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             y: content.y + 12,
             width: content.width,
             height: 1,
+        };
+        let shortcut_label = format!("[{}]", descriptor.shortcut);
+        let has_lfo = t.lfos.get(descriptor.id).is_some();
+        let full_label_width =
+            shortcut_label.len() + full_origin_label.len() + usize::from(has_lfo);
+        let origin_label = if full_label_width <= usize::from(shortcut_area.width) {
+            full_origin_label
+        } else {
+            match origin {
+                ValueOrigin::Base => "B",
+                ValueOrigin::Lock => "L",
+            }
         };
         let shortcut_style = if active {
             Style::default()
@@ -1768,14 +1812,10 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         };
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(format!("[{}]", descriptor.shortcut), shortcut_style),
+                Span::styled(shortcut_label, shortcut_style),
                 Span::styled(origin_label, origin_style),
                 Span::styled(
-                    if t.lfos.get(descriptor.id).is_some() {
-                        "~"
-                    } else {
-                        ""
-                    },
+                    if has_lfo { "~" } else { "" },
                     Style::default()
                         .fg(Color::LightCyan)
                         .add_modifier(Modifier::BOLD),

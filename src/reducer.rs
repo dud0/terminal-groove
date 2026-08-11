@@ -2156,6 +2156,20 @@ mod tests {
             editor.project.tracks[0].effects.flanger.mix,
             Percent::new(45).unwrap()
         );
+        editor
+            .set_parameter(
+                0,
+                0,
+                Scope::Base,
+                ParameterId::BitCrusherMix,
+                value(55),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            editor.project.tracks[0].effects.bit_crusher.mix,
+            Percent::new(55).unwrap()
+        );
         editor.toggle_event(0, 0).unwrap();
         editor
             .set_parameter(
@@ -2183,6 +2197,24 @@ mod tests {
                 .locks()
                 .percent(ParameterId::FlangerFeedback)
                 .is_none()
+        );
+        editor
+            .set_parameter(
+                0,
+                0,
+                Scope::Lock,
+                ParameterId::BitCrusherBits,
+                value(80),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            editor.active_steps(0).unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .locks()
+                .percent(ParameterId::BitCrusherBits),
+            Percent::new(80)
         );
     }
 

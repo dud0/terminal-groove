@@ -1142,6 +1142,24 @@ impl Default for FlangerParameters {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BitCrusherParameters {
+    pub bits: Percent,
+    pub rate: Percent,
+    pub mix: Percent,
+}
+
+impl Default for BitCrusherParameters {
+    fn default() -> Self {
+        Self {
+            bits: Percent(50),
+            rate: Percent(50),
+            mix: Percent::ZERO,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrackEffects {
@@ -1151,6 +1169,8 @@ pub struct TrackEffects {
     pub phaser: PhaserParameters,
     #[serde(default)]
     pub flanger: FlangerParameters,
+    #[serde(default)]
+    pub bit_crusher: BitCrusherParameters,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2353,6 +2373,9 @@ pub enum ParameterId {
     FlangerDepth,
     FlangerFeedback,
     FlangerMix,
+    BitCrusherBits,
+    BitCrusherRate,
+    BitCrusherMix,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2374,7 +2397,7 @@ pub enum ParameterValueKind {
 }
 
 impl ParameterId {
-    pub const COUNT: usize = 37;
+    pub const COUNT: usize = 40;
     pub const ALL: [Self; Self::COUNT] = [
         Self::Level,
         Self::Pan,
@@ -2413,6 +2436,9 @@ impl ParameterId {
         Self::FlangerDepth,
         Self::FlangerFeedback,
         Self::FlangerMix,
+        Self::BitCrusherBits,
+        Self::BitCrusherRate,
+        Self::BitCrusherMix,
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -2503,7 +2529,10 @@ impl ParameterId {
             | Self::FlangerDelay
             | Self::FlangerDepth
             | Self::FlangerFeedback
-            | Self::FlangerMix => true,
+            | Self::FlangerMix
+            | Self::BitCrusherBits
+            | Self::BitCrusherRate
+            | Self::BitCrusherMix => true,
             Self::Tune => matches!(
                 kind,
                 TrackKind::Kick
@@ -2574,6 +2603,9 @@ impl ParameterId {
                         | Self::FlangerDepth
                         | Self::FlangerFeedback
                         | Self::FlangerMix
+                        | Self::BitCrusherBits
+                        | Self::BitCrusherRate
+                        | Self::BitCrusherMix
                         | Self::Waveform
                         | Self::Noise
                         | Self::LeadSubMode
@@ -2623,6 +2655,9 @@ impl ParameterId {
             Self::FlangerDepth => "flanger_depth",
             Self::FlangerFeedback => "flanger_feedback",
             Self::FlangerMix => "flanger_mix",
+            Self::BitCrusherBits => "bit_crusher_bits",
+            Self::BitCrusherRate => "bit_crusher_rate",
+            Self::BitCrusherMix => "bit_crusher_mix",
         }
     }
 
@@ -2647,6 +2682,9 @@ impl ParameterId {
             Self::FlangerDepth => "flanger depth",
             Self::FlangerFeedback => "flanger feedback",
             Self::FlangerMix => "flanger mix",
+            Self::BitCrusherBits => "bit crusher bits",
+            Self::BitCrusherRate => "bit crusher rate",
+            Self::BitCrusherMix => "bit crusher mix",
             _ => self.name(),
         }
     }
@@ -2742,6 +2780,9 @@ impl Track {
             ParameterId::FlangerDepth => ParameterValue::Percent(self.effects.flanger.depth),
             ParameterId::FlangerFeedback => ParameterValue::Percent(self.effects.flanger.feedback),
             ParameterId::FlangerMix => ParameterValue::Percent(self.effects.flanger.mix),
+            ParameterId::BitCrusherBits => ParameterValue::Percent(self.effects.bit_crusher.bits),
+            ParameterId::BitCrusherRate => ParameterValue::Percent(self.effects.bit_crusher.rate),
+            ParameterId::BitCrusherMix => ParameterValue::Percent(self.effects.bit_crusher.mix),
             ParameterId::Tune => match self.instrument {
                 Instrument::Kick(p) => ParameterValue::Percent(p.tune),
                 Instrument::Snare(p) => ParameterValue::Percent(p.tune),
@@ -2923,6 +2964,15 @@ impl Track {
                 self.effects.flanger.feedback = v
             }
             (ParameterId::FlangerMix, ParameterValue::Percent(v)) => self.effects.flanger.mix = v,
+            (ParameterId::BitCrusherBits, ParameterValue::Percent(v)) => {
+                self.effects.bit_crusher.bits = v
+            }
+            (ParameterId::BitCrusherRate, ParameterValue::Percent(v)) => {
+                self.effects.bit_crusher.rate = v
+            }
+            (ParameterId::BitCrusherMix, ParameterValue::Percent(v)) => {
+                self.effects.bit_crusher.mix = v
+            }
             (ParameterId::Tune, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Kick(p) => p.tune = v,
                 Instrument::Snare(p) => p.tune = v,
@@ -3312,10 +3362,15 @@ mod tests {
         assert_eq!(project.tracks[0].effects.phaser.rate, p(25));
         assert_eq!(project.tracks[0].effects.flanger.delay, p(18));
         assert_eq!(project.tracks[0].effects.flanger.depth, p(50));
+        assert_eq!(project.tracks[0].effects.bit_crusher.bits, p(50));
+        assert_eq!(project.tracks[0].effects.bit_crusher.rate, p(50));
+        assert_eq!(project.tracks[0].effects.bit_crusher.mix, Percent::ZERO);
         assert!(ParameterId::PhaserMix.is_valid_for(TrackKind::Kick));
         assert!(!ParameterId::PhaserMix.supports_lfo(TrackKind::Kick));
         assert!(ParameterId::FlangerMix.is_valid_for(TrackKind::Kick));
         assert!(!ParameterId::FlangerMix.supports_lfo(TrackKind::Kick));
+        assert!(ParameterId::BitCrusherMix.is_valid_for(TrackKind::Kick));
+        assert!(!ParameterId::BitCrusherMix.supports_lfo(TrackKind::Kick));
 
         let mut locks = ParameterLocks::default();
         assert!(locks.set(ParameterId::DistortionDrive, ParameterValue::Percent(p(80))));
@@ -3329,6 +3384,8 @@ mod tests {
         assert_eq!(locks.percent(ParameterId::PhaserFeedback), Some(p(90)));
         assert!(locks.set(ParameterId::FlangerFeedback, ParameterValue::Percent(p(90))));
         assert_eq!(locks.percent(ParameterId::FlangerFeedback), Some(p(90)));
+        assert!(locks.set(ParameterId::BitCrusherBits, ParameterValue::Percent(p(75))));
+        assert_eq!(locks.percent(ParameterId::BitCrusherBits), Some(p(75)));
         assert!(!locks.set(ParameterId::FlangerFeedback, ParameterValue::Percent(p(91))));
         assert_eq!(locks.percent(ParameterId::FlangerFeedback), Some(p(90)));
 
@@ -3339,6 +3396,8 @@ mod tests {
         assert!(track.set_parameter(ParameterId::FlangerFeedback, ParameterValue::Percent(p(90))));
         assert!(!track.set_parameter(ParameterId::FlangerFeedback, ParameterValue::Percent(p(91))));
         assert_eq!(track.effects.flanger.feedback, p(90));
+        assert!(track.set_parameter(ParameterId::BitCrusherRate, ParameterValue::Percent(p(65))));
+        assert_eq!(track.effects.bit_crusher.rate, p(65));
 
         let mut invalid = project;
         invalid.tracks[0].effects.phaser.feedback = p(91);

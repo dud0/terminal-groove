@@ -303,6 +303,14 @@ pub const FLANGER_MIN_DELAY_MS: f32 = 0.1;
 const FLANGER_MAX_DELAY_SECONDS: f32 = 0.015;
 const PHASER_CONTROL_FRAMES: u8 = 8;
 
+pub fn bit_crusher_bit_depth(bits_percent: f32) -> u8 {
+    (16.0 - bits_percent.clamp(0.0, 100.0) * 0.14).round() as u8
+}
+
+pub fn bit_crusher_rate_divisor(rate_percent: f32) -> f32 {
+    2.0_f32.powf(rate_percent.clamp(0.0, 100.0) * 0.06)
+}
+
 /// Returns the center, effective depth, and physical delay endpoints for the
 /// flanger controls.  Depth is constrained before modulation rather than
 /// clamping the waveform, so the lowest part of the cycle remains smooth.
@@ -329,6 +337,7 @@ struct FlangerControls {
 pub struct TrackEffectChain {
     processing: bool,
     distortion_active: bool,
+    bit_crusher_active: bool,
     phaser_active: bool,
     flanger_active: bool,
     distortion_tail_remaining: u32,
@@ -346,6 +355,15 @@ pub struct TrackEffectChain {
     distortion_coefficient: f32,
     cached_distortion_drive: f32,
     cached_distortion_tone: f32,
+    bit_crusher_bits: Smoother,
+    bit_crusher_rate: Smoother,
+    bit_crusher_mix: Smoother,
+    bit_crusher_phase: f32,
+    bit_crusher_held_l: f32,
+    bit_crusher_held_r: f32,
+    bit_crusher_has_sample: bool,
+    bit_crusher_rate_increment: f32,
+    cached_bit_crusher_rate: f32,
     phaser_rate: Smoother,
     phaser_depth: Smoother,
     phaser_feedback: Smoother,
@@ -395,6 +413,7 @@ impl TrackEffectChain {
         Self {
             processing: false,
             distortion_active: false,
+            bit_crusher_active: false,
             phaser_active: false,
             flanger_active: false,
             distortion_tail_remaining: 0,
@@ -412,6 +431,15 @@ impl TrackEffectChain {
             distortion_coefficient: 1.0,
             cached_distortion_drive: f32::NAN,
             cached_distortion_tone: f32::NAN,
+            bit_crusher_bits: Smoother::new(50.0),
+            bit_crusher_rate: Smoother::new(50.0),
+            bit_crusher_mix: Smoother::new(0.0),
+            bit_crusher_phase: 0.0,
+            bit_crusher_held_l: 0.0,
+            bit_crusher_held_r: 0.0,
+            bit_crusher_has_sample: false,
+            bit_crusher_rate_increment: 0.125,
+            cached_bit_crusher_rate: f32::NAN,
             phaser_rate: Smoother::new(25.0),
             phaser_depth: Smoother::new(50.0),
             phaser_feedback: Smoother::new(20.0),
@@ -452,6 +480,7 @@ impl TrackEffectChain {
     pub fn configure(&mut self, effects: TrackEffects, locks: ParameterLocks, samples: u32) {
         let was_processing = self.processing
             || self.distortion_mix.current > 0.0
+            || self.bit_crusher_mix.current > 0.0
             || self.phaser_mix.current > 0.0
             || self.flanger_mix.current > 0.0;
         self.distortion_drive.set(
@@ -472,6 +501,27 @@ impl TrackEffectChain {
             locks
                 .percent(ParameterId::DistortionMix)
                 .unwrap_or(effects.distortion.mix)
+                .get() as f32,
+            samples,
+        );
+        self.bit_crusher_bits.set(
+            locks
+                .percent(ParameterId::BitCrusherBits)
+                .unwrap_or(effects.bit_crusher.bits)
+                .get() as f32,
+            samples,
+        );
+        self.bit_crusher_rate.set(
+            locks
+                .percent(ParameterId::BitCrusherRate)
+                .unwrap_or(effects.bit_crusher.rate)
+                .get() as f32,
+            samples,
+        );
+        self.bit_crusher_mix.set(
+            locks
+                .percent(ParameterId::BitCrusherMix)
+                .unwrap_or(effects.bit_crusher.mix)
                 .get() as f32,
             samples,
         );
@@ -540,6 +590,7 @@ impl TrackEffectChain {
         );
         self.processing = was_processing
             || self.distortion_mix.target > 0.0
+            || self.bit_crusher_mix.target > 0.0
             || self.phaser_mix.target > 0.0
             || self.flanger_mix.target > 0.0;
     }
@@ -553,6 +604,7 @@ impl TrackEffectChain {
             return (input_l, input_r);
         }
         let distortion_mix = self.distortion_mix.next_value() / 100.0;
+        let bit_crusher_mix = self.bit_crusher_mix.next_value() / 100.0;
         let phaser_mix = self.phaser_mix.next_value() / 100.0;
         let flanger_mix = self.flanger_mix.next_value() / 100.0;
         let input_active = stereo_peak(input_l, input_r) > SILENCE_THRESHOLD;
@@ -610,7 +662,46 @@ impl TrackEffectChain {
             self.distortion_active = false;
         }
 
-        let phaser_input_active = stereo_peak(distorted_l, distorted_r) > SILENCE_THRESHOLD;
+        let bit_crusher_input_active = stereo_peak(distorted_l, distorted_r) > SILENCE_THRESHOLD;
+        let run_bit_crusher =
+            bit_crusher_mix > 0.0 && (bit_crusher_input_active || self.bit_crusher_active);
+        let (crushed_l, crushed_r) = if run_bit_crusher {
+            let bits = bit_crusher_bit_depth(self.bit_crusher_bits.next_value());
+            let rate = self.bit_crusher_rate.next_value();
+            self.update_bit_crusher_cache(rate);
+            self.bit_crusher_phase += self.bit_crusher_rate_increment;
+            if !self.bit_crusher_has_sample || self.bit_crusher_phase >= 1.0 {
+                self.bit_crusher_phase = self.bit_crusher_phase.fract();
+                self.bit_crusher_held_l = Self::bit_crush_sample(distorted_l, bits);
+                self.bit_crusher_held_r = Self::bit_crush_sample(distorted_r, bits);
+                self.bit_crusher_has_sample = true;
+            }
+            let output = (
+                finite_or_zero(
+                    distorted_l * (1.0 - bit_crusher_mix)
+                        + self.bit_crusher_held_l * bit_crusher_mix,
+                ),
+                finite_or_zero(
+                    distorted_r * (1.0 - bit_crusher_mix)
+                        + self.bit_crusher_held_r * bit_crusher_mix,
+                ),
+            );
+            self.bit_crusher_active = bit_crusher_input_active
+                || stereo_peak(self.bit_crusher_held_l, self.bit_crusher_held_r)
+                    > SILENCE_THRESHOLD;
+            if !self.bit_crusher_active {
+                self.clear_bit_crusher();
+            }
+            output
+        } else {
+            self.bit_crusher_active = false;
+            if bit_crusher_mix == 0.0 {
+                self.clear_bit_crusher();
+            }
+            (distorted_l, distorted_r)
+        };
+
+        let phaser_input_active = stereo_peak(crushed_l, crushed_r) > SILENCE_THRESHOLD;
         let run_phaser =
             (phaser_mix > 0.0 && phaser_input_active) || self.phaser_tail_remaining > 0;
         let (processed_l, processed_r) = if run_phaser {
@@ -625,8 +716,8 @@ impl TrackEffectChain {
             // feedback state silently. Re-expanding the tail to a derived wet
             // mix here would create a near-100% wet discontinuity.
             let effective_mix = phaser_mix;
-            let left_input = if phaser_mix > 0.0 { distorted_l } else { 0.0 } + feedback;
-            let right_input = if phaser_mix > 0.0 { distorted_r } else { 0.0 } - feedback;
+            let left_input = if phaser_mix > 0.0 { crushed_l } else { 0.0 } + feedback;
+            let right_input = if phaser_mix > 0.0 { crushed_r } else { 0.0 } - feedback;
             let left =
                 Self::phaser_sample(&mut self.phaser_l, left_input, self.phaser_coefficient_l);
             let right =
@@ -637,8 +728,8 @@ impl TrackEffectChain {
                 (self.phaser_phase + self.phaser_rate_hz / self.sample_rate).fract();
             self.advance_phaser_coefficients();
             let output = (
-                distorted_l * (1.0 - effective_mix) + left * effective_mix,
-                distorted_r * (1.0 - effective_mix) + right * effective_mix,
+                crushed_l * (1.0 - effective_mix) + left * effective_mix,
+                crushed_r * (1.0 - effective_mix) + right * effective_mix,
             );
             self.phaser_active = Self::update_tail_activity(
                 phaser_mix > 0.0 && phaser_input_active,
@@ -654,7 +745,7 @@ impl TrackEffectChain {
             output
         } else {
             self.phaser_active = false;
-            (distorted_l, distorted_r)
+            (crushed_l, crushed_r)
         };
 
         let flanger_input_active = stereo_peak(processed_l, processed_r) > SILENCE_THRESHOLD;
@@ -705,6 +796,11 @@ impl TrackEffectChain {
         let clipped = (input * gain).tanh();
         *state += (clipped - *state) * coefficient;
         input * (1.0 - mix) + *state * mix
+    }
+
+    fn bit_crush_sample(input: f32, bits: u8) -> f32 {
+        let scale = (1_u32 << (bits.clamp(2, 16) - 1)) as f32;
+        (finite_or_zero(input).clamp(-1.0, 1.0) * scale).round() / scale
     }
 
     fn phaser_coefficient(phase: f32, sweep: f32, sample_rate: f32) -> f32 {
@@ -829,12 +925,15 @@ impl TrackEffectChain {
 
     fn has_pending_parameters(&self) -> bool {
         self.distortion_mix.is_smoothing()
+            || self.bit_crusher_mix.is_smoothing()
             || self.phaser_mix.is_smoothing()
             || self.flanger_mix.is_smoothing()
             || self.distortion_mix.target > 0.0
+            || self.bit_crusher_mix.target > 0.0
             || self.phaser_mix.target > 0.0
             || self.flanger_mix.target > 0.0
             || self.distortion_active
+            || self.bit_crusher_active
             || self.phaser_active
             || self.flanger_active
     }
@@ -849,6 +948,14 @@ impl TrackEffectChain {
         let cutoff = exp_map_f32(tone, 700.0, (18_000.0_f32).min(self.sample_rate * 0.45));
         self.distortion_coefficient =
             1.0 - (-std::f32::consts::TAU * cutoff / self.sample_rate).exp();
+    }
+
+    fn update_bit_crusher_cache(&mut self, rate: f32) {
+        if rate == self.cached_bit_crusher_rate {
+            return;
+        }
+        self.cached_bit_crusher_rate = rate;
+        self.bit_crusher_rate_increment = bit_crusher_rate_divisor(rate).recip();
     }
 
     fn update_phaser_cache(&mut self, rate: f32, depth: f32) {
@@ -876,7 +983,10 @@ impl TrackEffectChain {
     }
 
     pub fn is_active(&self) -> bool {
-        self.distortion_active || self.phaser_active || self.flanger_active
+        self.distortion_active
+            || self.bit_crusher_active
+            || self.phaser_active
+            || self.flanger_active
     }
 
     fn read_delay(buffer: &[f32], write: usize, delay: f32) -> f32 {
@@ -896,6 +1006,14 @@ impl TrackEffectChain {
         self.distortion_active = false;
         self.distortion_tail_remaining = 0;
         self.distortion_quiet_samples = 0;
+    }
+
+    fn clear_bit_crusher(&mut self) {
+        self.bit_crusher_active = false;
+        self.bit_crusher_phase = 0.0;
+        self.bit_crusher_held_l = 0.0;
+        self.bit_crusher_held_r = 0.0;
+        self.bit_crusher_has_sample = false;
     }
 
     fn clear_phaser(&mut self) {
@@ -920,6 +1038,7 @@ impl TrackEffectChain {
 
     pub fn clear(&mut self) {
         self.clear_distortion();
+        self.clear_bit_crusher();
         self.clear_phaser();
         self.clear_flanger();
         self.phaser_phase = 0.0;
