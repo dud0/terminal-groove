@@ -972,8 +972,8 @@ fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
     assert!(rendered.contains("[R]BASE"));
     assert!(!rendered.contains("L80Y0B0"));
     assert!(rendered.contains("Bass O4"));
-    assert!(rendered.contains("1:3"));
-    assert!(rendered.contains("2*4"));
+    assert!(rendered.contains("1³ "));
+    assert!(rendered.contains("2⁴*"));
 }
 
 #[test]
@@ -1828,7 +1828,7 @@ fn scale_selector_lists_all_modes_and_marks_the_current_mode() {
 
 #[test]
 fn step_cells_show_note_octaves_and_locks() {
-    assert_eq!(step_cell(None), " . ");
+    assert_eq!(step_cell(None), " · ");
     assert_eq!(
         step_cell(Some(&StepEvent::Note {
             degree: 1,
@@ -1841,7 +1841,7 @@ fn step_cells_show_note_octaves_and_locks() {
             microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         })),
-        "1:3"
+        "1³ "
     );
     assert_eq!(
         step_cell(Some(&StepEvent::Note {
@@ -1858,13 +1858,13 @@ fn step_cells_show_note_octaves_and_locks() {
                 ParameterValue::Percent(Percent::new(50).unwrap()),
             )]),
         })),
-        "2*4"
+        "2⁴*"
     );
     assert_eq!(
         step_cell(Some(&StepEvent::Tie {
             locks: Default::default(),
         })),
-        " - "
+        " ─ "
     );
 }
 
@@ -2164,11 +2164,13 @@ fn sixty_four_step_track_renders_as_two_compact_rows_without_shortcut_hints() {
     }
     let mut app = App::new(project, None);
     app.row = 1;
+    app.step = 32;
     let screen = rendered(&app, 120, 34);
     assert!(screen.contains("Kick"));
     assert!(!screen.contains("LenRange"));
     assert!(screen.contains("01–32"));
     assert!(screen.contains("33–64"));
+    assert!(screen.contains("▾01"));
     assert!(!screen.contains("more tracks"));
     assert!(!screen.contains("Shift+D"));
 }

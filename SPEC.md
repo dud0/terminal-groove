@@ -490,16 +490,16 @@ Parameter shortcuts are displayed beside the controls they operate in the detail
 
 Step cells use these textual forms:
 
-- `.` empty
+- `·` empty
 - `x` / `X` normal/accented drum trigger
-- `D:O` / `D!O` normal/accented note degree `D` at octave `O`
-- `D*O` / `D#O` locked normal/accented note
-- `-` tie
+- `Dᴼ` / `Dᴼ!` normal/accented note degree `D` at superscript octave `ᴼ`
+- `Dᴼ*` / `Dᴼ#` locked normal/accented note
+- `─` tie
 - `*` additional lock marker
 
 Bass and Lead notes with slide are underlined.
 
-The selected cell and currently playing cell have independent styling. If both refer to the same cell, the combined style must still communicate both states. Mute, event type, and lock state must not rely on color alone.
+The selected cell and currently playing cell have independent styling. The selected step is also marked with `▾` in the step header; active lanes are marked with `▶`, while mute, event type, and lock state remain text-visible. If selection and playback refer to the same cell, the combined style must still communicate both states. The grid emphasizes the first header of each four-step group, with the existing divider separating 16-step banks.
 
 Each pitched row includes its current input octave in the track label (for example, `Bass O3`).
 

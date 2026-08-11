@@ -117,9 +117,25 @@ pub(super) fn track_label(t: &crate::model::Track) -> String {
     }
 }
 
+fn octave_superscript(octave: u8) -> char {
+    match octave {
+        0 => '⁰',
+        1 => '¹',
+        2 => '²',
+        3 => '³',
+        4 => '⁴',
+        5 => '⁵',
+        6 => '⁶',
+        7 => '⁷',
+        _ => unreachable!("model validation bounds octaves to 0 through 7"),
+    }
+}
+
 pub(super) fn step_cell(event: Option<&StepEvent>) -> String {
     match event {
-        None => " . ".into(),
+        // Empty steps should stay visible for navigation without competing with
+        // events. The middle dot is deliberately quieter than a period.
+        None => " · ".into(),
         Some(StepEvent::Trigger {
             accent,
             recipe,
@@ -179,17 +195,19 @@ pub(super) fn step_cell(event: Option<&StepEvent>) -> String {
             accent,
             locks,
             ..
-        }) => format!(
-            "{degree}{}{octave}",
+        }) => {
+            let octave = octave_superscript(*octave);
             match (*accent, locks.is_empty()) {
-                (false, true) => ':',
-                (true, true) => '!',
-                (false, false) => '*',
-                (true, false) => '#',
+                // The trailing space creates a gutter between adjacent normal
+                // note chips while retaining the fixed three-column cell.
+                (false, true) => format!("{degree}{octave} "),
+                (true, true) => format!("{degree}{octave}!"),
+                (false, false) => format!("{degree}{octave}*"),
+                (true, false) => format!("{degree}{octave}#"),
             }
-        ),
-        Some(StepEvent::Tie { locks }) if locks.is_empty() => " - ".into(),
-        Some(StepEvent::Tie { .. }) => "-* ".into(),
+        }
+        Some(StepEvent::Tie { locks }) if locks.is_empty() => " ─ ".into(),
+        Some(StepEvent::Tie { .. }) => "─* ".into(),
     }
 }
 
@@ -2094,11 +2112,16 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             let line_start = line_index * STEP_ROW_SIZE;
             let line_end = (line_start + STEP_ROW_SIZE).min(length);
             let mut cells: Vec<ratatui::widgets::Cell> = Vec::with_capacity(37);
-            cells.push(if line_index == 0 && track.muted {
-                "M".into()
+            let lane_marker = if line_index == 0 && track.muted {
+                "M"
+            } else if line_index == 0 && a.playheads[ti].is_some() {
+                "▶"
+            } else if line_index == 0 && a.row == ti + 1 {
+                "›"
             } else {
-                " ".into()
-            });
+                " "
+            };
+            cells.push(ratatui::widgets::Cell::from(format!("{lane_marker} ")));
             cells.push(if line_index == 0 {
                 track_label(track).into()
             } else {
@@ -2115,13 +2138,26 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                     cells.push(ratatui::widgets::Cell::from("   "));
                     continue;
                 }
+                // Beat starts are called out in the header, avoiding a filled
+                // background that can overwhelm the grid on light themes.
                 let mut style = Style::default();
-                if a.row == ti + 1 && a.step == step {
-                    style = style.reversed();
-                }
-                if a.playheads[ti] == Some(step) {
-                    style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
-                }
+                let selected = a.row == ti + 1 && a.step == step;
+                let playing = a.playheads[ti] == Some(step);
+                style = match (selected, playing) {
+                    (true, true) => Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::LightMagenta)
+                        .add_modifier(Modifier::BOLD),
+                    (true, false) => Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                    (false, true) => Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                    (false, false) => style,
+                };
                 if matches!(
                     steps[step],
                     Some(
@@ -2143,7 +2179,9 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                         retrigger_count,
                         ..
                     }) if *condition != TriggerCondition::Always || *retrigger_count != 1
-                ) {
+                ) && !selected
+                    && !playing
+                {
                     style = style.fg(Color::Magenta).add_modifier(Modifier::BOLD);
                 }
                 cells.push(
@@ -2163,14 +2201,45 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     widths.push(Constraint::Length(1));
     widths.extend((0..STEP_BANK_SIZE).map(|_| Constraint::Length(3)));
     let mut header_cells = vec![
-        ratatui::widgets::Cell::from("M"),
-        ratatui::widgets::Cell::from("Track / O"),
-        ratatui::widgets::Cell::from(" Range"),
+        ratatui::widgets::Cell::from(" "),
+        ratatui::widgets::Cell::from("Track"),
+        ratatui::widgets::Cell::from(" Steps"),
         ratatui::widgets::Cell::from("│"),
     ];
-    header_cells.extend((1..=STEP_BANK_SIZE).map(|n| format!(" {n:02}").into()));
+    let selected_column = (a.row > 0).then_some(a.step % STEP_ROW_SIZE);
+    header_cells.extend((1..=STEP_BANK_SIZE).map(|n| {
+        let selected = selected_column == Some(n - 1);
+        let label = if selected {
+            format!("▾{n:02}")
+        } else {
+            format!(" {n:02}")
+        };
+        let style = if (n - 1) % 4 == 0 {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        ratatui::widgets::Cell::from(label).style(style)
+    }));
     header_cells.push(ratatui::widgets::Cell::from("│"));
-    header_cells.extend(((STEP_BANK_SIZE + 1)..=STEP_ROW_SIZE).map(|n| format!(" {n:02}").into()));
+    header_cells.extend(((STEP_BANK_SIZE + 1)..=STEP_ROW_SIZE).map(|n| {
+        let selected = selected_column == Some(n - 1);
+        let label = if selected {
+            format!("▾{n:02}")
+        } else {
+            format!(" {n:02}")
+        };
+        let style = if (n - 1) % 4 == 0 {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        ratatui::widgets::Cell::from(label).style(style)
+    }));
     let trigger_summary = if a.row > 0 {
         let track = a.row - 1;
         a.editor.active_steps(track).unwrap()[a.step]
@@ -2194,8 +2263,13 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     } else {
         String::new()
     };
+    let cursor_summary = if a.row > 0 {
+        format!(" · Cursor {:02}", a.step + 1)
+    } else {
+        String::new()
+    };
     let pattern_title = Line::from(format!(
-        "Pattern{trigger_summary}{swing_summary}{probability_summary}"
+        "Pattern{cursor_summary}{trigger_summary}{swing_summary}{probability_summary}"
     ));
     f.render_widget(
         Table::new(rows, widths)
@@ -2203,7 +2277,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             .header(Row::new(header_cells))
             .block(
                 Block::bordered().title(pattern_title).title_bottom(
-                    ". empty   x/X normal/accent   + condition/retrigger   D:O note   D!O accent   */# lock   underline slide   - tie",
+                    "▾ cursor  ▶ active lane  · empty  x/X hit/accent  + condition/retrigger  Dᴼ note  */# lock  underline slide  ─ tie",
                 ),
             ),
         chunks[2],
