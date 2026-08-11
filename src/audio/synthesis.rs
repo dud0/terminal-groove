@@ -1075,6 +1075,97 @@ impl Renderer {
         Self::configure_synth_voice(&self.project, self.sr, track, trigger, locks, v);
         v.remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
     }
+    fn swing_delay(&self, global_step: usize, track: usize, step_samples: u32) -> u32 {
+        if global_step % 2 == 1 {
+            step_samples * u32::from(self.project.tracks[track].swing.get()) / 100
+        } else {
+            0
+        }
+    }
+
+    fn trigger_allowed_for(&mut self, track: usize, step: usize, event: Option<StepEvent>) -> bool {
+        let condition_allowed = event
+            .and_then(|event| event.condition())
+            .map(|condition| self.condition_passes(track, step, condition))
+            .unwrap_or(true);
+        match event.and_then(|event| event.condition()) {
+            Some(_) if condition_allowed => self.probability_passes(track),
+            Some(_) => false,
+            None => condition_allowed,
+        }
+    }
+
+    fn schedule_track_actions(
+        &mut self,
+        track: usize,
+        step: usize,
+        global_step: usize,
+        step_samples: u32,
+        trigger_allowed: bool,
+        lookahead: bool,
+    ) {
+        let sequence = self.project.patterns[self.active_pattern].tracks[track];
+        let event = sequence.steps[step];
+        let current_delay = self.swing_delay(global_step, track, step_samples);
+        let next_delay = self.swing_delay(global_step.wrapping_add(1), track, step_samples);
+        let previous_delay = self.swing_delay(global_step.wrapping_sub(1), track, step_samples);
+        let horizon = step_samples + next_delay - current_delay;
+        let micro_offset = event
+            .and_then(|event| event.microtiming())
+            .map(|value| i64::from(step_samples) * i64::from(value.get()) / 100)
+            .unwrap_or(0);
+        let count = event.and_then(|event| event.retrigger_count()).unwrap_or(1);
+        let last_offset = horizon * u32::from(count.saturating_sub(1)) / u32::from(count);
+        let next_slot = step_samples + next_delay;
+        let max_start = next_slot.saturating_sub(last_offset);
+        let requested_start = i64::from(current_delay) + micro_offset;
+        let min_start = if lookahead {
+            i64::from(previous_delay) - i64::from(step_samples)
+        } else {
+            0
+        };
+        let start = requested_start.clamp(min_start, i64::from(max_start));
+        let origin = if lookahead {
+            i64::from(step_samples)
+        } else {
+            0
+        };
+        let remaining_start = (origin + start).max(0) as u32;
+        self.enqueue(ScheduledTrackAction {
+            remaining: remaining_start,
+            track: track as u8,
+            step: step as u8,
+            retrigger: false,
+            trigger_allowed,
+        });
+        if trigger_allowed {
+            for hit in 1..count {
+                self.enqueue(ScheduledTrackAction {
+                    remaining: remaining_start + horizon * u32::from(hit) / u32::from(count),
+                    track: track as u8,
+                    step: step as u8,
+                    retrigger: true,
+                    trigger_allowed: true,
+                });
+            }
+        }
+    }
+
+    fn should_lookahead(
+        &self,
+        track: usize,
+        step: usize,
+        global_step: usize,
+        step_samples: u32,
+    ) -> bool {
+        let event = self.project.patterns[self.active_pattern].tracks[track].steps[step];
+        let Some(microtiming) = event.and_then(|event| event.microtiming()) else {
+            return false;
+        };
+        let current_delay = self.swing_delay(global_step, track, step_samples);
+        i64::from(current_delay) + i64::from(step_samples) * i64::from(microtiming.get()) / 100 < 0
+    }
+
     pub(super) fn boundary(&mut self, global_step: usize) {
         let mut transitioned = false;
         if global_step % 16 == 0 {
@@ -1107,48 +1198,39 @@ impl Renderer {
             self.status.playheads[track].store(step as u8, Ordering::Release);
             let sequence = self.project.patterns[self.active_pattern].tracks[track];
             let event = sequence.steps[step];
-            let condition_allowed = event
-                .and_then(|event| event.condition())
-                .map(|condition| self.condition_passes(track, step, condition))
-                .unwrap_or(true);
-            let trigger_allowed = match event.and_then(|event| event.condition()) {
-                Some(_) if condition_allowed => self.probability_passes(track),
-                Some(_) => false,
-                None => condition_allowed,
-            };
+            let prearmed = self.early_armed[track] == Some(step as u8);
             let step_samples = self.clock.step_samples().round() as u32;
-            let delay = if global_step % 2 == 1 {
-                step_samples * u32::from(self.project.tracks[track].swing.get()) / 100
-            } else {
-                0
-            };
-            self.enqueue(ScheduledTrackAction {
-                remaining: delay,
-                track: track as u8,
-                step: step as u8,
-                retrigger: false,
-                trigger_allowed,
-            });
-            if trigger_allowed {
-                if let Some(count) = event.and_then(|event| event.retrigger_count()) {
-                    let next_delay = if (global_step + 1) % 2 == 1 {
-                        step_samples * u32::from(self.project.tracks[track].swing.get()) / 100
-                    } else {
-                        0
-                    };
-                    let horizon = (step_samples + next_delay).saturating_sub(delay);
-                    for hit in 1..count {
-                        self.enqueue(ScheduledTrackAction {
-                            remaining: delay + horizon * u32::from(hit) / u32::from(count),
-                            track: track as u8,
-                            step: step as u8,
-                            retrigger: true,
-                            trigger_allowed: true,
-                        });
-                    }
-                }
+            if !prearmed {
+                let trigger_allowed = self.trigger_allowed_for(track, step, event);
+                self.schedule_track_actions(
+                    track,
+                    step,
+                    global_step,
+                    step_samples,
+                    trigger_allowed,
+                    false,
+                );
             }
+            self.early_armed[track] = None;
             self.next_steps[track] = (step + 1) % sequence.step_count as usize;
+            let next_global_step = global_step.wrapping_add(1);
+            let next_step = self.next_steps[track];
+            if next_global_step % 16 != 0
+                && self.should_lookahead(track, next_step, next_global_step, step_samples)
+            {
+                let next_event =
+                    self.project.patterns[self.active_pattern].tracks[track].steps[next_step];
+                let trigger_allowed = self.trigger_allowed_for(track, next_step, next_event);
+                self.schedule_track_actions(
+                    track,
+                    next_step,
+                    next_global_step,
+                    step_samples,
+                    trigger_allowed,
+                    true,
+                );
+                self.early_armed[track] = Some(next_step as u8);
+            }
         }
         // Execute straight-grid actions at the boundary itself. Delayed swing
         // actions remain in the fixed queue for subsequent callback samples.

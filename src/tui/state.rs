@@ -98,6 +98,7 @@ pub(crate) enum ChordField {
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TriggerField {
+    Microtiming,
     Mode,
     CyclePosition,
     CycleLength,
@@ -106,7 +107,8 @@ pub(crate) enum TriggerField {
 }
 
 impl TriggerField {
-    pub(super) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 6] = [
+        Self::Microtiming,
         Self::Mode,
         Self::CyclePosition,
         Self::CycleLength,

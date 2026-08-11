@@ -30,6 +30,10 @@ pub(super) fn render_trigger_popup(
     let Ok(condition) = a.editor.trigger_condition_value(track, a.step) else {
         return;
     };
+    let microtiming = a
+        .editor
+        .microtiming_value(track, a.step)
+        .unwrap_or_default();
     let count = a.editor.retrigger_count_value(track, a.step).unwrap_or(1);
     let (cycle_position, cycle_length, chance) = match condition {
         TriggerCondition::Cycle { position, length } => (position, length, 50),
@@ -48,8 +52,15 @@ pub(super) fn render_trigger_popup(
     };
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1, 5); 5])
+        .constraints([Constraint::Ratio(1, 6); 6])
         .split(controls_area);
+    render_trigger_signed_fader(
+        f,
+        columns[0],
+        "Microtime",
+        microtiming.get(),
+        field == TriggerField::Microtiming,
+    );
     let mode_choices = ["Always", "Cycle", "Chance"];
     let mode_index = match condition {
         TriggerCondition::Always => 0,
@@ -58,7 +69,7 @@ pub(super) fn render_trigger_popup(
     };
     render_trigger_selector(
         f,
-        columns[0],
+        columns[1],
         "Mode",
         &mode_choices,
         mode_index,
@@ -71,7 +82,7 @@ pub(super) fn render_trigger_popup(
         .collect::<Vec<_>>();
     render_trigger_selector(
         f,
-        columns[1],
+        columns[2],
         "Phase",
         &phase_choices,
         usize::from(cycle_position - 1),
@@ -82,7 +93,7 @@ pub(super) fn render_trigger_popup(
     let length_choices = ["2", "3", "4"];
     render_trigger_selector(
         f,
-        columns[2],
+        columns[3],
         "Length",
         &length_choices,
         usize::from(cycle_length - 2),
@@ -92,7 +103,7 @@ pub(super) fn render_trigger_popup(
 
     render_trigger_fader(
         f,
-        columns[3],
+        columns[4],
         "Chance",
         chance,
         field == TriggerField::Chance,
@@ -102,7 +113,7 @@ pub(super) fn render_trigger_popup(
     let retrigger_choices = ["1", "2", "3", "4"];
     render_trigger_selector(
         f,
-        columns[4],
+        columns[5],
         "Retrigger",
         &retrigger_choices,
         usize::from(count - 1),
@@ -111,7 +122,7 @@ pub(super) fn render_trigger_popup(
     );
     f.render_widget(
         Paragraph::new(vec![
-            Line::from("[←/→] select   [↑/↓] adjust   [`/1–9/0] chance"),
+            Line::from("[←/→] select   [↑/↓] adjust   [Shift+↑/↓] ±10%"),
             Line::from("[Enter/Esc] close"),
         ])
         .alignment(Alignment::Center),
@@ -274,6 +285,72 @@ fn render_trigger_fader(
         value,
         style,
     );
+}
+
+fn render_trigger_signed_fader(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    label: &str,
+    value: i8,
+    active: bool,
+) {
+    let (content, style) = render_trigger_card(f, area, label, active, false);
+    render_centered(
+        f,
+        &if value > 0 {
+            format!("+{value}%")
+        } else {
+            format!("{value}%")
+        },
+        Rect {
+            height: 1.min(content.height),
+            ..content
+        },
+        style,
+    );
+    let segment_area = Rect {
+        y: content.y + 1,
+        height: content.height.saturating_sub(1),
+        ..content
+    };
+    let height = segment_area.height.min(10);
+    if height == 0 {
+        return;
+    }
+    let start_y = segment_area.y + segment_area.height.saturating_sub(height) / 2;
+    let amount = ((i16::from(value.abs()) * 5 + 25) / 50).min(5) as u16;
+    let center = height / 2;
+    for row in 0..height {
+        let filled = if value > 0 {
+            row + amount >= center && row < center
+        } else if value < 0 {
+            row >= center && row < center + amount
+        } else {
+            false
+        };
+        let text = if filled {
+            "███"
+        } else if row == center {
+            "───"
+        } else {
+            "···"
+        };
+        render_centered(
+            f,
+            text,
+            Rect {
+                x: segment_area.x,
+                y: start_y + row,
+                width: segment_area.width,
+                height: 1,
+            },
+            if filled {
+                style
+            } else {
+                lfo_inactive_style(style)
+            },
+        );
+    }
 }
 
 pub(super) fn render_chord_popup(

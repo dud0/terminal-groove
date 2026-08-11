@@ -180,7 +180,8 @@ impl Renderer {
             lfo_destinations: [[ParameterId::Level; ParameterId::ALL.len()]; TRACK_COUNT],
             lfo_destination_count: [0; TRACK_COUNT],
             preview_activity: [false; TRACK_COUNT],
-            scheduled: [None; 32],
+            scheduled: [None; super::SCHEDULED_ACTION_COUNT],
+            early_armed: [None; TRACK_COUNT],
             cycle_counts: [[0; MAX_STEP_COUNT]; TRACK_COUNT],
             condition_rng: std::array::from_fn(|i| {
                 0x8a5c_9d31 ^ (i as u32).wrapping_mul(0x9e37_79b9)

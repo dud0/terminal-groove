@@ -1,7 +1,7 @@
 use crate::generator::{self, Config as GeneratorConfig, Target as GeneratorTarget};
 use crate::model::{
     ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, DrumRecipeSlot, LfoConfig,
-    MAX_SONG_ENTRY_COUNT, MAX_STEP_COUNT, MIN_STEP_COUNT, ParameterId, ParameterLocks,
+    MAX_SONG_ENTRY_COUNT, MAX_STEP_COUNT, MIN_STEP_COUNT, Microtiming, ParameterId, ParameterLocks,
     ParameterValue, Pattern, PatternIndexMap, Percent, Project, SongEntry, SongIndexMap, Step,
     StepEvent, TrackKind, TriggerCondition, tie_source,
 };
@@ -837,6 +837,7 @@ impl Editor {
                     slide: false,
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
+                    microtiming: crate::model::Microtiming::ZERO,
                     locks: Default::default(),
                 }
             } else if t.kind == TrackKind::Chord {
@@ -850,6 +851,7 @@ impl Editor {
                     arpeggio: t.input_chord_arpeggio.unwrap_or_default(),
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
+                    microtiming: crate::model::Microtiming::ZERO,
                     locks: Default::default(),
                 }
             } else if t.kind == TrackKind::Lead {
@@ -860,6 +862,7 @@ impl Editor {
                     slide: false,
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
+                    microtiming: crate::model::Microtiming::ZERO,
                     locks: Default::default(),
                 }
             } else {
@@ -868,6 +871,7 @@ impl Editor {
                     recipe: crate::model::DrumRecipeSlot::ONE,
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
+                    microtiming: crate::model::Microtiming::ZERO,
                     locks: Default::default(),
                 }
             });
@@ -912,6 +916,7 @@ impl Editor {
                     recipe,
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
+                    microtiming: crate::model::Microtiming::ZERO,
                     locks: ParameterLocks::default(),
                 });
                 return Ok(());
@@ -966,6 +971,7 @@ impl Editor {
                 arpeggio,
                 condition,
                 retrigger_count,
+                microtiming,
                 existing_note,
             ) = match t.steps[step].take() {
                 Some(StepEvent::BassNote {
@@ -973,6 +979,7 @@ impl Editor {
                     slide,
                     condition,
                     retrigger_count,
+                    microtiming,
                     locks,
                     ..
                 }) => (
@@ -983,6 +990,7 @@ impl Editor {
                     ArpeggioConfig::default(),
                     condition,
                     retrigger_count,
+                    microtiming,
                     false,
                 ),
                 Some(StepEvent::LeadNote {
@@ -990,6 +998,7 @@ impl Editor {
                     slide,
                     condition,
                     retrigger_count,
+                    microtiming,
                     locks,
                     ..
                 }) => (
@@ -1000,6 +1009,7 @@ impl Editor {
                     ArpeggioConfig::default(),
                     condition,
                     retrigger_count,
+                    microtiming,
                     true,
                 ),
                 Some(StepEvent::Note {
@@ -1008,6 +1018,7 @@ impl Editor {
                     arpeggio,
                     condition,
                     retrigger_count,
+                    microtiming,
                     locks,
                     ..
                 }) => (
@@ -1018,6 +1029,7 @@ impl Editor {
                     arpeggio,
                     condition,
                     retrigger_count,
+                    microtiming,
                     true,
                 ),
                 Some(event) => (
@@ -1028,6 +1040,7 @@ impl Editor {
                     ArpeggioConfig::default(),
                     TriggerCondition::Always,
                     1,
+                    crate::model::Microtiming::ZERO,
                     false,
                 ),
                 None => (
@@ -1038,6 +1051,7 @@ impl Editor {
                     ArpeggioConfig::default(),
                     TriggerCondition::Always,
                     1,
+                    crate::model::Microtiming::ZERO,
                     false,
                 ),
             };
@@ -1051,6 +1065,7 @@ impl Editor {
                     slide,
                     condition,
                     retrigger_count,
+                    microtiming,
                     locks,
                 }
             } else if t.kind == TrackKind::Lead {
@@ -1061,6 +1076,7 @@ impl Editor {
                     slide,
                     condition,
                     retrigger_count,
+                    microtiming,
                     locks,
                 }
             } else {
@@ -1089,6 +1105,7 @@ impl Editor {
                     },
                     condition,
                     retrigger_count,
+                    microtiming,
                     locks,
                 }
             });
@@ -1421,6 +1438,37 @@ impl Editor {
         })
     }
 
+    pub fn microtiming_value(&self, track: usize, step: usize) -> Result<Microtiming, EditError> {
+        active_track(&self.project, self.pattern, track)?
+            .steps
+            .get(step)
+            .ok_or(EditError::InvalidStep)?
+            .as_ref()
+            .and_then(StepEvent::microtiming)
+            .ok_or(EditError::NoTriggerSettings)
+    }
+
+    pub fn set_microtiming(
+        &mut self,
+        track: usize,
+        step: usize,
+        value: Microtiming,
+        key: Option<CoalesceKey>,
+    ) -> Result<bool, EditError> {
+        self.edit(key, move |project, pattern| {
+            let event = active_track_mut(project, pattern, track)?
+                .steps
+                .get_mut(step)
+                .ok_or(EditError::InvalidStep)?
+                .as_mut()
+                .ok_or(EditError::NoTriggerSettings)?;
+            *event
+                .microtiming_mut()
+                .ok_or(EditError::NoTriggerSettings)? = value;
+            Ok(())
+        })
+    }
+
     pub fn set_track_swing(
         &mut self,
         track: usize,
@@ -1742,6 +1790,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
 
@@ -2484,10 +2533,17 @@ mod tests {
         editor.set_trigger_condition(0, 0, condition).unwrap();
         editor.set_retrigger_count(0, 0, 3).unwrap();
         editor
+            .set_microtiming(0, 0, Microtiming::new(-25).unwrap(), None)
+            .unwrap();
+        editor
             .set_track_swing(0, Percent::new(42).unwrap(), None)
             .unwrap();
         assert_eq!(editor.trigger_condition_value(0, 0), Ok(condition));
         assert_eq!(editor.retrigger_count_value(0, 0), Ok(3));
+        assert_eq!(
+            editor.microtiming_value(0, 0),
+            Ok(Microtiming::new(-25).unwrap())
+        );
         assert_eq!(editor.project.tracks[0].swing, Percent::new(42).unwrap());
         assert!(editor.undo());
         assert_eq!(editor.project.tracks[0].swing, Percent::ZERO);
@@ -2495,6 +2551,10 @@ mod tests {
         editor.toggle_tie(SYNTH_TRACK_START, 1).unwrap();
         assert_eq!(
             editor.set_retrigger_count(SYNTH_TRACK_START, 1, 2),
+            Err(EditError::NoTriggerSettings)
+        );
+        assert_eq!(
+            editor.set_microtiming(SYNTH_TRACK_START, 1, Microtiming::ZERO, None),
             Err(EditError::NoTriggerSettings)
         );
     }

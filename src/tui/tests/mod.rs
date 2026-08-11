@@ -234,6 +234,7 @@ fn pattern_dialog_renders_horizontal_plain_numbered_states() {
         recipe: crate::model::DrumRecipeSlot::ONE,
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: Default::default(),
     });
     let mut app = App::new(project, None);
@@ -457,6 +458,7 @@ fn generator_dialog_marks_track_specific_fields_inapplicable() {
 
 #[test]
 fn trigger_dialog_renders_horizontal_cards() {
+    assert_eq!(TriggerField::ALL[0], TriggerField::Microtiming);
     let mut project = Project::new();
     project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
         accent: false,
@@ -466,6 +468,7 @@ fn trigger_dialog_renders_horizontal_cards() {
             length: 2,
         },
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: Default::default(),
     });
     let mut app = App::new(project, None);
@@ -476,9 +479,16 @@ fn trigger_dialog_renders_horizontal_cards() {
 
     let lines = rendered_lines(&app, 120, 34);
     assert!(lines.iter().any(|line| {
-        ["Mode", "Phase", "Length", "Chance", "Retrigger"]
-            .iter()
-            .all(|label| line.contains(label))
+        [
+            "Microtime",
+            "Mode",
+            "Phase",
+            "Length",
+            "Chance",
+            "Retrigger",
+        ]
+        .iter()
+        .all(|label| line.contains(label))
     }));
     let screen = lines.join("");
     assert!(screen.contains("Trigger · Step 1"));
@@ -824,6 +834,7 @@ fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
         arpeggio: crate::model::ArpeggioConfig::default(),
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: Default::default(),
     });
     project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Note {
@@ -834,6 +845,7 @@ fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
         arpeggio: crate::model::ArpeggioConfig::default(),
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: crate::model::ParameterLocks::from_pairs([(
             ParameterId::Cutoff,
             ParameterValue::Percent(Percent::new(50).unwrap()),
@@ -1014,6 +1026,7 @@ fn chord_shape_modal_and_title_render_at_minimum_size() {
         arpeggio: crate::model::ArpeggioConfig::default(),
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: Default::default(),
     });
     let mut app = App::new(project, None);
@@ -1043,6 +1056,7 @@ fn chord_shape_editor_page_navigation_follows_each_step() {
         arpeggio: crate::model::ArpeggioConfig::default(),
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: Default::default(),
     });
     project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[1] = Some(StepEvent::Note {
@@ -1053,6 +1067,7 @@ fn chord_shape_editor_page_navigation_follows_each_step() {
         arpeggio: crate::model::ArpeggioConfig::default(),
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: Default::default(),
     });
     let mut app = App::new(project, None);
@@ -1309,6 +1324,7 @@ fn lock_scope_labels_explicit_and_inherited_values() {
         arpeggio: crate::model::ArpeggioConfig::default(),
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: crate::model::ParameterLocks::from_pairs([(
             ParameterId::Cutoff,
             ParameterValue::Percent(Percent::new(50).unwrap()),
@@ -1333,6 +1349,7 @@ fn lock_values_remain_displayed_after_track_navigation() {
         recipe: crate::model::DrumRecipeSlot::ONE,
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: crate::model::ParameterLocks::from_pairs([(
             ParameterId::Level,
             ParameterValue::Percent(Percent::new(25).unwrap()),
@@ -1447,6 +1464,7 @@ fn locked_badge_uses_a_distinct_color() {
         arpeggio: crate::model::ArpeggioConfig::default(),
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: crate::model::ParameterLocks::from_pairs([(
             ParameterId::Cutoff,
             ParameterValue::Percent(Percent::new(50).unwrap()),
@@ -1574,6 +1592,7 @@ fn step_cells_show_note_octaves_and_locks() {
             arpeggio: crate::model::ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         })),
         "1:3"
@@ -1587,6 +1606,7 @@ fn step_cells_show_note_octaves_and_locks() {
             arpeggio: crate::model::ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: crate::model::ParameterLocks::from_pairs([(
                 ParameterId::Cutoff,
                 ParameterValue::Percent(Percent::new(50).unwrap()),
@@ -1875,6 +1895,7 @@ fn bank_navigation_refreshes_the_lock_recipe() {
         recipe: crate::model::DrumRecipeSlot::TWO,
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: Default::default(),
     });
     let mut app = App::new(project, None);
@@ -1961,6 +1982,7 @@ fn lock_scope_exposes_only_the_selected_drum_recipe_group() {
         recipe: crate::model::DrumRecipeSlot::TWO,
         condition: Default::default(),
         retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
         locks: Default::default(),
     });
     let mut app = App::new(project, None);

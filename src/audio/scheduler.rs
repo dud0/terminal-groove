@@ -1,5 +1,6 @@
 use super::{
-    AudioProject, AudioTrack, ParameterSmoothing, Renderer, ScheduledTrackAction, TRACK_COUNT,
+    AudioProject, AudioTrack, ParameterSmoothing, Renderer, SCHEDULED_ACTION_COUNT,
+    ScheduledTrackAction, TRACK_COUNT,
 };
 use crate::dsp::Lfo;
 use crate::model::{
@@ -10,7 +11,8 @@ use std::sync::atomic::Ordering;
 
 impl Renderer {
     pub(super) fn reset_trigger_state(&mut self) {
-        self.scheduled = [None; 32];
+        self.scheduled = [None; SCHEDULED_ACTION_COUNT];
+        self.early_armed = [None; TRACK_COUNT];
         self.preview_scheduled = [None; 24];
         self.cycle_counts = [[0; MAX_STEP_COUNT]; TRACK_COUNT];
         self.condition_rng =
@@ -70,7 +72,7 @@ impl Renderer {
         }
     }
     pub(super) fn invalidate_replaced_scheduled_actions(
-        scheduled: &mut [Option<ScheduledTrackAction>; 32],
+        scheduled: &mut [Option<ScheduledTrackAction>; SCHEDULED_ACTION_COUNT],
         old: &AudioProject,
         old_active_pattern: usize,
         next: &AudioProject,
@@ -97,7 +99,7 @@ impl Renderer {
     }
     pub(super) fn advance_scheduled(&mut self) {
         self.prune_scheduled_actions();
-        let mut ready = [None; 32];
+        let mut ready = [None; SCHEDULED_ACTION_COUNT];
         for (index, action) in self.scheduled.iter_mut().enumerate() {
             let Some(mut pending) = *action else { continue };
             if pending.remaining > 0 {
@@ -171,6 +173,25 @@ impl Renderer {
             &project,
             active_pattern,
         );
+        for track in 0..TRACK_COUNT {
+            let Some(step) = self.early_armed[track].map(usize::from) else {
+                continue;
+            };
+            let old_event = self
+                .project
+                .patterns
+                .get(old_active_pattern)
+                .and_then(|pattern| pattern.tracks.get(track))
+                .and_then(|sequence| sequence.steps.get(step).copied().flatten());
+            let next_event = project
+                .patterns
+                .get(active_pattern)
+                .and_then(|pattern| pattern.tracks.get(track))
+                .and_then(|sequence| sequence.steps.get(step).copied().flatten());
+            if old_active_pattern != active_pattern || old_event != next_event {
+                self.early_armed[track] = None;
+            }
+        }
         let old = std::mem::replace(&mut self.project, project);
         match self.retire.push(old) {
             Ok(()) => {}

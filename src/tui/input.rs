@@ -354,9 +354,9 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             match a.editor.trigger_condition_value(track, a.step) {
                 Ok(_) => {
                     a.mode = Mode::TriggerEdit {
-                        field: TriggerField::Mode,
+                        field: TriggerField::Microtiming,
                     };
-                    a.status = "Editing trigger condition and retrigger count".into();
+                    a.status = "Editing microtiming, condition, and retrigger count".into();
                 }
                 Err(error) => a.status = error.to_string(),
             }
@@ -1627,6 +1627,26 @@ pub(super) fn handle_trigger_key(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
     };
     let mut changed = false;
     match field {
+        TriggerField::Microtiming if matches!(k.code, KeyCode::Up | KeyCode::Down) => {
+            let current = a.editor.microtiming_value(track, step).unwrap_or_default();
+            let direction = if k.code == KeyCode::Down { -1 } else { 1 };
+            let amount = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                direction * 10
+            } else {
+                direction
+            };
+            let value = current.saturating_add(amount);
+            if value != current {
+                changed = apply(a, audio, |editor| {
+                    editor.set_microtiming(
+                        track,
+                        step,
+                        value,
+                        Some(crate::reducer::CoalesceKey(track, step, 0xfd)),
+                    )
+                });
+            }
+        }
         TriggerField::Mode if matches!(k.code, KeyCode::Up | KeyCode::Down) => {
             let modes = [
                 TriggerCondition::Always,

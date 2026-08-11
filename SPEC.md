@@ -30,7 +30,7 @@ Playback supports start, pause, resume, stop, reset, live editing, drum triggers
 - MIDI input, output, or clock sync
 - WAV or other audio export
 - Time-signature changes
-- Microtiming or continuously variable event velocity
+- Continuously variable event velocity
 - Polyphonic note entry outside the fixed Chord shape mapping, or oscillator detune
 - Solo, master-volume control, or configurable effect returns
 - User-defined track types or track reordering
@@ -50,6 +50,11 @@ Playback supports start, pause, resume, stop, reset, live editing, drum triggers
 - `.` stops playback, resets the active pattern and every track's next step to step 1, releases all voices, and clears delay and reverb state.
 - The edit cursor is independent from the playhead.
 - Tempo changes become active at the next step boundary without skipping or repeating a step.
+- Drum triggers and Bass/Chord/Lead notes have signed per-event microtiming from `-50%` through
+  `+50%` of a nominal sixteenth-note step. Zero is the default and is omitted from JSON. Negative
+  values play early and positive values play late; ties do not carry microtiming. Microtiming is
+  added to swing and shifts the complete retrigger burst. The effective burst is clamped between
+  adjacent swing-adjusted track slots so event order is preserved.
 - Changing a track length while playing preserves its next local step when that step remains in range; otherwise that track wraps to step 1. Other tracks do not restart.
 - Growing a track appends empty steps. Shrinking truncates removed steps immediately and clears ties made invalid by the new cyclic boundary. The complete resize and tie cleanup are one undoable edit.
 - Doubling a track of 1 through 32 steps appends an exact copy of all existing steps, including events and locks. Tracks longer than 32 steps cannot be doubled because the result would exceed 64.
@@ -65,7 +70,7 @@ Playback supports start, pause, resume, stop, reset, live editing, drum triggers
 
 ### 2.3 Drum events
 
-A drum step is either empty or contains one trigger with a required Boolean `accent`, a trigger `condition`, and a `retrigger_count`. Hi-hat and Tom triggers additionally select a referenced instrument recipe: Hi-hat recipes are Closed and Open, while Tom recipes are Low, Medium, and High. Recipe 1 is the default and is omitted from JSON. Each track has a persisted input accent default, initially off. New triggers inherit that default; pressing `A` on an empty step toggles the default and leaves the step empty. Pressing `A` on an occupied trigger toggles only that trigger's accent. New triggers otherwise always trigger and retrigger once. `condition` is `Always`, `Cycle { position, length }` for all phases of lengths 2–4, or `Chance { probability }` at 0–100%. Counts are 1–4 inclusive, including the first hit. Ties never carry these fields. Pressing `Enter` on an occupied drum step clears the trigger, its articulation, and all locks.
+A drum step is either empty or contains one trigger with a required Boolean `accent`, a trigger `condition`, a `retrigger_count`, and signed `microtiming` from `-50` through `+50` percent. Hi-hat and Tom triggers additionally select a referenced instrument recipe: Hi-hat recipes are Closed and Open, while Tom recipes are Low, Medium, and High. Recipe 1 is the default and is omitted from JSON. Each track has a persisted input accent default, initially off. New triggers inherit that default; pressing `A` on an empty step toggles the default and leaves the step empty. Pressing `A` on an occupied trigger toggles only that trigger's accent. New triggers otherwise always trigger and retrigger once. `condition` is `Always`, `Cycle { position, length }` for all phases of lengths 2–4, or `Chance { probability }` at 0–100%. Counts are 1–4 inclusive, including the first hit. Ties never carry these fields. Pressing `Enter` on an occupied drum step clears the trigger, its articulation, and all locks.
 
 On the Hi-hat row, `1` and `2` select Closed and Open. On the Tom row, `1`, `2`, and `3` select Low, Medium, and High. The shortcut creates a trigger on an empty step or changes the recipe on an existing trigger, preserving accent, condition, retrigger count, and unrelated locks. Selecting a recipe clears that step's Tune/Tone/Decay overrides as applicable. `0` clears those overrides without changing the recipe. Recipe selection automatically auditions while stopped or paused.
 
@@ -83,7 +88,7 @@ Degree 1 is the root in the stored input octave. Degrees 2 through 7 use the sel
 
 Notes are stored as scale degree and octave rather than absolute pitch. Changing the global key or scale therefore reinterprets all existing pattern notes the next time they trigger. A note that is already sounding keeps its current pitch until a new note event starts; a tie does not retune it.
 
-Every note also owns the same `condition` and `retrigger_count` fields as a drum trigger. A skipped Bass, Chord, or Lead note acts as an empty step: it releases the active voice and applies no locks. A skipped drum trigger is silent.
+Every note also owns the same `condition`, `retrigger_count`, and signed `microtiming` fields as a drum trigger. A skipped Bass, Chord, or Lead note acts as an empty step: it releases the active voice and applies no locks. A skipped drum trigger is silent.
 
 The shared track probability gate applies to both drum triggers and pitched notes. At a reached step, the engine evaluates the event condition first, then evaluates the track probability only for an eligible trigger or note whose condition passed. A successful gate schedules the base action and its complete retrigger burst. A rejected drum trigger is silent; a rejected Bass, Chord, or Lead note is processed exactly like an empty step and releases the active voice without applying locks. Ties bypass probability and retain the existing hold/release behavior.
 
@@ -278,7 +283,7 @@ Each track provides:
 - Swing, default 0%, range 0–75%, shared across all patterns
 - Probability, default 100%, range 0–100%, shared across all patterns
 
-Swing delays only global offbeat sixteenths (clock steps 2, 4, …) by its percentage of the nominal step duration. It applies to the complete per-track action, including releases and locks, and remains aligned to the global clock for polymetric tracks. Conditions are evaluated once at the reached step, followed by the probability gate. A successful event launches its full evenly-spaced retrigger burst before that track's next swing-adjusted slot. Cycle counters, event-Chance streams, and probability streams are deterministic and independent per track; all reset on Stop and pattern activation. Probability draws are not made at 0% or 100%, and never perturb event-Chance streams.
+Swing delays only global offbeat sixteenths (clock steps 2, 4, …) by its percentage of the nominal step duration. It applies to the complete per-track action, including releases and locks, and remains aligned to the global clock for polymetric tracks. Conditions are evaluated once when an event is scheduled, followed by the probability gate. A successful event launches its full evenly-spaced retrigger burst before that track's next swing-adjusted slot; microtiming shifts that burst and is clamped when necessary to preserve the slot boundary. Cycle counters, event-Chance streams, and probability streams are deterministic and independent per track; all reset on Stop and pattern activation. Probability draws are not made at 0% or 100%, and never perturb event-Chance streams.
 
 Sends are post-fader and post-mute. Chord group level, pan/spread layout, delay send, and reverb send are captured when a group triggers and remain with that group through release; a later Chord lock cannot reroute an earlier group’s tail. Muting ramps the dry track and new send input to silence, but already-generated global effect tails continue. A muted synth voice continues its internal state, so unmuting may reveal a still-active voice.
 
@@ -383,7 +388,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Track | `Shift+Delete` | Clear all events and locks from the selected track in the active pattern |
 | Trigger, note, or empty step | `A` | Toggle event accent, or the track's input accent default on an empty step |
 | Bass/Lead note | `Shift+G` | Toggle slide |
-| Trigger/note | `Shift+T` | Edit condition, cycle/chance values, and retrigger count |
+| Trigger/note | `Shift+T` | Edit microtiming, condition, cycle/chance values, and retrigger count |
 | Track | `Shift+S` | Edit 0–75% swing |
 | Track | `Shift+Q` | Edit 0–100% probability |
 | Eligible parameter editor | `Shift+L` | Add or edit that parameter's track-level LFO |
@@ -441,7 +446,7 @@ Shortcuts are resolved by selected section, so repeated letters do not conflict.
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
 - The LFO modal uses left/right to select enabled, waveform, trigger reset, starting phase, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to starting phase, free rate, and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
-- `A` toggles accent immediately on a trigger or note, or toggles the selected track's persisted input accent default when the step is empty without creating an event. `Shift+G` toggles slide on a Bass or Lead note. `Shift+T` opens the trigger editor; its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. `Shift+Q` opens the selected-track probability editor with the same controls: Up/Down changes by 1%, Shift+Up/Down by 10%, and values clamp to 0–100%. Enter, Esc, or Shift+Q closes while retaining immediate edits. These edits are undoable and repeated arrow changes coalesce into one transaction; direct accent editing remains invalid on ties. Lowercase `p` remains the BASE/LOCK scope toggle, and `P` remains the Chord/Lead pulse-width shortcut.
+- `A` toggles accent immediately on a trigger or note, or toggles the selected track's persisted input accent default when the step is empty without creating an event. `Shift+G` toggles slide on a Bass or Lead note. `Shift+T` opens the trigger editor. Its fields, left to right, are `Microtime`, `Mode`, `Phase`, `Length`, `Chance`, and `Retrigger`; Microtime uses signed `-50%` through `+50%` values, with Up/Down changing 1% and Shift+Up/Down changing 10%. Its mode-specific inactive fields remain visibly disabled. `Shift+S` edits selected-track swing with 1% arrows and 10% Shift+arrow changes. `Shift+Q` opens the selected-track probability editor with the same controls: Up/Down changes by 1%, Shift+Up/Down by 10%, and values clamp to 0–100%. Enter, Esc, or Shift+Q closes while retaining immediate edits. These edits are undoable and repeated arrow changes coalesce into one transaction; direct accent editing remains invalid on ties. Lowercase `p` remains the BASE/LOCK scope toggle, and `P` remains the Chord/Lead pulse-width shortcut.
 
 The pattern-idea generator opens with `g` and is session-only; its settings are never written to project JSON. Its fields, in order, are `Target`, `Track`, `Seed`, `Density`, `Low octave`, `High octave`, `Chord shapes`, `Ties`, `Accents`, and `Slides`. Up/down moves between fields and clamps at the first or last field; Tab and BackTab move through the same ten-field order and wrap. Target and Track use left/right, the Track selector wraps through all nine tracks, and Seed accepts digits with Backspace (left also removes its last digit). Percentage fields change by 5 points and clamp to 0–100%. Low octave and High octave use left/right one octave at a time: Low is clamped to 0 through High, while High is clamped to Low through 7. Chord shapes is an ordered selector that clamps through Default, Root shapes, and All shapes. Enter applies the generator and Esc closes it; range edits do not alter existing events. Defaults are the deterministic seed, 48% density, O2–O6, All shapes, 18% ties, 24% accents, and 18% slides. Rimshot generation uses steps 5 and 13 as its higher-probability backbeat anchors.
 
@@ -537,7 +542,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`. TUI Save As appends this extension to bare names and does not duplicate it when already present; explicit CLI project paths are used literally.
-- Version 20 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs/recipes, invalid tie graphs, and song references outside the dynamic pattern list. The required `globals.sidechain` object contains `depth`, `attack`, and `release` percentages. Version 19 and earlier files remain rejected; unsupported versions, missing versions, and unknown future versions are rejected without migration.
+- Version 21 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs/recipes, invalid tie graphs, and song references outside the dynamic pattern list. Event microtiming is bounded to `-50..50`; zero is omitted and a missing field defaults to zero. The required `globals.sidechain` object contains `depth`, `attack`, and `release` percentages. Version 20 and earlier files remain rejected; unsupported versions, missing versions, and unknown future versions are rejected without migration.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -547,7 +552,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 20,
+  "format_version": 21,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -641,7 +646,7 @@ For Chord or Lead pitch:
 }
 ```
 
-The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. Trigger reset and starting phase are required LFO fields in format version 20.
+The pitch assignment's `depth` is percentage control; its physical range is `±(depth / 100 * 2)` semitones. Pitch assignments on Bass, drums, or other ineligible destinations fail strict validation. Trigger reset and starting phase are required LFO fields in format version 21.
 
 A free rate uses `{ "mode": "free", "rate_percent": 50 }`. Waveform names are `sine`, `triangle`, `square`, `saw`, and `sample_and_hold`. Synchronized division names are `four_bars`, `two_bars`, `bar`, `half`, `quarter_dotted`, `quarter`, `quarter_triplet`, `eighth_dotted`, `eighth`, `eighth_triplet`, `sixteenth`, `sixteenth_triplet`, and `thirty_second`.
 
@@ -746,7 +751,7 @@ Cover musical degree/frequency mapping, input limits, tie creation/resolution/cl
 
 ### 12.2 Persistence tests
 
-Round-trip default and populated version-20 projects, including drum recipes, Rimshot, sidechain, track probability, every event, lock, LFO, effect, flanger setting, and articulation variant. The sidechain object and all three fields are required; missing or invalid values are rejected. Missing `tracks[].probability` loads as 100%; new saves always include it. Reject version 19 and other unsupported versions, incompatible recipes, Noise and Keyboard Tracking LFO assignments, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, history reset on load, and exact same-kind step clipboard behavior.
+Round-trip default and populated version-21 projects, including drum recipes, Rimshot, sidechain, track probability, microtiming at both bounds and zero, every event, lock, LFO, effect, flanger setting, and articulation variant. The sidechain object and all three fields are required; missing or invalid values are rejected. Missing `tracks[].probability` loads as 100%; missing event microtiming loads as zero and new saves omit zero. Reject version 20 and other unsupported versions, incompatible recipes, Noise and Keyboard Tracking LFO assignments, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences; preserve the active project on load failure; and verify atomic-save failure behavior, dirty-state updates, history reset on load, and exact same-kind step clipboard behavior.
 
 ### 12.3 TUI tests
 
@@ -763,7 +768,7 @@ Cover bounded oscillator pitch, ADSR timing, filter stability, finite drum outpu
 3. Enter Bass, Chord, and Lead notes with octave changes, shapes, inversions, arpeggiation, accents, slide, ordinary and wrapped ties; verify gates, releases, inherited articulation, and the fixed-time Bass glide.
 4. Edit base values, locks, synced/free LFOs, and all track effects including flanger center delay/depth; verify faders, readouts, badges, modulation centers, smoothing, and next-pass live updates.
 5. Audition empty and occupied steps with `o` while stopped and playing, including Chord shapes; change key and scale and verify existing degrees are reinterpreted on future triggers.
-6. Exercise undo/redo, step copy/cut/paste, tie cleanup, coalesced parameter and recipe edits, dirty restoration, sidechain editing and version-20 save/load with all event, lock, LFO, effect, mixer, articulation, and input settings; verify version-19 rejection.
+6. Exercise undo/redo, step copy/cut/paste, tie cleanup, coalesced parameter and recipe edits, dirty restoration, sidechain editing and version-21 save/load with all event, lock, LFO, effect, mixer, articulation, microtiming, and input settings; verify version-20 rejection and audible early/on-time/late event placement with swing and retriggers.
 7. List devices, use the default output, select a unique explicit device, and play for at least ten minutes at a supported low-latency configuration without stream errors, non-finite output, timing drift, or audible edit clicks.
 8. Exit normally and simulate startup/runtime failures, confirming that the terminal is always restored and project editing remains safe where supported.
 

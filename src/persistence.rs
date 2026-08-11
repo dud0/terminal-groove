@@ -44,7 +44,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if version != Some(20) {
+    if version != Some(21) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
@@ -165,6 +165,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.patterns[1].tracks[0].steps[1] = Some(crate::model::StepEvent::Trigger {
@@ -172,6 +173,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         save_atomic(&path, &project).unwrap();
@@ -250,7 +252,7 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 20);
+        assert_eq!(value["format_version"], 21);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -532,6 +534,7 @@ mod tests {
                 arpeggio: crate::model::ArpeggioConfig::default(),
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
         save_atomic(&path, &project).unwrap();
@@ -589,6 +592,7 @@ mod tests {
                 },
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
         save_atomic(&path, &project).unwrap();
@@ -611,7 +615,7 @@ mod tests {
             .remove("flanger");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 20);
+        assert_eq!(loaded.format_version, 21);
         assert_eq!(
             loaded.tracks[0].effects.flanger,
             crate::model::FlangerParameters::default()
@@ -671,6 +675,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.patterns[0].tracks[3].steps[0] = Some(crate::model::StepEvent::Trigger {
@@ -678,6 +683,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::THREE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         save_atomic(&path, &project).unwrap();

@@ -6,6 +6,7 @@ mod tests {
         ArpeggioRate, ArpeggioType, ChordShape, ChordSpread, DistortionParameters,
         FlangerParameters, LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
         ParameterValue, PhaserParameters, RIMSHOT_TRACK_INDEX, TrackEffects,
+        Microtiming,
     };
     use std::{fs, time::Instant};
 
@@ -73,6 +74,7 @@ mod tests {
                     recipe: crate::model::DrumRecipeSlot::ONE,
                     condition: Default::default(),
                     retrigger_count: 4,
+                    microtiming: crate::model::Microtiming::ZERO,
                     locks: Default::default(),
                 });
             }
@@ -83,6 +85,7 @@ mod tests {
                 slide: step % 3 == 0,
                 condition: Default::default(),
                 retrigger_count: 4,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
             project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[step] = Some(StepEvent::Note {
@@ -93,6 +96,7 @@ mod tests {
                 arpeggio: ArpeggioConfig::default(),
                 condition: Default::default(),
                 retrigger_count: 4,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
             project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[step] = Some(StepEvent::LeadNote {
@@ -102,6 +106,7 @@ mod tests {
                 slide: step % 3 == 0,
                 condition: Default::default(),
                 retrigger_count: 4,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
         }
@@ -554,6 +559,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 4,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.tracks[0].swing = Percent::new(75).unwrap();
@@ -586,6 +592,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 4,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.tracks[0].swing = Percent::new(75).unwrap();
@@ -603,6 +610,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         renderer.command(Audio::snapshot(&project));
@@ -620,6 +628,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 2,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.tracks[0].swing = Percent::new(75).unwrap();
@@ -650,6 +659,96 @@ mod tests {
     }
 
     #[test]
+    fn microtiming_delays_an_event_inside_its_slot() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps.resize(2, None);
+        project.patterns[0].tracks[0].steps[1] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::new(25).unwrap(),
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary(0);
+        renderer.boundary(1);
+        let action = renderer
+            .scheduled
+            .iter()
+            .flatten()
+            .find(|action| action.track == 0 && action.step == 1)
+            .unwrap();
+        assert_eq!(action.remaining, 249);
+    }
+
+    #[test]
+    fn negative_microtiming_is_armed_before_the_nominal_boundary() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps.resize(2, None);
+        project.patterns[0].tracks[0].steps[1] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::new(-25).unwrap(),
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary(0);
+        let action = renderer
+            .scheduled
+            .iter()
+            .flatten()
+            .find(|action| action.track == 0 && action.step == 1)
+            .unwrap();
+        assert_eq!(action.remaining, 749);
+        assert_eq!(renderer.early_armed[0], Some(1));
+        renderer.boundary(1);
+        assert_eq!(renderer.early_armed[0], None);
+        assert_eq!(renderer
+            .scheduled
+            .iter()
+            .flatten()
+            .filter(|action| action.track == 0 && action.step == 1 && !action.retrigger)
+            .count(), 1);
+    }
+
+    #[test]
+    fn late_microtiming_and_retriggers_are_clamped_before_the_next_slot() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: Default::default(),
+            retrigger_count: 4,
+            microtiming: Microtiming::new(50).unwrap(),
+            locks: Default::default(),
+        });
+        project.tracks[0].swing = Percent::new(75).unwrap();
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.command(AudioCommand::PlayPause);
+        renderer.boundary(1);
+        let actions: Vec<_> = renderer
+            .scheduled
+            .iter()
+            .flatten()
+            .filter(|action| action.track == 0 && action.step == 0)
+            .collect();
+        assert_eq!(actions.len(), 4);
+        assert!(actions.iter().all(|action| action.remaining < 1_000));
+        assert_eq!(
+            actions.iter().find(|action| !action.retrigger).unwrap().remaining,
+            812
+        );
+    }
+
+    #[test]
     fn track_probability_gates_the_base_action_and_entire_retrigger_burst() {
         let mut project = Project::new();
         project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
@@ -657,6 +756,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 4,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.tracks[0].probability = Percent::ZERO;
@@ -697,6 +797,7 @@ mod tests {
                 probability: Percent::ZERO,
             },
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.tracks[0].probability = Percent::new(50).unwrap();
@@ -720,6 +821,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::BassNote {
@@ -729,6 +831,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -760,6 +863,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.tracks[0].probability = Percent::new(50).unwrap();
@@ -782,6 +886,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 2,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.tracks[SYNTH_TRACK_START].swing = Percent::new(75).unwrap();
@@ -931,6 +1036,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
 
@@ -955,6 +1061,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -977,6 +1084,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -1015,6 +1123,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: parameter_locks([(ParameterId::Pan, 25)]),
         });
         renderer.command(Audio::snapshot(&project));
@@ -1029,6 +1138,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let a = render_offline(&p, 8_000, 2_000);
@@ -1051,6 +1161,7 @@ mod tests {
                 recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
             render_offline(&project, 8_000, 2_000)
@@ -1089,6 +1200,7 @@ mod tests {
                 recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
             let status = Arc::new(AudioStatus::default());
@@ -1130,6 +1242,7 @@ mod tests {
                 slide: false,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
             project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[step] = Some(StepEvent::Note {
@@ -1140,6 +1253,7 @@ mod tests {
                 arpeggio: ArpeggioConfig::default(),
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
             project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[step] = Some(StepEvent::Note {
@@ -1150,6 +1264,7 @@ mod tests {
                 arpeggio: ArpeggioConfig::default(),
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
         }
@@ -1170,6 +1285,7 @@ mod tests {
                 recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
             let status = Arc::new(AudioStatus::default());
@@ -1189,6 +1305,7 @@ mod tests {
                 slide: false,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
             let status = Arc::new(AudioStatus::default());
@@ -1229,6 +1346,7 @@ mod tests {
                 slide: false,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
             let status = Arc::new(AudioStatus::default());
@@ -1306,6 +1424,7 @@ mod tests {
                 arpeggio: ArpeggioConfig::default(),
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
 
@@ -1367,6 +1486,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Tie {
@@ -1392,6 +1512,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         renderer.command(Audio::snapshot(&project));
@@ -1415,6 +1536,7 @@ mod tests {
             slide: true,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::BassNote {
@@ -1424,6 +1546,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -1474,6 +1597,7 @@ mod tests {
             slide: true,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[1] = Some(StepEvent::LeadNote {
@@ -1483,6 +1607,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -1528,6 +1653,7 @@ mod tests {
                 slide,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: parameter_locks([(ParameterId::PortamentoTime, portamento)]),
             }
         }
@@ -1568,6 +1694,7 @@ mod tests {
                 slide: false,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
         }
@@ -1613,6 +1740,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -1648,6 +1776,7 @@ mod tests {
                 recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
         }
@@ -1657,6 +1786,7 @@ mod tests {
                 recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
         }
@@ -1666,6 +1796,7 @@ mod tests {
                 recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
         }
@@ -1686,6 +1817,7 @@ mod tests {
                 slide: step == 4,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
             });
         }
@@ -1726,6 +1858,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let mut wet_project = dry_project.clone();
@@ -1751,6 +1884,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let mut wet_project = dry_project.clone();
@@ -1771,6 +1905,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.tracks[0].delay_send = Percent::new(100).unwrap();
@@ -1811,6 +1946,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: parameter_locks([(ParameterId::Level, 0)]),
         });
         let status = Arc::new(AudioStatus::default());
@@ -1840,6 +1976,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: parameter_locks([(ParameterId::Cutoff, 20)]),
         });
         let status = Arc::new(AudioStatus::default());
@@ -1884,6 +2021,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: parameter_locks([(ParameterId::Level, 30), (ParameterId::Cutoff, 20)]),
         });
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Tie {
@@ -1954,6 +2092,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: parameter_locks([(ParameterId::Cutoff, 25)]),
         });
         let status = Arc::new(AudioStatus::default());
@@ -2070,6 +2209,7 @@ mod tests {
             arpeggio: ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: parameter_locks([(ParameterId::Cutoff, 20)]),
         });
         project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[1] = Some(StepEvent::Tie {
@@ -2083,6 +2223,7 @@ mod tests {
             arpeggio: ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -2144,6 +2285,7 @@ mod tests {
             arpeggio: ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -2308,6 +2450,7 @@ mod tests {
                 arpeggio: ArpeggioConfig::default(),
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks,
             }
         }
@@ -2381,6 +2524,7 @@ mod tests {
             arpeggio: ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let mut wet_project = dry_project.clone();
@@ -2447,6 +2591,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 2,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -2500,6 +2645,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.patterns[0].tracks[track].steps[1] = Some(StepEvent::Tie {
@@ -2554,6 +2700,7 @@ mod tests {
             },
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         let status = Arc::new(AudioStatus::default());
@@ -2666,6 +2813,7 @@ mod tests {
             },
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.patterns[0].tracks[CHORD_TRACK_INDEX].steps[1] = None;

@@ -196,6 +196,53 @@ impl Percent {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Microtiming(i8);
+
+impl Microtiming {
+    pub const ZERO: Self = Self(0);
+
+    pub const fn new(value: i8) -> Option<Self> {
+        if value >= -50 && value <= 50 {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    pub const fn get(self) -> i8 {
+        self.0
+    }
+
+    pub fn saturating_add(self, delta: i16) -> Self {
+        Self((i16::from(self.0) + delta).clamp(-50, 50) as i8)
+    }
+}
+
+impl fmt::Display for Microtiming {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 > 0 {
+            write!(f, "+{}%", self.0)
+        } else {
+            write!(f, "{}%", self.0)
+        }
+    }
+}
+
+impl Serialize for Microtiming {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_i8(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for Microtiming {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let value = i8::deserialize(d)?;
+        Self::new(value)
+            .ok_or_else(|| serde::de::Error::custom("microtiming must be between -50 and 50"))
+    }
+}
+
 impl fmt::Display for Percent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}%", self.0)
@@ -1383,6 +1430,8 @@ pub enum StepEvent {
             skip_serializing_if = "retrigger_count_is_default"
         )]
         retrigger_count: u8,
+        #[serde(default, skip_serializing_if = "microtiming_is_default")]
+        microtiming: Microtiming,
         locks: ParameterLocks,
     },
     BassNote {
@@ -1397,6 +1446,8 @@ pub enum StepEvent {
             skip_serializing_if = "retrigger_count_is_default"
         )]
         retrigger_count: u8,
+        #[serde(default, skip_serializing_if = "microtiming_is_default")]
+        microtiming: Microtiming,
         locks: ParameterLocks,
     },
     Note {
@@ -1414,6 +1465,8 @@ pub enum StepEvent {
             skip_serializing_if = "retrigger_count_is_default"
         )]
         retrigger_count: u8,
+        #[serde(default, skip_serializing_if = "microtiming_is_default")]
+        microtiming: Microtiming,
         locks: ParameterLocks,
     },
     LeadNote {
@@ -1428,6 +1481,8 @@ pub enum StepEvent {
             skip_serializing_if = "retrigger_count_is_default"
         )]
         retrigger_count: u8,
+        #[serde(default, skip_serializing_if = "microtiming_is_default")]
+        microtiming: Microtiming,
         locks: ParameterLocks,
     },
     Tie {
@@ -1442,6 +1497,9 @@ fn default_retrigger_count() -> u8 {
 }
 fn retrigger_count_is_default(value: &u8) -> bool {
     *value == 1
+}
+fn microtiming_is_default(value: &Microtiming) -> bool {
+    *value == Microtiming::ZERO
 }
 impl StepEvent {
     pub fn drum_recipe(&self) -> Option<DrumRecipeSlot> {
@@ -1552,6 +1610,26 @@ impl StepEvent {
             | Self::LeadNote {
                 retrigger_count, ..
             } => Some(retrigger_count),
+            Self::Tie { .. } => None,
+        }
+    }
+
+    pub fn microtiming(&self) -> Option<Microtiming> {
+        match self {
+            Self::Trigger { microtiming, .. }
+            | Self::BassNote { microtiming, .. }
+            | Self::Note { microtiming, .. }
+            | Self::LeadNote { microtiming, .. } => Some(*microtiming),
+            Self::Tie { .. } => None,
+        }
+    }
+
+    pub fn microtiming_mut(&mut self) -> Option<&mut Microtiming> {
+        match self {
+            Self::Trigger { microtiming, .. }
+            | Self::BassNote { microtiming, .. }
+            | Self::Note { microtiming, .. }
+            | Self::LeadNote { microtiming, .. } => Some(microtiming),
             Self::Tie { .. } => None,
         }
     }
@@ -1770,7 +1848,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 20,
+            format_version: 21,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -1913,7 +1991,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 20 {
+        if self.format_version != 21 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -3075,6 +3153,23 @@ mod tests {
         assert_eq!(p(95).saturating_add(10), p(100));
     }
     #[test]
+    fn microtiming_is_signed_and_bounded() {
+        assert_eq!(Microtiming::new(-50).unwrap().get(), -50);
+        assert_eq!(Microtiming::new(50).unwrap().get(), 50);
+        assert_eq!(Microtiming::new(-51), None);
+        assert_eq!(Microtiming::new(51), None);
+        assert_eq!(Microtiming::new(49).unwrap().saturating_add(10).get(), 50);
+        assert_eq!(
+            Microtiming::new(-49).unwrap().saturating_add(-10).get(),
+            -50
+        );
+        assert_eq!(Microtiming::new(25).unwrap().to_string(), "+25%");
+        assert_eq!(
+            serde_json::to_string(&Microtiming::new(-25).unwrap()).unwrap(),
+            "-25"
+        );
+    }
+    #[test]
     fn wrapped_tie() {
         let mut s = vec![None; 16];
         s[15] = Some(StepEvent::Note {
@@ -3085,6 +3180,7 @@ mod tests {
             arpeggio: ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         s[0] = Some(StepEvent::Tie {
@@ -3105,6 +3201,7 @@ mod tests {
             slide: false,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::Tie {
@@ -3152,7 +3249,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 20);
+        assert_eq!(project.format_version, 21);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
@@ -3210,6 +3307,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         };
         let note = StepEvent::Note {
@@ -3220,10 +3318,21 @@ mod tests {
             arpeggio: ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         };
         assert_eq!(serde_json::to_value(trigger).unwrap()["accent"], false);
         assert_eq!(serde_json::to_value(note).unwrap()["accent"], false);
+        assert!(
+            serde_json::to_value(trigger)
+                .unwrap()
+                .get("microtiming")
+                .is_none()
+        );
+        let mut shifted = trigger;
+        *shifted.microtiming_mut().unwrap() = Microtiming::new(-25).unwrap();
+        assert_eq!(serde_json::to_value(shifted).unwrap()["microtiming"], -25);
+        assert!(serde_json::from_str::<Microtiming>("51").is_err());
         assert!(serde_json::from_str::<StepEvent>(r#"{"type":"trigger","locks":{}}"#).is_err());
         assert!(
             serde_json::from_str::<StepEvent>(
@@ -3262,6 +3371,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: ParameterLocks::from_pairs([(
                 ParameterId::Cutoff,
                 ParameterValue::Percent(Percent::new(50).unwrap()),
@@ -3281,6 +3391,7 @@ mod tests {
             arpeggio: ArpeggioConfig::default(),
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: ParameterLocks::from_pairs([(
                 ParameterId::Tone,
                 ParameterValue::Percent(Percent::new(50).unwrap()),
@@ -3514,6 +3625,7 @@ mod tests {
             recipe: crate::model::DrumRecipeSlot::ONE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks,
         });
         assert_eq!(
@@ -3575,6 +3687,7 @@ mod tests {
             recipe: DrumRecipeSlot::TWO,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.patterns[0].tracks[3].steps[0] = Some(StepEvent::Trigger {
@@ -3582,6 +3695,7 @@ mod tests {
             recipe: DrumRecipeSlot::THREE,
             condition: Default::default(),
             retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
             locks: Default::default(),
         });
         project.validate().unwrap();

@@ -88,7 +88,7 @@ NAVIGATION  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/�
            g pattern generator · o audition selected step
            Shift+Delete clear selected track
 EVENTS & TRACKS  p BASE/LOCK · m mute · l length · Shift+D double
-                 A accent/default · Shift+G Bass/Lead slide · Shift+T condition/retrigger · Shift+S swing · Shift+Q probability
+                 A accent/default · Shift+G Bass/Lead slide · Shift+T microtiming/condition/retrigger · Shift+S swing · Shift+Q probability
                  Hat 1/2 Closed/Open · Tom 1/2/3 Low/Medium/High · 0 clear recipe locks
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
 PARAMETERS  v level · n pan · y delay send · b reverb send
@@ -2172,7 +2172,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     }
     if matches!(a.mode, Mode::TriggerEdit { .. }) {
         status_lines.push(Line::from(
-            "Trigger editor · [←/→] field  [↑/↓] adjust  [`/1–9/0] chance  [Enter/Esc] finish",
+            "Trigger editor · [←/→] field  [↑/↓] adjust  [Shift+↑/↓] ±10%  [Enter/Esc] finish",
         ));
     } else if a.mode == Mode::SwingEdit {
         status_lines.push(Line::from(

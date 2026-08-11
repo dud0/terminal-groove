@@ -160,7 +160,8 @@ struct Renderer {
     lfo_destinations: [[ParameterId; ParameterId::ALL.len()]; TRACK_COUNT],
     lfo_destination_count: [u8; TRACK_COUNT],
     preview_activity: [bool; TRACK_COUNT],
-    scheduled: [Option<ScheduledTrackAction>; 32],
+    scheduled: [Option<ScheduledTrackAction>; SCHEDULED_ACTION_COUNT],
+    early_armed: [Option<u8>; TRACK_COUNT],
     cycle_counts: [[u32; MAX_STEP_COUNT]; TRACK_COUNT],
     condition_rng: [u32; TRACK_COUNT],
     probability_rng: [u32; TRACK_COUNT],
@@ -168,6 +169,7 @@ struct Renderer {
 }
 
 const NON_CHORD_TRACK_COUNT: usize = TRACK_COUNT - 1;
+const SCHEDULED_ACTION_COUNT: usize = 96;
 
 /// Maps a logical track to its ordinary effect-chain slot. Chord is handled by
 /// its two independent group chains and intentionally has no ordinary slot.

@@ -265,6 +265,7 @@ fn fill_track(
                 recipe: crate::model::DrumRecipeSlot::ONE,
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: ParameterLocks::default(),
             },
             TrackKind::Bass => StepEvent::BassNote {
@@ -274,6 +275,7 @@ fn fill_track(
                 slide: rng.percent(slides),
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: ParameterLocks::default(),
             },
             TrackKind::Chord => StepEvent::Note {
@@ -284,6 +286,7 @@ fn fill_track(
                 arpeggio: ArpeggioConfig::default(),
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: ParameterLocks::default(),
             },
             TrackKind::Lead => StepEvent::LeadNote {
@@ -293,6 +296,7 @@ fn fill_track(
                 slide: rng.percent(slides),
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: ParameterLocks::default(),
             },
         });

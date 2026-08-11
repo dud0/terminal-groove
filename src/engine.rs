@@ -178,6 +178,7 @@ mod tests {
                 accent: false,
                 condition: Default::default(),
                 retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
                 locks: Default::default(),
                 chord_shape: None,
                 arpeggio: ArpeggioConfig::default(),
