@@ -2098,6 +2098,7 @@ pub(super) fn select_parameter_bank(a: &mut App, bank: ParameterBank) {
     if let Mode::ParameterEdit(_) = a.mode {
         let parameter = remembered_parameter(a, a.row - 1, a.parameter_bank);
         enter_parameter_edit(a, parameter);
+        refresh_lock_recipe(a);
     }
     a.status = match a.parameter_bank {
         ParameterBank::Params => "PARAMS bank".into(),

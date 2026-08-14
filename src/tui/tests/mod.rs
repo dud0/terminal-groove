@@ -2204,6 +2204,29 @@ fn bank_navigation_refreshes_the_lock_recipe() {
 }
 
 #[test]
+fn parameter_bank_switch_restores_lock_recipe_for_remembered_control() {
+    let mut project = Project::new();
+    project.patterns[0].tracks[2].steps[0] = Some(StepEvent::Trigger {
+        accent: false,
+        recipe: crate::model::DrumRecipeSlot::TWO,
+        condition: Default::default(),
+        retrigger_count: 1,
+        microtiming: crate::model::Microtiming::ZERO,
+        locks: Default::default(),
+    });
+    let mut app = App::new(project, None);
+    app.row = 3;
+    app.scope = Scope::Lock;
+
+    enter_parameter_edit(&mut app, ParameterId::Tune);
+    select_parameter_bank(&mut app, ParameterBank::Effects);
+    select_parameter_bank(&mut app, ParameterBank::Params);
+
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Tune));
+    assert_eq!(app.parameter_recipe, crate::model::DrumRecipeSlot::TWO);
+}
+
+#[test]
 fn sixty_four_step_track_renders_as_two_compact_rows_without_shortcut_hints() {
     let mut project = Project::new();
     for track in &mut project.patterns[0].tracks {
