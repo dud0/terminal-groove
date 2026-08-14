@@ -120,23 +120,70 @@ fn parameter_banks_are_contextual_and_model_compatible() {
     }));
 }
 #[test]
-fn parameter_mode_enters_the_remembered_bank_and_bank_selection_activates_its_first_control() {
+fn parameter_mode_remembers_the_last_control_per_track_and_bank() {
     let mut app = App::new(Project::new(), None);
     app.row = 1;
     enter_parameter_mode(&mut app);
     assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Level));
 
+    enter_parameter_edit(&mut app, ParameterId::Attack);
+    finish_parameter_edit(&mut app);
+    enter_parameter_mode(&mut app);
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Attack));
+
     select_parameter_bank(&mut app, ParameterBank::Effects);
     assert_eq!(app.parameter_bank, ParameterBank::Effects);
     assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::DistortionDrive));
 
+    enter_parameter_edit(&mut app, ParameterId::DistortionMix);
     finish_parameter_edit(&mut app);
     enter_parameter_mode(&mut app);
-    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::DistortionDrive));
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::DistortionMix));
 
     select_parameter_bank(&mut app, ParameterBank::Params);
     assert_eq!(app.parameter_bank, ParameterBank::Params);
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Attack));
+
+    finish_parameter_edit(&mut app);
+    app.row = 2;
+    enter_parameter_mode(&mut app);
     assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Level));
+    enter_parameter_edit(&mut app, ParameterId::Pan);
+    finish_parameter_edit(&mut app);
+    app.row = 1;
+    enter_parameter_mode(&mut app);
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Attack));
+    app.row = 2;
+    enter_parameter_mode(&mut app);
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Pan));
+}
+
+#[test]
+fn sequencer_lock_shortcut_enters_lock_scope_at_remembered_parameter() {
+    let mut app = App::new(Project::new(), None);
+    app.row = 1;
+    enter_parameter_edit(&mut app, ParameterId::Attack);
+    finish_parameter_edit(&mut app);
+
+    enter_lock_parameter_mode(&mut app);
+
+    assert_eq!(app.scope, Scope::Lock);
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Attack));
+}
+
+#[test]
+fn parameter_track_switch_restores_each_track_parameter() {
+    let mut app = App::new(Project::new(), None);
+    app.row = 1;
+    enter_parameter_mode(&mut app);
+    enter_parameter_edit(&mut app, ParameterId::Attack);
+
+    select_track(&mut app, 1);
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Level));
+    enter_parameter_edit(&mut app, ParameterId::Pan);
+
+    select_track(&mut app, 0);
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Attack));
 }
 
 #[test]

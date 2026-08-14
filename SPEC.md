@@ -73,7 +73,7 @@ Manual live recording captures the final limited stereo master to a 24-bit PCM W
 
 ### 2.3 Drum events
 
-A drum step is either empty or contains one trigger with a required Boolean `accent`, a trigger `condition`, a `retrigger_count`, and signed `microtiming` from `-50` through `+50` percent. Hi-hat and Tom triggers additionally select a referenced instrument recipe: Hi-hat recipes are Closed and Open, while Tom recipes are Low, Medium, and High. Recipe 1 is the default and is omitted from JSON. Each track has a persisted input accent default, initially off. New triggers inherit that default; pressing `A` on an empty step toggles the default and leaves the step empty. Pressing `A` on an occupied trigger toggles only that trigger's accent. New triggers otherwise always trigger and retrigger once. `condition` is `Always`, `Cycle { position, length }` for all phases of lengths 2–4, or `Chance { probability }` at 0–100%. Counts are 1–4 inclusive, including the first hit. Ties never carry these fields. Pressing `Enter` on an occupied drum step clears the trigger, its articulation, and all locks.
+A drum step is either empty or contains one trigger with a required Boolean `accent`, a trigger `condition`, a `retrigger_count`, and signed `microtiming` from `-50` through `+50` percent. Hi-hat and Tom triggers additionally select a referenced instrument recipe: Hi-hat recipes are Closed and Open, while Tom recipes are Low, Medium, and High. Recipe 1 is the default and is omitted from JSON. Each track has a persisted input accent default, initially off. New triggers inherit that default; pressing `a` on an empty step toggles the default and leaves the step empty. Pressing `a` on an occupied trigger toggles only that trigger's accent. New triggers otherwise always trigger and retrigger once. `condition` is `Always`, `Cycle { position, length }` for all phases of lengths 2–4, or `Chance { probability }` at 0–100%. Counts are 1–4 inclusive, including the first hit. Ties never carry these fields. Pressing `Enter` on an occupied drum step clears the trigger, its articulation, and all locks.
 
 On the Hi-hat row, `1` and `2` select Closed and Open. On the Tom row, `1`, `2`, and `3` select Low, Medium, and High. The shortcut creates a trigger on an empty step or changes the recipe on an existing trigger, preserving accent, condition, retrigger count, and unrelated locks. Selecting a recipe clears that step's Tune/Tone/Decay overrides as applicable. `0` clears those overrides without changing the recipe. Recipe selection automatically auditions while stopped or paused.
 
@@ -136,7 +136,7 @@ Every track has base parameter values. A step may contain a sparse set of parame
 - Clearing an event also clears every lock on that step.
 - Accent and slide are event properties, not base parameters, locks, or LFO destinations. They apply on the event's next trigger.
 
-The UI has a persistent parameter scope with two visibly labelled states: `BASE` and `LOCK`. In Parameter mode, `p` toggles the scope on a track. The scope persists while moving between steps and tracks, and resets to `BASE` when the user selects the global row or presses `Esc` from Sequencer mode.
+The UI has a persistent parameter scope with two visibly labelled states: `BASE` and `LOCK`. In Sequencer mode, `p` enters Parameter mode in `LOCK` scope at the selected track's remembered parameter; in Parameter mode, `p` toggles the scope on a track. The scope persists while moving between steps and tracks, and resets to `BASE` when the user selects the global row or presses `Esc` from Sequencer mode.
 
 In `LOCK` scope, attempting to edit a parameter on an empty step is rejected. When a lock does not yet exist, arrow editing begins from the inherited base value. `Backspace` or `Delete` while editing a locked parameter removes only that lock and exits parameter editing.
 
@@ -351,7 +351,7 @@ The application uses ordinary portable terminal press events. It must not requir
 - `Backspace` or `Delete` clears the selected event and its locks.
 - `Shift+Delete` immediately clears every event and lock from the selected track in the active pattern. It preserves the track length and all non-sequence settings, and is one undoable edit.
 - `l` opens numeric track-length input. Digits plus Enter set an exact length; up/down changes it by 1 and Shift+up/down by 16, clamped to 1–64. Arrow changes apply immediately and remain applied on Esc.
-- `Tab` or `Shift+Tab` enters Parameter mode for the selected track. It activates the first control in the remembered `PARAMS` or `EFFECTS` bank. On the global row it leaves the mode unchanged and reports that a track is required.
+- `Tab` or `Shift+Tab` enters Parameter mode for the selected track at its remembered control in the active `PARAMS` or `EFFECTS` bank, falling back to that bank's first compatible control. On the global row it leaves the mode unchanged and reports that a track is required.
 - `Esc` exits overlays or Parameter mode first; from Sequencer mode it returns lock scope to `BASE`.
 
 ### 5.2 Key map
@@ -385,15 +385,16 @@ The application uses ordinary portable terminal press events. It must not requir
 | Sequencer, Parameter, LFO, or Chord editor | `?` | Open the full help overlay |
 | Sequencer or Parameter mode | `~` (`Shift+\``) | Jump to the global-controls row |
 | Sequencer mode | `Shift+Left` / `Shift+Right` | Move to the previous/next 16-step bank |
+| Sequencer mode Track | `p` | Enter Parameter mode in `LOCK` scope at the track's remembered parameter |
 | Parameter mode | `p` | Toggle visible `BASE`/`LOCK` scope |
-| Parameter mode | `Shift+Left` / `Shift+Right` | Select the `PARAMS` / `EFFECTS` bank and activate its first control |
+| Parameter mode | `Shift+Left` / `Shift+Right` | Select the `PARAMS` / `EFFECTS` bank and restore its remembered control, or use its first compatible control |
 | Parameter mode | `PageUp` / `PageDown` | Move to the previous/next step while retaining the active parameter and scope |
 | Parameter mode | `Shift+PageUp` / `Shift+PageDown` | Move to the previous/next 16-step bank |
 | Sequencer or Parameter mode | `Shift+1`–`Shift+9` | Jump to the corresponding track |
 | Sequencer mode Track | `l` | Edit the selected track length from 1 through 64 steps |
 | Sequencer mode Track | `Shift+D` | Double the selected track by appending an exact copy, when its length is at most 32 |
 | Sequencer mode Track | `Shift+Delete` | Clear all events and locks from the selected track in the active pattern |
-| Sequencer mode Trigger, note, or empty step | `A` | Toggle event accent, or the track's input accent default on an empty step |
+| Sequencer mode Trigger, note, or empty step | `a` | Toggle event accent, or the track's input accent default on an empty step |
 | Sequencer mode Bass/Lead note | `Shift+G` | Toggle slide |
 | Sequencer mode Trigger/note | `Shift+T` | Edit microtiming, condition, cycle/chance values, and retrigger count |
 | Sequencer mode Track | `Shift+S` | Edit 0–75% swing |
@@ -441,7 +442,7 @@ Track parameter shortcuts are resolved only in Parameter mode, while step, event
 
 - Press `Tab` or `Shift+Tab` from Sequencer mode to enter a visibly labelled Parameter editor; the same keys return to Sequencer mode. `Enter` and `Esc` also return without reverting changes already made.
 - Pressing another valid parameter shortcut switches the editor to that parameter without leaving the current BASE/LOCK scope.
-- Left/right cycles through the selected track's visible parameter controls and wraps at either end. Shift+left selects `PARAMS` and Shift+right selects `EFFECTS`; either selection activates that bank's first control.
+- Left/right cycles through the selected track's visible parameter controls and wraps at either end. Shift+left selects `PARAMS` and Shift+right selects `EFFECTS`; either selection restores that track and bank's remembered control, or activates the bank's first compatible control when none has been remembered. Tab re-enters Parameter mode at the selected track and bank's remembered control.
 - PageUp/PageDown moves to the previous/next step of the current track, wrapping at its length, while keeping the active parameter and BASE/LOCK scope. Shift+PageUp/PageDown moves between 16-step banks. Shift+1 through Shift+9 jumps to the corresponding track; an incompatible parameter switches to that track's first compatible parameter.
 - A number-row percentage assignment applies immediately, keeps the parameter editor open, and ramps the affected continuous control to its new value over approximately 30 ms like a quick fader movement.
 - Up/down assignments apply immediately and keep the editor open for repeated changes. On Bass waveform, either direction switches between Saw and Square; on Chord chorus, Up/Down moves through Off, I, and II without wrapping.
@@ -451,7 +452,7 @@ Track parameter shortcuts are resolved only in Parameter mode, while step, event
 - `Shift+L` on an eligible parameter immediately creates the default enabled sine, quarter-note, 10%-depth LFO when none exists, then opens its modal editor. Existing assignments open unchanged.
 - Chord and Lead show an LFO-only `Pitch LFO` card selected by `i`. It displays assignment depth and its physical bipolar range; it has no BASE value, LOCK value, or direct percentage editor. `Shift+L` opens the same LFO modal for pitch, and Backspace/Delete removes the assignment.
 - The LFO modal uses left/right to select enabled, waveform, trigger reset, starting phase, rate mode, rate, or depth; up/down adjusts the selected field, Shift+up/down changes percentage fields by 10, and number-row percentage entry applies to starting phase, free rate, and depth. Enter or Esc closes without reverting immediate edits. Backspace or Delete removes the assignment.
-- Sequencer event and track mutations, including note/recipe entry, ties, accent, slide, trigger, swing, probability, mute, length, and track duplication are unavailable in Parameter mode. Lowercase `p` toggles BASE/LOCK only in Parameter mode; `P` remains the Chord/Lead pulse-width shortcut.
+- Sequencer event and track mutations, including note/recipe entry, ties, accent, slide, trigger, swing, probability, mute, length, and track duplication are unavailable in Parameter mode. In Sequencer mode, `p` enters Parameter mode in `LOCK` scope at the selected track's remembered parameter. In Parameter mode, `p` toggles BASE/LOCK; `P` remains the Chord/Lead pulse-width shortcut.
 
 The pattern-idea generator opens with `g` and is session-only; its settings are never written to project JSON. Its fields, in order, are `Target`, `Track`, `Seed`, `Density`, `Low octave`, `High octave`, `Chord shapes`, `Ties`, `Accents`, and `Slides`. Up/down moves between fields and clamps at the first or last field; Tab and BackTab move through the same ten-field order and wrap. Target and Track use left/right, the Track selector wraps through all nine tracks, and Seed accepts digits with Backspace (left also removes its last digit). Percentage fields change by 5 points and clamp to 0–100%. Low octave and High octave use left/right one octave at a time: Low is clamped to 0 through High, while High is clamped to Low through 7. Chord shapes is an ordered selector that clamps through Default, Root shapes, and All shapes. Enter applies the generator and Esc closes it; range edits do not alter existing events. Defaults are the deterministic seed, 48% density, O2–O6, All shapes, 18% ties, 24% accents, and 18% slides. Rimshot generation uses steps 5 and 13 as its higher-probability backbeat anchors.
 

@@ -239,6 +239,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         return Ok(());
     }
     match k.code {
+        KeyCode::Char('p') if a.row > 0 => enter_lock_parameter_mode(a),
         KeyCode::Char('g') => {
             let track = a.row.saturating_sub(1).min(TRACK_COUNT - 1);
             let defaults = GeneratorConfig::default();
@@ -326,7 +327,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             a.status = format!("Editing {} length", a.editor.project.tracks[a.row - 1].name);
         }
         KeyCode::Char('D') if a.row > 0 => duplicate_selected_track(a, audio),
-        KeyCode::Char('A') if a.row > 0 => {
+        KeyCode::Char('a') if a.row > 0 => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.toggle_accent(track, step)) {
                 sync_project(a, audio);
@@ -541,18 +542,9 @@ pub(super) fn select_track(a: &mut App, track: usize) {
         a.parameter_recipe = DrumRecipeSlot::ONE;
     }
 
-    match a.mode {
-        Mode::ParameterEdit(parameter)
-            if !parameter.is_valid_for(a.editor.project.tracks[track].kind) =>
-        {
-            let replacement = visible_parameter_descriptors(
-                a.parameter_bank,
-                a.editor.project.tracks[track].kind,
-            )[0]
-            .id;
-            enter_parameter_edit(a, replacement);
-        }
-        _ => {}
+    if matches!(a.mode, Mode::ParameterEdit(_)) {
+        let replacement = remembered_parameter(a, track, a.parameter_bank);
+        enter_parameter_edit(a, replacement);
     }
 
     if a.scope == Scope::Lock
@@ -2062,14 +2054,34 @@ pub(super) fn active_parameter_shortcut(a: &App, c: char) -> Option<ParameterId>
         .map(|descriptor| descriptor.id)
 }
 
+fn remembered_parameter(a: &App, track: usize, bank: ParameterBank) -> ParameterId {
+    let kind = a.editor.project.tracks[track].kind;
+    let descriptors = visible_parameter_descriptors(bank, kind);
+    a.remembered_parameters[track][bank.index()]
+        .filter(|parameter| {
+            descriptors
+                .iter()
+                .any(|descriptor| descriptor.id == *parameter)
+        })
+        .unwrap_or_else(|| descriptors[0].id)
+}
+
 pub(super) fn enter_parameter_mode(a: &mut App) {
     if a.row == 0 {
         a.status = "Select a track to edit parameters".into();
         return;
     }
-    let parameter =
-        visible_parameter_descriptors(a.parameter_bank, a.editor.project.tracks[a.row - 1].kind)[0]
-            .id;
+    let parameter = remembered_parameter(a, a.row - 1, a.parameter_bank);
+    enter_parameter_edit(a, parameter);
+}
+
+pub(super) fn enter_lock_parameter_mode(a: &mut App) {
+    if a.row == 0 {
+        a.status = "Select a track to lock parameters".into();
+        return;
+    }
+    a.scope = Scope::Lock;
+    let parameter = remembered_parameter(a, a.row - 1, a.parameter_bank);
     enter_parameter_edit(a, parameter);
 }
 
@@ -2084,11 +2096,7 @@ pub(super) fn select_parameter_bank(a: &mut App, bank: ParameterBank) {
     a.parameter_bank = bank;
     a.parameter_recipe = DrumRecipeSlot::ONE;
     if let Mode::ParameterEdit(_) = a.mode {
-        let parameter = visible_parameter_descriptors(
-            a.parameter_bank,
-            a.editor.project.tracks[a.row - 1].kind,
-        )[0]
-        .id;
+        let parameter = remembered_parameter(a, a.row - 1, a.parameter_bank);
         enter_parameter_edit(a, parameter);
     }
     a.status = match a.parameter_bank {
@@ -2100,6 +2108,13 @@ pub(super) fn select_parameter_bank(a: &mut App, bank: ParameterBank) {
 pub(super) fn enter_parameter_edit(a: &mut App, parameter: ParameterId) {
     let track = a.row.saturating_sub(1);
     let kind = a.editor.project.tracks[track].kind;
+    if a.row > 0
+        && visible_parameter_descriptors(a.parameter_bank, kind)
+            .iter()
+            .any(|descriptor| descriptor.id == parameter)
+    {
+        a.remembered_parameters[track][a.parameter_bank.index()] = Some(parameter);
+    }
     if is_recipe_parameter(kind, parameter) && !matches!(a.mode, Mode::ParameterEdit(_)) {
         a.parameter_recipe = if a.scope == Scope::Lock {
             selected_drum_recipe(a, track)

@@ -84,11 +84,11 @@ const HELP_TEXT: &str =
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
 SEQUENCER  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
-           Tab parameters · ~ globals · Shift+1..9 tracks · Enter event · Del clear · Esc BASE
+           Tab parameters · p LOCK parameters · ~ globals · Shift+1..9 tracks · Enter event · Del clear · Esc BASE
            g pattern generator · o audition selected step
            Shift+Delete clear selected track
 EVENTS & TRACKS  m mute · l length · Shift+D double
-                 A accent/default · Shift+G Bass/Lead slide · Shift+T microtiming/condition/retrigger · Shift+S swing · Shift+Q probability
+                 a accent/default · Shift+G Bass/Lead slide · Shift+T microtiming/condition/retrigger · Shift+S swing · Shift+Q probability
                  Hat 1/2 Closed/Open · Tom 1/2/3 Low/Medium/High · 0 clear recipe locks
                  1–8 note · [ / ] octave · t tie · C Chord trigger editor
 PARAMETERS  v level · n pan · y delay send · b reverb send

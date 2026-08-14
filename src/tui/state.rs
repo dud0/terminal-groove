@@ -63,6 +63,15 @@ pub(crate) enum ParameterBank {
     Effects,
 }
 
+impl ParameterBank {
+    pub(super) const fn index(self) -> usize {
+        match self {
+            Self::Params => 0,
+            Self::Effects => 1,
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SidechainField {
@@ -176,6 +185,7 @@ pub struct App {
     pub(super) scope: Scope,
     pub(super) parameter_bank: ParameterBank,
     pub(super) parameter_recipe: DrumRecipeSlot,
+    pub(super) remembered_parameters: [[Option<ParameterId>; 2]; TRACK_COUNT],
     pub(super) mode: Mode,
     pub(super) chord_field: ChordField,
     pub(super) status: String,
@@ -237,6 +247,7 @@ impl App {
             scope: Scope::Base,
             parameter_bank: ParameterBank::Params,
             parameter_recipe: DrumRecipeSlot::ONE,
+            remembered_parameters: [[None; 2]; TRACK_COUNT],
             mode: Mode::Navigation,
             chord_field: ChordField::Shape,
             status: "Ready".into(),
