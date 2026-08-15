@@ -2033,6 +2033,8 @@ fn preset_paths_are_kind_scoped_and_normalize_extensions() {
     assert!(path.ends_with("Terminal Groove/Presets/lead/bright.preset.json"));
     assert!(preset_path_for_name(TrackKind::Kick, "bad/name").is_err());
     assert!(preset_path_for_name(TrackKind::Kick, "").is_err());
+    assert!(preset_path_for_name(TrackKind::Kick, "default").is_err());
+    assert!(preset_path_for_name(TrackKind::Kick, DEFAULT_PRESET_NAME).is_err());
 }
 
 #[test]
@@ -2173,6 +2175,7 @@ fn preset_browser_lists_only_sorted_preset_files() {
     std::fs::write(directory.path().join("zeta.preset.json"), b"preset").unwrap();
     std::fs::write(directory.path().join("alpha.preset.json"), b"preset").unwrap();
     std::fs::write(directory.path().join("not-a-preset.json"), b"other").unwrap();
+    std::fs::write(directory.path().join(DEFAULT_PRESET_NAME), b"default").unwrap();
     std::fs::write(
         directory.path().join(".saving.preset.json.1234.tmp"),
         b"temporary",

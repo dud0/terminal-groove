@@ -108,6 +108,9 @@ pub(super) fn list_presets(directory: &Path) -> io::Result<Vec<PathBuf>> {
             && path
                 .file_name()
                 .is_some_and(|name| name.to_string_lossy().ends_with(PRESET_EXTENSION))
+            && path
+                .file_name()
+                .is_none_or(|name| name != DEFAULT_PRESET_NAME)
     });
     Ok(entries)
 }
@@ -155,6 +158,9 @@ pub(super) fn preset_path_for_name(track: TrackKind, name: &str) -> Result<PathB
     }
     if base_name.is_empty() {
         anyhow::bail!("Preset name cannot be empty")
+    }
+    if base_name == DEFAULT_PRESET_NAME.trim_end_matches(PRESET_EXTENSION) {
+        anyhow::bail!("Preset name is reserved for the track default")
     }
     Ok(preset_directory(track)?.join(format!("{base_name}{PRESET_EXTENSION}")))
 }

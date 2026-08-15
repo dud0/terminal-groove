@@ -163,7 +163,10 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                     };
                 }
             }
-            KeyCode::Char('d' | 'D') if k.modifiers.contains(KeyModifiers::SHIFT) => {
+            KeyCode::Char('d' | 'D')
+                if k.modifiers.contains(KeyModifiers::SHIFT)
+                    && matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_)) =>
+            {
                 if a.row == 0 {
                     a.status = "Select a track to manage its default preset".into();
                 } else {
