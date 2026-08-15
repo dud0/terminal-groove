@@ -1,11 +1,12 @@
 use super::{
     controller::{
-        change_octave, enter_error, enter_global_edit, global_id, global_shortcut,
-        handle_file_input, handle_global_key, handle_new_confirm, handle_open_confirm,
-        handle_overwrite_confirm, handle_preset_browser, handle_preset_name_input,
-        handle_preset_overwrite_confirm, handle_project_browser, handle_sidechain_key,
-        handle_tempo_input, new_project, preset_browser_mode, project_browser_mode,
-        request_new_project, save, save_as_mode, sync_project, sync_project_with_smoothing,
+        change_octave, default_preset_confirm_mode, enter_error, enter_global_edit, global_id,
+        global_shortcut, handle_default_preset_confirm, handle_file_input, handle_global_key,
+        handle_new_confirm, handle_open_confirm, handle_overwrite_confirm, handle_preset_browser,
+        handle_preset_name_input, handle_preset_overwrite_confirm, handle_project_browser,
+        handle_sidechain_key, handle_tempo_input, new_project, preset_browser_mode,
+        project_browser_mode, request_new_project, save, save_as_mode, sync_project,
+        sync_project_with_smoothing,
     },
     controls::GLOBAL_CONTROLS,
     render::{
@@ -63,6 +64,10 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     }
     if matches!(a.mode, Mode::PresetOverwriteConfirm { .. }) {
         handle_preset_overwrite_confirm(a, k);
+        return Ok(());
+    }
+    if matches!(a.mode, Mode::DefaultPresetConfirm { .. }) {
+        handle_default_preset_confirm(a, k);
         return Ok(());
     }
     if matches!(a.mode, Mode::FileInput(_, _)) {
@@ -156,6 +161,16 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                         track: a.row - 1,
                         input: String::new(),
                     };
+                }
+            }
+            KeyCode::Char('d' | 'D') if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                if a.row == 0 {
+                    a.status = "Select a track to manage its default preset".into();
+                } else {
+                    match default_preset_confirm_mode(a, a.row - 1) {
+                        Ok(mode) => a.mode = mode,
+                        Err(error) => enter_error(a, error.to_string()),
+                    }
                 }
             }
             KeyCode::Char('o' | 'O') if k.modifiers.contains(KeyModifiers::SHIFT) => {

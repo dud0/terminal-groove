@@ -40,6 +40,10 @@ mod state;
 
 pub use state::App;
 
+pub fn project_with_default_presets() -> Project {
+    controller::project_with_default_presets().0
+}
+
 pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
     let old_hook = std::panic::take_hook();

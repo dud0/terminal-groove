@@ -2070,6 +2070,38 @@ fn preset_overwrite_confirmation_identifies_the_preset() {
 }
 
 #[test]
+fn valid_default_presets_apply_only_to_new_project_track_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let preset_path = directory.path().join("kick").join(DEFAULT_PRESET_NAME);
+    let mut source = Project::new();
+    source.tracks[0].level = Percent::new(73).unwrap();
+    crate::persistence::save_track_preset_atomic(
+        &preset_path,
+        &crate::persistence::TrackPreset::from_track(source.tracks[0].clone()),
+    )
+    .unwrap();
+
+    let mut project = Project::new();
+    let original_steps = project.patterns.clone();
+    assert_eq!(apply_default_presets_in(&mut project, directory.path()), 0);
+    assert_eq!(project.tracks[0].level, Percent::new(73).unwrap());
+    assert_eq!(project.patterns, original_steps);
+}
+
+#[test]
+fn default_preset_dialog_exposes_set_and_clear_actions() {
+    let mut app = App::new(Project::new(), None);
+    app.mode = Mode::DefaultPresetConfirm {
+        track: 0,
+        has_default: true,
+    };
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("Track default preset"));
+    assert!(screen.contains("Set current [Enter/S]"));
+    assert!(screen.contains("Clear [D]"));
+}
+
+#[test]
 fn save_as_overwrite_check_applies_to_every_existing_destination() {
     let directory = tempfile::tempdir().unwrap();
     let existing = directory.path().join("existing.groove.json");

@@ -379,6 +379,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `Ctrl+O` | Open project browser |
 | Track Sequencer/Parameter mode | `Ctrl+Shift+P` | Save the selected track's non-sequence settings as a named preset |
 | Track Sequencer/Parameter mode | `Ctrl+Shift+O` | Browse and load a preset for the selected track kind |
+| Track Sequencer/Parameter mode | `Ctrl+Shift+D` | Set or clear the selected track's default preset |
 | Anywhere | `Ctrl+Q` | Quit, with dirty confirmation |
 | Sequencer/editor modes | `Ctrl+R` | Start or stop live WAV recording |
 | Anywhere | `Ctrl+Z` | Undo |
@@ -446,6 +447,8 @@ Track parameter shortcuts are resolved only in Parameter mode, while step, event
 - A preset contains every persistent setting of one track: mixer, instrument, effects, LFO assignments, input defaults, mute, swing, and probability. It never contains patterns, steps, or parameter locks.
 - `Ctrl+Shift+P` opens a name editor for the selected track; existing preset names require an overwrite confirmation. Saving a preset does not alter the project or its dirty state.
 - `Ctrl+Shift+O` opens a same-kind preset browser. Loading replaces only the selected track's persistent settings, preserves all pattern data, is one undoable dirty project edit, synchronizes audio, and returns to Sequencer mode in `BASE` scope. Invalid, unsupported, or wrong-kind presets are rejected without changing the project.
+- Each track kind can have one reserved `.presets/<track-kind>/default.preset.json`. `Ctrl+Shift+D` opens a confirmation dialog to set the selected track's current settings as that default, or clear an existing default. Default changes never alter the current project.
+- New untitled projects load every valid same-kind default preset before audio starts; missing or invalid defaults fall back to built-in settings without blocking project creation.
 
 ### 5.4 Parameter mode
 

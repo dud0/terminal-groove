@@ -58,6 +58,10 @@ pub(crate) enum Mode {
         path: PathBuf,
         input: String,
     },
+    DefaultPresetConfirm {
+        track: usize,
+        has_default: bool,
+    },
     OpenConfirm(PathBuf),
     NewConfirm,
     Error(String),

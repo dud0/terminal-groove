@@ -62,6 +62,7 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::PresetNameInput { .. } => "Preset-name input".into(),
         Mode::OverwriteConfirm { .. } => "Overwrite confirmation".into(),
         Mode::PresetOverwriteConfirm { .. } => "Overwrite confirmation".into(),
+        Mode::DefaultPresetConfirm { .. } => "Default preset confirmation".into(),
         Mode::OpenConfirm(_) => "Unsaved confirmation".into(),
         Mode::NewConfirm => "Unsaved confirmation".into(),
         Mode::Error(_) => "Error dialog".into(),
@@ -85,7 +86,7 @@ pub(super) fn help_available(mode: &Mode) -> bool {
 
 const HELP_TEXT: &str =
     "CORE  Space play/pause · . stop/reset · ? help · Esc close help
-      Ctrl+N new · Ctrl+O projects · Ctrl+S save · Ctrl+Shift+S save as · Ctrl+Shift+P/O presets
+      Ctrl+N new · Ctrl+O open · Ctrl+S save · Ctrl+Shift+S save as · Ctrl+Shift+P/O/D presets
       Ctrl+Q quit · Ctrl+R record WAV · Ctrl+Z undo · Ctrl+Y redo · Ctrl+C/X/V copy/cut/paste selected step
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
@@ -2642,6 +2643,20 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 popup_area,
                 "Overwrite existing preset?",
                 &format!("{destination}\n\nOverwrite [Enter/O]  Cancel [Esc]"),
+            )
+        }
+        Mode::DefaultPresetConfirm { track, has_default } => {
+            let name = &a.editor.project.tracks[*track].name;
+            let action = if *has_default {
+                "Set current [Enter/S]  Clear [D]  Cancel [Esc]"
+            } else {
+                "Set current [Enter/S]  Cancel [Esc]"
+            };
+            popup(
+                f,
+                area,
+                "Track default preset",
+                &format!("{name} defaults apply to new projects only.\n\n{action}"),
             )
         }
         Mode::OpenConfirm(path) => popup(

@@ -20,6 +20,7 @@ pub(super) const PROJECT_DIRECTORY_NAME: &str = ".projects";
 pub(super) const PROJECT_EXTENSION: &str = ".groove.json";
 pub(super) const PRESET_DIRECTORY_NAME: &str = ".presets";
 pub(super) const PRESET_EXTENSION: &str = ".preset.json";
+pub(super) const DEFAULT_PRESET_NAME: &str = "default.preset.json";
 
 fn is_atomic_save_temporary(name: &str) -> bool {
     let Some(name) = name.strip_prefix('.') else {
@@ -159,6 +160,14 @@ pub(super) fn preset_path_for_name(track: TrackKind, name: &str) -> Result<PathB
         anyhow::bail!("Preset name cannot be empty")
     }
     Ok(preset_directory(track)?.join(format!("{base_name}{PRESET_EXTENSION}")))
+}
+
+pub(super) fn default_preset_path(kind: TrackKind) -> Result<PathBuf> {
+    Ok(default_preset_path_in(&preset_directory(kind)?))
+}
+
+fn default_preset_path_in(directory: &Path) -> PathBuf {
+    directory.join(DEFAULT_PRESET_NAME)
 }
 
 pub(super) fn save_as_needs_overwrite_confirmation(destination: &Path) -> io::Result<bool> {
@@ -466,6 +475,51 @@ pub(super) fn handle_preset_overwrite_confirm(a: &mut App, k: KeyEvent) {
     }
 }
 
+pub(super) fn default_preset_confirm_mode(a: &App, track: usize) -> Result<Mode> {
+    let path = default_preset_path(a.editor.project.tracks[track].kind)?;
+    Ok(Mode::DefaultPresetConfirm {
+        track,
+        has_default: path.try_exists()?,
+    })
+}
+
+pub(super) fn handle_default_preset_confirm(a: &mut App, k: KeyEvent) {
+    let Mode::DefaultPresetConfirm { track, has_default } = a.mode.clone() else {
+        return;
+    };
+    match k.code {
+        KeyCode::Enter | KeyCode::Char('s' | 'S') => {
+            match default_preset_path(a.editor.project.tracks[track].kind) {
+                Ok(path) => save_default_preset(a, track, path),
+                Err(error) => enter_error(a, error.to_string()),
+            }
+        }
+        KeyCode::Char('d' | 'D') if has_default => {
+            match default_preset_path(a.editor.project.tracks[track].kind) {
+                Ok(path) => match fs::remove_file(&path) {
+                    Ok(()) => {
+                        a.status = format!(
+                            "Cleared {} default preset",
+                            a.editor.project.tracks[track].name
+                        );
+                        a.mode = Mode::Navigation;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        a.status = "Default preset was already cleared".into();
+                        a.mode = Mode::Navigation;
+                    }
+                    Err(error) => {
+                        enter_error(a, format!("Could not clear {}: {error}", path.display()))
+                    }
+                },
+                Err(error) => enter_error(a, error.to_string()),
+            }
+        }
+        KeyCode::Esc => a.mode = Mode::Navigation,
+        _ => {}
+    }
+}
+
 fn save_preset(a: &mut App, track: usize, path: PathBuf) {
     let preset = persistence::TrackPreset::from_track(a.editor.project.tracks[track].clone());
     match persistence::save_track_preset_atomic(&path, &preset) {
@@ -475,6 +529,17 @@ fn save_preset(a: &mut App, track: usize, path: PathBuf) {
                 a.editor.project.tracks[track].name,
                 path.display()
             );
+            a.mode = Mode::Navigation;
+        }
+        Err(error) => enter_error(a, error.to_string()),
+    }
+}
+
+fn save_default_preset(a: &mut App, track: usize, path: PathBuf) {
+    let preset = persistence::TrackPreset::from_track(a.editor.project.tracks[track].clone());
+    match persistence::save_track_preset_atomic(&path, &preset) {
+        Ok(()) => {
+            a.status = format!("Set {} default preset", a.editor.project.tracks[track].name);
             a.mode = Mode::Navigation;
         }
         Err(error) => enter_error(a, error.to_string()),
@@ -604,7 +669,7 @@ pub(super) fn new_project(a: &mut App, audio: &mut Audio) {
         enter_error(a, "Audio command queue full; new project was not created");
         return;
     }
-    let project = Project::new();
+    let (project, ignored_defaults) = project_with_default_presets();
     let _ = audio.send(AudioCommand::Stop);
     if audio.send(Audio::snapshot(&project)).is_err() {
         enter_error(a, "Audio command queue full; new project was not created");
@@ -613,7 +678,46 @@ pub(super) fn new_project(a: &mut App, audio: &mut Audio) {
     a.editor.replace_loaded(project);
     a.path = None;
     reset_project_ui(a);
-    a.status = "New project".into();
+    a.status = if ignored_defaults == 0 {
+        "New project".into()
+    } else {
+        format!("New project ({ignored_defaults} invalid default preset(s) ignored)")
+    };
+}
+
+pub(super) fn project_with_default_presets() -> (Project, usize) {
+    let mut project = Project::new();
+    let ignored_defaults = apply_default_presets(&mut project);
+    (project, ignored_defaults)
+}
+
+fn apply_default_presets(project: &mut Project) -> usize {
+    let directory = match std::env::current_dir() {
+        Ok(directory) => directory.join(PRESET_DIRECTORY_NAME),
+        Err(_) => return 1,
+    };
+    apply_default_presets_in(project, &directory)
+}
+
+pub(super) fn apply_default_presets_in(project: &mut Project, directory: &Path) -> usize {
+    let mut ignored = 0;
+    for index in 0..project.tracks.len() {
+        let kind = project.tracks[index].kind;
+        let path = default_preset_path_in(&directory.join(preset_kind_name(kind)));
+        match path.try_exists() {
+            Ok(false) => continue,
+            Err(_) => {
+                ignored += 1;
+                continue;
+            }
+            Ok(true) => {}
+        }
+        match persistence::load_track_preset(&path) {
+            Ok(preset) if preset.track.kind == kind => project.tracks[index] = preset.track,
+            Ok(_) | Err(_) => ignored += 1,
+        }
+    }
+    ignored
 }
 
 pub(super) fn open_project(a: &mut App, audio: &mut Audio, path: PathBuf) {
