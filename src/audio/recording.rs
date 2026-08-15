@@ -1,4 +1,5 @@
 use super::{AudioStatus, QueueFull};
+use crate::storage;
 use anyhow::{Context, Result, bail};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::{
@@ -13,8 +14,6 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
-pub(super) const RECORDING_DIRECTORY_NAME: &str = ".recordings";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordingState {
@@ -377,7 +376,7 @@ fn pcm24(sample: f32) -> i32 {
 }
 
 pub(super) fn suggested_path(project: Option<&Path>) -> Result<PathBuf> {
-    let directory = std::env::current_dir()?.join(RECORDING_DIRECTORY_NAME);
+    let directory = storage::recordings_directory()?;
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

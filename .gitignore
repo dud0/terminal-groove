@@ -1,6 +1,7 @@
 /target/
 *.groove.json.tmp
 terminal-groove-audio.log
+# Legacy working-directory storage from versions before visible user folders.
 .projects/
 .presets/
 .recordings/

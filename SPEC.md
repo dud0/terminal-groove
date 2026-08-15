@@ -443,11 +443,11 @@ Track parameter shortcuts are resolved only in Parameter mode, while step, event
 
 ### 5.3 Track presets
 
-- User presets live outside project files in `.presets/<track-kind>/` and use the `.preset.json` extension. They are versioned strict JSON files and are not part of a saved project.
+- User presets live outside project files in `Terminal Groove/Presets/<track-kind>/` below the OS Music folder and use the `.preset.json` extension. They are versioned strict JSON files and are not part of a saved project.
 - A preset contains every persistent setting of one track: mixer, instrument, effects, LFO assignments, input defaults, mute, swing, and probability. It never contains patterns, steps, or parameter locks.
 - `Ctrl+Shift+P` opens a name editor for the selected track; existing preset names require an overwrite confirmation. Saving a preset does not alter the project or its dirty state.
 - `Ctrl+Shift+O` opens a same-kind preset browser. Loading replaces only the selected track's persistent settings, preserves all pattern data, is one undoable dirty project edit, synchronizes audio, and returns to Sequencer mode in `BASE` scope. Invalid, unsupported, or wrong-kind presets are rejected without changing the project.
-- Each track kind can have one reserved `.presets/<track-kind>/default.preset.json`. `Ctrl+Shift+D` opens a confirmation dialog to set the selected track's current settings as that default, or clear an existing default. Default changes never alter the current project.
+- Each track kind can have one reserved `Terminal Groove/Presets/<track-kind>/default.preset.json`. `Ctrl+Shift+D` opens a confirmation dialog to set the selected track's current settings as that default, or clear an existing default. Default changes never alter the current project.
 - New untitled projects load every valid same-kind default preset before audio starts; missing or invalid defaults fall back to built-in settings without blocking project creation.
 
 ### 5.4 Parameter mode
@@ -536,8 +536,8 @@ The current mode is always named on screen. Modes are:
 - Error dialog
 - Help
 
-The project browser opened by `Ctrl+O` lists all regular, non-temporary files in `.projects/`, sorted by filename. Up/Down selects an entry, Home/End jump to the first/last entry, Enter opens it, and Esc closes the browser. A missing or empty `.projects/` directory is shown as empty. Explicit CLI project paths remain unchanged.
-Save As accepts a non-empty single filename component, writes it under `.projects/`, and appends `.groove.json` once if needed. Names containing `/` or `\\`, or equal to `.` or `..`, are rejected. The destination is shown before confirmation; the directory is created lazily on save. When Save As targets an existing destination, the UI asks for overwrite confirmation before writing; `Enter` or `O` confirms and `Esc` returns to the name input with the name preserved. Ordinary Save to the current project path remains direct.
+The project browser opened by `Ctrl+O` lists all regular, non-temporary files in `Terminal Groove/Projects/` below the OS Music folder, sorted by filename. Up/Down selects an entry, Home/End jump to the first/last entry, Enter opens it, and Esc closes the browser. A missing or empty directory is shown as empty. If the OS does not provide a Music folder, the visible `~/Terminal Groove/` folder is used instead. Legacy working-directory folders are left untouched and are not imported; explicit CLI project paths remain unchanged.
+Save As accepts a non-empty single filename component, writes it under `Terminal Groove/Projects/`, and appends `.groove.json` once if needed. Names containing `/` or `\\`, or equal to `.` or `..`, are rejected. The destination is shown before confirmation; the directory is created lazily on save. When Save As targets an existing destination, the UI asks for overwrite confirmation before writing; `Enter` or `O` confirms and `Esc` returns to the name input with the name preserved. Ordinary Save to the current project path remains direct.
 
 Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice. Save failure leaves the current project dirty, shows an error, and clears any pending open/new/quit continuation so a later unrelated Save As cannot trigger it. Opening a project stops and resets playback, clears effects, loads the new engine state, resets undo/redo history, selects the global row, and marks the project clean.
 
@@ -751,7 +751,7 @@ Use one binary package with testable modules for model/validation, reducer and h
 
 `Ctrl+R` starts recording from the sequencer and editor modes; another `Ctrl+R` stops it and begins asynchronous finalization. Playback pause, Stop/reset, project changes, and auditions do not stop a take. Exit stops and finalizes an active take. A second start is rejected while finalization is pending.
 
-Recordings are written below the current working directory in `.recordings/`. Names use `<project>-<unix_timestamp_ms>.wav`, remove a trailing `.groove.json`, replace unsafe filename characters, and use `untitled` for an unsaved or empty name. A numeric suffix is added on collision and existing files are never overwritten. Start and completion statuses show the full destination. Creation failure leaves recording stopped; later failures show an actionable error and partial-take path.
+Recordings are written in `Terminal Groove/Recordings/` below the OS Music folder, or below the home-directory fallback when no Music folder is available. Names use `<project>-<unix_timestamp_ms>.wav`, remove a trailing `.groove.json`, replace unsafe filename characters, and use `untitled` for an unsaved or empty name. A numeric suffix is added on collision and existing files are never overwritten. Start and completion statuses show the full destination. Creation failure leaves recording stopped; later failures show an actionable error and partial-take path.
 
 ### 10.4 Audio format and scheduling
 
@@ -769,7 +769,7 @@ Recordings are written below the current working directory in `.recordings/`. Na
 - Project parse/validation errors identify the JSON path or domain field when possible.
 - Audio initialization errors identify the selected device and remediation, including the list-devices command.
 - Runtime stream failure stops transport and presents a persistent error. Project editing and saving remain available if terminal operation is still safe.
-- Runtime stream failures, audio initialization failures, and DSP non-finite diagnostics are appended to `terminal-groove-audio.log` in the working directory. The UI status names the file; logging is best effort and never occurs in the output callback.
+- Runtime stream failures, audio initialization failures, and DSP non-finite diagnostics are appended to `Terminal Groove/Logs/terminal-groove-audio.log` below the OS Music folder. The UI status names the file; logging is best effort and never occurs in the output callback.
 - DSP must replace any unexpected non-finite intermediate or sample with zero before it reaches the device and surface a diagnostic outside the callback.
 - Terminal cleanup uses RAII and a panic hook so the shell is not left in raw mode.
 

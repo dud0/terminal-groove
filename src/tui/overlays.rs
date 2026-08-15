@@ -1156,7 +1156,7 @@ pub(super) fn render_project_browser(
         entries,
         selected,
         "Open project",
-        "No projects in .projects",
+        "No projects in your Terminal Groove Projects folder",
     );
 }
 

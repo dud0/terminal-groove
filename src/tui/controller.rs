@@ -7,6 +7,7 @@ use crate::{
     model::{DelayDivision, GlobalParameterId, Percent, Project, TRACK_COUNT, TrackKind},
     persistence,
     reducer::Scope,
+    storage,
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -16,9 +17,7 @@ use std::{
     sync::atomic::Ordering,
 };
 
-pub(super) const PROJECT_DIRECTORY_NAME: &str = ".projects";
 pub(super) const PROJECT_EXTENSION: &str = ".groove.json";
-pub(super) const PRESET_DIRECTORY_NAME: &str = ".presets";
 pub(super) const PRESET_EXTENSION: &str = ".preset.json";
 pub(super) const DEFAULT_PRESET_NAME: &str = "default.preset.json";
 
@@ -38,13 +37,11 @@ fn is_atomic_save_temporary(name: &str) -> bool {
 }
 
 pub(super) fn project_directory() -> Result<PathBuf> {
-    Ok(std::env::current_dir()?.join(PROJECT_DIRECTORY_NAME))
+    storage::projects_directory()
 }
 
 pub(super) fn preset_directory(kind: TrackKind) -> Result<PathBuf> {
-    Ok(std::env::current_dir()?
-        .join(PRESET_DIRECTORY_NAME)
-        .join(preset_kind_name(kind)))
+    Ok(storage::presets_directory()?.join(preset_kind_name(kind)))
 }
 
 fn preset_kind_name(kind: TrackKind) -> &'static str {
@@ -367,7 +364,7 @@ pub(super) fn handle_project_browser(a: &mut App, audio: &mut Audio, k: KeyEvent
                     open_project(a, audio, path)
                 }
             } else {
-                a.status = "No projects found in .projects".into();
+                a.status = "No projects found in your Terminal Groove Projects folder".into();
             }
         }
         _ => a.mode = Mode::ProjectBrowser { entries, selected },
@@ -692,8 +689,8 @@ pub(super) fn project_with_default_presets() -> (Project, usize) {
 }
 
 fn apply_default_presets(project: &mut Project) -> usize {
-    let directory = match std::env::current_dir() {
-        Ok(directory) => directory.join(PRESET_DIRECTORY_NAME),
+    let directory = match storage::presets_directory() {
+        Ok(directory) => directory,
         Err(_) => return 1,
     };
     apply_default_presets_in(project, &directory)

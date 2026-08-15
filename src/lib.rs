@@ -5,6 +5,7 @@ mod generator;
 pub mod model;
 pub mod persistence;
 mod reducer;
+mod storage;
 pub mod tui;
 
 #[cfg(test)]

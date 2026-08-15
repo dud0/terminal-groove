@@ -9,6 +9,7 @@ use crate::{
         LfoAssignments, MAX_STEP_COUNT, ParameterId, Percent, Project, SYNTH_TRACK_START,
         SongEntry, StepEvent, TRACK_COUNT, TrackEffects,
     },
+    storage,
 };
 use anyhow::{Context, Result, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -524,12 +525,15 @@ fn mark_failed(
 }
 
 pub fn default_audio_log_path() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
+    storage::logs_directory()
+        .unwrap_or_else(|_| std::env::temp_dir().join("Terminal Groove").join("Logs"))
         .join(AUDIO_LOG_FILE_NAME)
 }
 
 fn append_audio_log(path: &Path, device: &str, kind: &str, message: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

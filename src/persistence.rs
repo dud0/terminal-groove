@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn save_creates_missing_parent_directory() {
         let d = tempfile::tempdir().unwrap();
-        let f = d.path().join(".projects").join("project.groove.json");
+        let f = d.path().join("Projects").join("project.groove.json");
 
         save_atomic(&f, &Project::new()).unwrap();
 

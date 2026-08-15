@@ -2579,14 +2579,14 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             let directory = directory_path
                 .as_ref()
                 .map(|path| path.display().to_string())
-                .unwrap_or_else(|| ".projects".into());
+                .unwrap_or_else(|| "Terminal Groove Projects folder unavailable".into());
             let destination = if input.is_empty() {
                 format!("{directory}/<name>{PROJECT_EXTENSION}")
             } else {
                 project_path_for_name(
-                    directory_path
-                        .as_deref()
-                        .unwrap_or_else(|| std::path::Path::new(".projects")),
+                    directory_path.as_deref().unwrap_or_else(|| {
+                        std::path::Path::new("Terminal Groove Projects folder unavailable")
+                    }),
                     input,
                 )
                 .map(|path| path.display().to_string())
@@ -2605,7 +2605,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             let directory = directory_path
                 .as_ref()
                 .map(|path| path.display().to_string())
-                .unwrap_or_else(|| ".presets".into());
+                .unwrap_or_else(|| "Terminal Groove Presets folder unavailable".into());
             let destination = if input.is_empty() {
                 format!("{directory}/<name>{PRESET_EXTENSION}")
             } else {

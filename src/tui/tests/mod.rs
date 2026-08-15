@@ -1153,11 +1153,12 @@ fn recording_badges_are_text_visible_in_full_and_small_layouts() {
 #[test]
 fn recording_completion_and_error_statuses_remain_visible() {
     let mut app = App::new(Project::new(), None);
-    app.status = "Recorded 128 stereo frames to /work/.recordings/take.wav".into();
+    app.status = "Recorded 128 stereo frames to /work/Terminal Groove/Recordings/take.wav".into();
     assert!(rendered(&app, 120, 34).contains("Recorded 128 stereo frames"));
 
     app.status =
-        "Recording stopped: disk full; partial take retained at /work/.recordings/take.wav".into();
+        "Recording stopped: disk full; partial take retained at /work/Terminal Groove/Recordings/take.wav"
+            .into();
     let screen = rendered(&app, 160, 34);
     assert!(screen.contains("Recording stopped: disk full"));
     assert!(screen.contains("partial take retained"));
@@ -1988,7 +1989,7 @@ fn every_overlay_mode_has_a_visible_name() {
     assert_eq!(mode_name(&Mode::NewConfirm), "Unsaved confirmation");
     assert_eq!(
         mode_name(&Mode::OverwriteConfirm {
-            path: PathBuf::from(".projects/song.groove.json"),
+            path: PathBuf::from("/Music/Terminal Groove/Projects/song.groove.json"),
             input: "song".into(),
         }),
         "Overwrite confirmation"
@@ -2007,7 +2008,7 @@ fn every_overlay_mode_has_a_visible_name() {
 }
 
 #[test]
-fn save_as_uses_the_gitignored_default_project_path() {
+fn save_as_normalizes_default_project_names() {
     assert_eq!(
         save_as_mode(),
         Mode::FileInput(FileAction::SaveAs, String::new())
@@ -2029,7 +2030,7 @@ fn save_as_uses_the_gitignored_default_project_path() {
 #[test]
 fn preset_paths_are_kind_scoped_and_normalize_extensions() {
     let path = preset_path_for_name(TrackKind::Lead, "bright.preset.json").unwrap();
-    assert!(path.ends_with(".presets/lead/bright.preset.json"));
+    assert!(path.ends_with("Terminal Groove/Presets/lead/bright.preset.json"));
     assert!(preset_path_for_name(TrackKind::Kick, "bad/name").is_err());
     assert!(preset_path_for_name(TrackKind::Kick, "").is_err());
 }
@@ -2039,7 +2040,9 @@ fn preset_browser_and_save_dialog_render_their_local_controls() {
     let mut app = App::new(Project::new(), None);
     app.mode = Mode::PresetBrowser {
         track: 0,
-        entries: vec![PathBuf::from(".presets/kick/punch.preset.json")],
+        entries: vec![PathBuf::from(
+            "/Music/Terminal Groove/Presets/kick/punch.preset.json",
+        )],
         selected: 0,
     };
     let screen = rendered(&app, 120, 34);
@@ -2061,7 +2064,7 @@ fn preset_overwrite_confirmation_identifies_the_preset() {
     let mut app = App::new(Project::new(), None);
     app.mode = Mode::PresetOverwriteConfirm {
         track: 0,
-        path: PathBuf::from(".presets/kick/punch.preset.json"),
+        path: PathBuf::from("/Music/Terminal Groove/Presets/kick/punch.preset.json"),
         input: "punch".into(),
     };
     let screen = rendered(&app, 120, 34);
@@ -2116,14 +2119,14 @@ fn save_as_overwrite_check_applies_to_every_existing_destination() {
 fn overwrite_confirmation_renders_destination_and_controls() {
     let mut app = App::new(Project::new(), None);
     app.mode = Mode::OverwriteConfirm {
-        path: PathBuf::from(".projects/existing.groove.json"),
+        path: PathBuf::from("/Music/Terminal Groove/Projects/existing.groove.json"),
         input: "existing".into(),
     };
 
     let screen = rendered(&app, 120, 34);
 
     assert!(screen.contains("Overwrite existing project?"));
-    assert!(screen.contains(".projects/existing.groove.json"));
+    assert!(screen.contains("/Music/Terminal Groove/Projects/existing.groove.json"));
     assert!(screen.contains("Overwrite [Enter/O]"));
     assert!(screen.contains("Cancel [Esc]"));
 }
@@ -2191,8 +2194,8 @@ fn project_browser_render_shows_entries_and_selection() {
     let mut app = App::new(Project::new(), None);
     app.mode = Mode::ProjectBrowser {
         entries: vec![
-            PathBuf::from(".projects/alpha.groove.json"),
-            PathBuf::from(".projects/beta"),
+            PathBuf::from("/Music/Terminal Groove/Projects/alpha.groove.json"),
+            PathBuf::from("/Music/Terminal Groove/Projects/beta"),
         ],
         selected: 1,
     };
