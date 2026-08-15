@@ -1253,7 +1253,7 @@ pub struct DistortionParameters {
 impl Default for DistortionParameters {
     fn default() -> Self {
         Self {
-            drive: Percent::ZERO,
+            drive: Percent(50),
             tone: Percent(50),
             mix: Percent::ZERO,
         }
@@ -3771,7 +3771,7 @@ mod tests {
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
-        assert_eq!(project.tracks[0].effects.distortion.drive, Percent::ZERO);
+        assert_eq!(project.tracks[0].effects.distortion.drive, p(50));
         assert_eq!(project.tracks[0].effects.distortion.tone, p(50));
         assert_eq!(project.tracks[0].effects.phaser.rate, p(25));
         assert_eq!(project.tracks[0].effects.flanger.delay, p(18));
