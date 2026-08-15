@@ -87,6 +87,10 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
             renderer.preview_chord.active = false;
             renderer.fm_chord.active = false;
             renderer.preview_fm_chord.active = false;
+            renderer.chord.group_voice_counts = [0; 2];
+            renderer.preview_chord.group_voice_counts = [0; 2];
+            renderer.fm_chord.group_voice_counts = [0; 2];
+            renderer.preview_fm_chord.group_voice_counts = [0; 2];
             renderer.preview_activity = [false; TRACK_COUNT];
             renderer.chord.arpeggio = ArpeggioState::default();
             renderer.preview_chord.arpeggio = ArpeggioState::default();

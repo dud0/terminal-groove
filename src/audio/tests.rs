@@ -1403,6 +1403,8 @@ mod tests {
 
         assert!(!renderer.synth[0].is_idle());
         assert!(!renderer.preview[0].is_idle());
+        assert_eq!(renderer.fm_chord.group_voice_counts, [0; 2]);
+        assert_eq!(renderer.preview_fm_chord.group_voice_counts, [0; 2]);
         for voice in renderer
             .fm_chord
             .voices
@@ -1427,6 +1429,44 @@ mod tests {
         }
         assert!(renderer.synth[0].is_idle());
         assert!(renderer.preview[0].is_idle());
+    }
+
+    #[test]
+    fn fully_idle_voicing_groups_are_retired_after_their_tail() {
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&Project::new()), 8_000, status);
+        let trigger = SynthTrigger {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            slide: false,
+            chord_shape: Some(ChordShape::SeventhRoot),
+            arpeggio: ArpeggioConfig::default(),
+        };
+        Renderer::trigger_chord(
+            &renderer.project,
+            renderer.sr,
+            FM_TRACK_INDEX,
+            trigger,
+            ParameterLocks::default(),
+            &mut renderer.fm_chord,
+        );
+        Renderer::trigger_chord(
+            &renderer.project,
+            renderer.sr,
+            FM_TRACK_INDEX,
+            trigger,
+            ParameterLocks::default(),
+            &mut renderer.fm_chord,
+        );
+        assert_eq!(renderer.fm_chord.group_voice_counts, [4; 2]);
+        for voice in &mut renderer.fm_chord.voices {
+            voice.reset_to_idle();
+        }
+
+        renderer.next();
+
+        assert_eq!(renderer.fm_chord.group_voice_counts, [0; 2]);
     }
 
     #[test]

@@ -41,6 +41,7 @@ pub(super) struct SynthVoice {
     pub(super) fm_routes: [[Smoother; 4]; 4],
     pub(super) fm_carriers: [Smoother; 4],
     pub(super) fm_carrier_normalization: Smoother,
+    pub(super) fm_topology_smoothing: bool,
     pub(super) fm_brightness: Smoother,
     pub(super) freq: Smoother,
     pub(super) wave: Waveform,
@@ -541,6 +542,7 @@ impl SynthVoice {
                 Smoother::new(0.0),
             ],
             fm_carrier_normalization: Smoother::new(1.0),
+            fm_topology_smoothing: false,
             fm_brightness: Smoother::new(72.0),
             freq: Smoother::new(110.0),
             wave: Waveform::Saw,
@@ -633,6 +635,7 @@ impl SynthVoice {
         self.fm_filter.clear_state();
         self.fm_phases = [0.0; 4];
         self.fm_previous = [0.0; 4];
+        self.fm_topology_smoothing = false;
         self.voicing_pan_offset = 0.0;
     }
 

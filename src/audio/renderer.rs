@@ -46,10 +46,17 @@ fn render_voicing_groups(
 ) {
     for (group, effect) in effects.iter_mut().enumerate() {
         let start = group * CHORD_GROUP_SIZE;
-        let end = start + pool.group_voice_counts[group];
+        let voice_count = pool.group_voice_counts[group];
+        let end = start + voice_count;
         let mut left = 0.0;
         let mut right = 0.0;
+        let mut all_idle = voice_count != 0;
         for voice in &mut pool.voices[start..end] {
+            if voice.is_idle() {
+                Renderer::render_synth(voice, sample_rate, lfo_offsets);
+                continue;
+            }
+            all_idle = false;
             let (x, _, _) = Renderer::render_synth(voice, sample_rate, lfo_offsets);
             let pan = modulated_percent(
                 voice.pan.next_value(),
@@ -58,6 +65,12 @@ fn render_voicing_groups(
             let (pan_l, pan_r) = voice.pan_gains(pan);
             left += x * pan_l;
             right += x * pan_r;
+        }
+        if all_idle {
+            pool.group_voice_counts[group] = 0;
+        }
+        if voice_count == 0 && !effect.is_active() {
+            continue;
         }
         let control_voice = &mut pool.voices[start];
         let level = modulated_percent(
@@ -385,11 +398,16 @@ impl Renderer {
         let mut feedback = [0.0; 4];
         let mut routes = [[0.0; 4]; 4];
         let mut carriers = [0.0; 4];
+        let topology_smoothing = v.fm_topology_smoothing;
         for operator in 0..4 {
             let level_id = ParameterId::fm_operator(operator, FmOperatorField::Level).unwrap();
             let feedback_id =
                 ParameterId::fm_operator(operator, FmOperatorField::Feedback).unwrap();
-            ratios[operator] = v.fm_ratios[operator].next_value();
+            ratios[operator] = if topology_smoothing {
+                v.fm_ratios[operator].next_value()
+            } else {
+                v.fm_ratios[operator].value()
+            };
             levels[operator] = modulated_percent(
                 v.fm_levels[operator].next_value(),
                 offsets[level_id as usize],
@@ -398,31 +416,83 @@ impl Renderer {
                 v.fm_feedback[operator].next_value(),
                 offsets[feedback_id as usize],
             ) / 100.0;
-            carriers[operator] = v.fm_carriers[operator].next_value();
-            for (target, route) in routes[operator].iter_mut().enumerate() {
-                *route = v.fm_routes[operator][target].next_value();
+            if topology_smoothing {
+                carriers[operator] = v.fm_carriers[operator].next_value();
+                for (target, route) in routes[operator].iter_mut().enumerate() {
+                    *route = v.fm_routes[operator][target].next_value();
+                }
             }
         }
-        let carrier_normalization = v.fm_carrier_normalization.next_value();
+        let carrier_normalization = if topology_smoothing {
+            v.fm_carrier_normalization.next_value()
+        } else {
+            v.fm_carrier_normalization.value()
+        };
         let oversampled_rate = sr * 4.0;
+        let mut phase_steps = [0.0; 4];
+        let mut modulation_indices = [0.0; 4];
+        let mut carrier_gains = [0.0; 4];
+        let mut active_operators = [false; 4];
+        for operator in 0..4 {
+            phase_steps[operator] = (frequency * ratios[operator])
+                .clamp(1.0, oversampled_rate * 0.45)
+                / oversampled_rate;
+            modulation_indices[operator] =
+                12.0 * levels[operator] * levels[operator] * accent_index;
+            carrier_gains[operator] = levels[operator]
+                * if topology_smoothing {
+                    carriers[operator]
+                } else {
+                    if v.fm_algorithm.is_carrier(operator) {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                };
+            active_operators[operator] = levels[operator] > 0.0
+                && (carrier_gains[operator] > 0.0
+                    || if topology_smoothing {
+                        routes[operator].iter().any(|route| *route > 0.0)
+                    } else {
+                        (0..4).any(|target| v.fm_algorithm.routes(operator, target))
+                    });
+        }
+        if !topology_smoothing {
+            for (operator, operator_routes) in routes.iter_mut().enumerate() {
+                for (target, route) in operator_routes.iter_mut().enumerate() {
+                    *route = if v.fm_algorithm.routes(operator, target) {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                }
+            }
+        } else if v.fm_topology_smoothing {
+            v.fm_topology_smoothing = v.fm_routes.iter().flatten().any(Smoother::is_smoothing)
+                || v.fm_carriers.iter().any(Smoother::is_smoothing)
+                || v.fm_ratios.iter().any(Smoother::is_smoothing)
+                || v.fm_carrier_normalization.is_smoothing();
+        }
         let mut sample = 0.0;
         for _ in 0..4 {
             let mut operator_samples = [0.0; 4];
             for operator in (0..4).rev() {
-                let mut phase_modulation =
-                    v.fm_previous[operator] * feedback[operator] * 0.95 * std::f32::consts::PI;
-                for source in operator + 1..4 {
-                    let index = 12.0 * levels[source] * levels[source] * accent_index;
-                    phase_modulation += operator_samples[source] * index * routes[source][operator];
+                if active_operators[operator] {
+                    let mut phase_modulation =
+                        v.fm_previous[operator] * feedback[operator] * 0.95 * std::f32::consts::PI;
+                    for source in operator + 1..4 {
+                        phase_modulation += operator_samples[source]
+                            * modulation_indices[source]
+                            * routes[source][operator];
+                    }
+                    let value = (TAU * v.fm_phases[operator] + phase_modulation).sin();
+                    operator_samples[operator] = if value.is_finite() { value } else { 0.0 };
+                    v.fm_previous[operator] = operator_samples[operator];
+                    sample += operator_samples[operator] * carrier_gains[operator];
+                } else {
+                    v.fm_previous[operator] = 0.0;
                 }
-                let value = (TAU * v.fm_phases[operator] + phase_modulation).sin();
-                operator_samples[operator] = if value.is_finite() { value } else { 0.0 };
-                v.fm_previous[operator] = operator_samples[operator];
-                sample += operator_samples[operator] * levels[operator] * carriers[operator];
-                let operator_frequency =
-                    (frequency * ratios[operator]).clamp(1.0, oversampled_rate * 0.45);
-                v.fm_phases[operator] =
-                    (v.fm_phases[operator] + operator_frequency / oversampled_rate).fract();
+                v.fm_phases[operator] = (v.fm_phases[operator] + phase_steps[operator]).fract();
             }
         }
         sample *= 0.25 * carrier_normalization;

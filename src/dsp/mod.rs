@@ -2053,6 +2053,11 @@ impl StereoChorus {
     }
 
     pub fn process_stereo(&mut self, left_input: f32, right_input: f32) -> (f32, f32) {
+        if self.mode == 0 && self.fade_remaining == 0 {
+            self.active = false;
+            self.tail_remaining = 0;
+            return (left_input, right_input);
+        }
         let input_peak = safety(left_input).abs().max(safety(right_input).abs());
         if !self.active && self.fade_remaining == 0 && input_peak <= SILENCE_THRESHOLD {
             return (left_input, right_input);

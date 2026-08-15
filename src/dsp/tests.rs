@@ -201,6 +201,17 @@ mod tests {
         reverb.process(0.0, 0.0);
         assert_eq!(reverb.pre_delay_pos, 0);
     }
+
+    #[test]
+    fn chorus_off_bypasses_active_input_without_advancing_state() {
+        let mut chorus = StereoChorus::new(48_000);
+        let output = chorus.process_stereo(0.5, -0.25);
+
+        assert_eq!(output, (0.5, -0.25));
+        assert_eq!(chorus.pos, 0);
+        assert_eq!(chorus.phase, 0.0);
+        assert!(!chorus.is_active());
+    }
     #[test]
     fn nonfinite_safe() {
         assert_eq!(safety(f32::NAN), 0.0);

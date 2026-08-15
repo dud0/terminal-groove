@@ -359,6 +359,7 @@ impl Renderer {
             voice
                 .fm_carrier_normalization
                 .set(carrier_count.sqrt().recip(), smoothing);
+            voice.fm_topology_smoothing = smoothing != 0;
             for operator in 0..4 {
                 let ratio_id = ParameterId::fm_operator(operator, FmOperatorField::Ratio).unwrap();
                 let level_id = ParameterId::fm_operator(operator, FmOperatorField::Level).unwrap();
