@@ -614,7 +614,6 @@ impl TrackEffectChain {
         if !self.processing {
             return (input_l, input_r);
         }
-        let (input_l, input_r) = self.chorus.process_stereo(input_l, input_r);
         let distortion_mix = self.distortion_mix.next_value() / 100.0;
         let bit_crusher_mix = self.bit_crusher_mix.next_value() / 100.0;
         let phaser_mix = self.phaser_mix.next_value() / 100.0;
@@ -718,7 +717,9 @@ impl TrackEffectChain {
             (distorted_l, distorted_r)
         };
 
-        let phaser_input_active = stereo_peak(crushed_l, crushed_r) > SILENCE_THRESHOLD;
+        let (chorused_l, chorused_r) = self.chorus.process_stereo(crushed_l, crushed_r);
+
+        let phaser_input_active = stereo_peak(chorused_l, chorused_r) > SILENCE_THRESHOLD;
         let run_phaser =
             (phaser_mix > 0.0 && phaser_input_active) || self.phaser_tail_remaining > 0;
         let (processed_l, processed_r) = if run_phaser {
@@ -733,8 +734,8 @@ impl TrackEffectChain {
             // feedback state silently. Re-expanding the tail to a derived wet
             // mix here would create a near-100% wet discontinuity.
             let effective_mix = phaser_mix;
-            let left_input = if phaser_mix > 0.0 { crushed_l } else { 0.0 } + feedback;
-            let right_input = if phaser_mix > 0.0 { crushed_r } else { 0.0 } - feedback;
+            let left_input = if phaser_mix > 0.0 { chorused_l } else { 0.0 } + feedback;
+            let right_input = if phaser_mix > 0.0 { chorused_r } else { 0.0 } - feedback;
             let left =
                 Self::phaser_sample(&mut self.phaser_l, left_input, self.phaser_coefficient_l);
             let right =
@@ -745,8 +746,8 @@ impl TrackEffectChain {
                 (self.phaser_phase + self.phaser_rate_hz / self.sample_rate).fract();
             self.advance_phaser_coefficients();
             let output = (
-                crushed_l * (1.0 - effective_mix) + left * effective_mix,
-                crushed_r * (1.0 - effective_mix) + right * effective_mix,
+                chorused_l * (1.0 - effective_mix) + left * effective_mix,
+                chorused_r * (1.0 - effective_mix) + right * effective_mix,
             );
             self.phaser_active = Self::update_tail_activity(
                 phaser_mix > 0.0 && phaser_input_active,
@@ -762,7 +763,7 @@ impl TrackEffectChain {
             output
         } else {
             self.phaser_active = false;
-            (crushed_l, crushed_r)
+            (chorused_l, chorused_r)
         };
 
         let flanger_input_active = stereo_peak(processed_l, processed_r) > SILENCE_THRESHOLD;

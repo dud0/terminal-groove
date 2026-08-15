@@ -257,7 +257,7 @@ The Bass, Chord, and Lead filters apply resonance within their feedback loops wi
 - `resonance`, and positive `filter envelope` up to six octaves.
 - `attack`, `decay`, `sustain`, and `release`; Chord uses approximately 1 ms–3 s attack and 2 ms–12 s decay/release, while Lead uses 1.5 ms–4 s and 2 ms–10 s respectively.
 
-Every track has a stereo `chorus` insert selector with Off, I, and II modes. Mode I uses approximately 15 ms base delay, 1.5 ms modulation depth, and 0.5 Hz; mode II uses 12 ms, 2.5 ms, and 0.8 Hz. Mode changes crossfade over approximately 5 ms. Chorus precedes distortion, bit crusher, phaser, flanger, and post-fader stereo sends. Overlapping Chord and FM groups keep independent chorus state through their existing per-group effect chains.
+Every track has a stereo `chorus` insert selector with Off, I, and II modes. Mode I uses approximately 15 ms base delay, 1.5 ms modulation depth, and 0.5 Hz; mode II uses 12 ms, 2.5 ms, and 0.8 Hz. Mode changes crossfade over approximately 5 ms. The insert order is distortion, bit crusher, chorus, phaser, flanger, then post-fader stereo sends. Overlapping Chord and FM groups keep independent chorus state through their existing per-group effect chains.
 
 Chord and FM use the same fixed full-width stereo placement around effective track pan. One voice stays centered; two voices use offsets `-50/+50`; three use `-50/0/+50`; and four use `-50/-16.6667/+16.6667/+50` percentage points in stored voice order. Final positions clamp to 0–100. Each pooled voice retains its offset through ties, parameter refreshes, preview, arpeggio changes, and release tails; base Pan, Pan locks, and Pan LFO modulation move the resulting layout without collapsing it. Spread is not a parameter or lock.
 
