@@ -2159,7 +2159,7 @@ pub(super) fn handle_fm_operator_key(a: &mut App, audio: &mut Audio, k: KeyEvent
     Ok(true)
 }
 
-fn finish_lfo_editor(a: &mut App, parameter: ParameterId, status: String) {
+pub(super) fn finish_lfo_editor(a: &mut App, parameter: ParameterId, status: String) {
     if let Some((operator, field, return_to_parameter)) = a.fm_lfo_return.take() {
         a.fm_operator = operator;
         a.fm_operator_field = field;
@@ -2174,6 +2174,12 @@ fn finish_lfo_editor(a: &mut App, parameter: ParameterId, status: String) {
     a.status = status;
 }
 
+pub(super) fn abandon_lfo_editor_for_help(a: &mut App) {
+    a.editor.end_coalescing();
+    a.fm_lfo_return = None;
+    a.mode = Mode::Help;
+}
+
 pub(super) fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::LfoEdit { parameter, field } = a.mode.clone() else {
         return Ok(false);
@@ -2182,7 +2188,7 @@ pub(super) fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Res
     match k.code {
         KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o') => return Ok(false),
         KeyCode::Char('?') => {
-            a.mode = Mode::Help;
+            abandon_lfo_editor_for_help(a);
             return Ok(true);
         }
         KeyCode::Enter | KeyCode::Esc | KeyCode::Char('L') => {

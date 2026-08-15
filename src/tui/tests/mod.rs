@@ -1746,6 +1746,24 @@ fn fm_operator_popup_shows_route_grid_and_active_detail() {
 }
 
 #[test]
+fn help_abandons_fm_operator_lfo_return_state() {
+    let mut app = App::new(Project::new(), None);
+    app.fm_lfo_return = Some((1, crate::model::FmOperatorField::Feedback, true));
+    app.mode = Mode::LfoEdit {
+        parameter: ParameterId::FmOp2Feedback,
+        field: LfoField::Depth,
+    };
+
+    abandon_lfo_editor_for_help(&mut app);
+
+    assert_eq!(app.mode, Mode::Help);
+    assert_eq!(app.fm_lfo_return, None);
+
+    finish_lfo_editor(&mut app, ParameterId::Cutoff, "LFO editing finished".into());
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Cutoff));
+}
+
+#[test]
 fn lock_parameter_editing_has_a_prominent_banner() {
     let mut app = App::new(Project::new(), None);
     app.row = SYNTH_TRACK_START + 1;
