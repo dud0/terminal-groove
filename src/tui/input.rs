@@ -434,17 +434,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             }
         }
         KeyCode::Char(c @ '1'..='8') if is_pitched_track_row(a.row) => {
-            let (track, step) = (a.row - 1, a.step);
-            if apply(a, audio, |e| {
-                e.set_note(track, step, c.to_digit(10).unwrap() as u8)
-            }) && sync_project(a, audio)
-                && !a.playing
-            {
-                let _ = audio.send(AudioCommand::AutoAudition {
-                    track: track as u8,
-                    step: step as u8,
-                });
-            }
+            enter_selected_note(a, audio, c.to_digit(10).unwrap() as u8);
         }
         KeyCode::Esc => a.scope = Scope::Base,
         _ => {}
@@ -1611,6 +1601,11 @@ pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
             move_chord_editor_step(a, k.code == KeyCode::PageDown);
             a.status = format!("Editing voicing at step {}", a.step + 1);
         }
+        KeyCode::Char(c @ '1'..='8') if k.modifiers.is_empty() => {
+            enter_selected_note(a, audio, c.to_digit(10).unwrap() as u8);
+        }
+        KeyCode::Char('[') if k.modifiers.is_empty() => change_octave(a, audio, -1),
+        KeyCode::Char(']') if k.modifiers.is_empty() => change_octave(a, audio, 1),
         KeyCode::Up | KeyCode::Down => {
             let step = a.step;
             match field {
@@ -1706,6 +1701,10 @@ pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
 
 pub(super) fn move_chord_editor_step(a: &mut App, forward: bool) {
     move_step_page(a, forward);
+    refresh_chord_editor_shape(a);
+}
+
+fn refresh_chord_editor_shape(a: &mut App) {
     let track = a.row - 1;
     let shape = a
         .editor
@@ -1718,6 +1717,22 @@ pub(super) fn move_chord_editor_step(a: &mut App, forward: bool) {
             })
         });
     a.mode = Mode::ChordEdit { shape };
+}
+
+fn enter_selected_note(a: &mut App, audio: &mut Audio, degree: u8) {
+    let (track, step) = (a.row - 1, a.step);
+    let chord_editor = matches!(a.mode, Mode::ChordEdit { .. });
+    if apply(a, audio, |editor| editor.set_note(track, step, degree)) && sync_project(a, audio) {
+        if chord_editor {
+            refresh_chord_editor_shape(a);
+        }
+        if !a.playing {
+            let _ = audio.send(AudioCommand::AutoAudition {
+                track: track as u8,
+                step: step as u8,
+            });
+        }
+    }
 }
 
 pub(super) fn finish_trigger_edit(a: &mut App) {

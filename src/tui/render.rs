@@ -2703,7 +2703,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         ));
     } else if matches!(a.mode, Mode::ChordEdit { .. }) {
         status_lines.push(Line::from(
-            "Voicing · [←/→] field  [↑/↓] adjust  [PageUp/Down] step  [Enter/Esc] finish",
+            "Voicing · [←/→] field  [↑/↓] adjust  [PageUp/Down] step  [1–8] note  [ / ] octave  [Enter/Esc] finish",
         ));
     } else if matches!(a.mode, Mode::GlobalEdit(_) | Mode::TempoInput(_)) {
         status_lines.push(Line::from(

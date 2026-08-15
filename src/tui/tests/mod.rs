@@ -770,6 +770,109 @@ fn chord_editor_uses_the_shifted_chord_row() {
 }
 
 #[test]
+fn chord_editor_accepts_note_entry_and_keeps_the_dialog_open() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.row = CHORD_TRACK_INDEX + 1;
+    open_chord_editor(&mut app);
+    let (mut audio, mut commands) = crate::audio::Audio::test_queue_only(&project, 8);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert!(matches!(
+        app.editor.active_steps(CHORD_TRACK_INDEX).unwrap()[0],
+        Some(StepEvent::Note {
+            degree: 4,
+            octave: 3,
+            chord_shape: None,
+            ..
+        })
+    ));
+    assert!(matches!(app.mode, Mode::ChordEdit { .. }));
+    assert!(matches!(
+        commands.pop().unwrap(),
+        crate::audio::AudioCommand::ReplaceProject { .. }
+    ));
+    assert!(matches!(
+        commands.pop().unwrap(),
+        crate::audio::AudioCommand::AutoAudition {
+            track,
+            step
+        } if track == CHORD_TRACK_INDEX as u8 && step == 0
+    ));
+}
+
+#[test]
+fn fm_voicing_editor_accepts_note_entry_and_octave_changes() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.row = FM_TRACK_INDEX + 1;
+    open_chord_editor(&mut app);
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 8);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('7'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        app.editor.active_steps(FM_TRACK_INDEX).unwrap()[0],
+        Some(StepEvent::Note {
+            degree: 7,
+            octave: 3,
+            chord_shape: None,
+            ..
+        })
+    ));
+    assert_eq!(
+        app.editor.project.tracks[FM_TRACK_INDEX].input_octave,
+        Some(4)
+    );
+    assert!(matches!(app.mode, Mode::ChordEdit { .. }));
+}
+
+#[test]
+fn shifted_note_keys_are_not_entered_in_the_chord_editor() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.row = CHORD_TRACK_INDEX + 1;
+    open_chord_editor(&mut app);
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 8);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('4'), KeyModifiers::SHIFT),
+    )
+    .unwrap();
+
+    assert!(app.editor.active_steps(CHORD_TRACK_INDEX).unwrap()[0].is_none());
+    assert!(matches!(app.mode, Mode::ChordEdit { .. }));
+}
+
+#[test]
+fn voicing_popup_shows_note_entry_hints() {
+    let mut app = App::new(Project::new(), None);
+    app.row = CHORD_TRACK_INDEX + 1;
+    open_chord_editor(&mut app);
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("[1–8] note"));
+    assert!(screen.contains("[ / ] octave"));
+}
+
+#[test]
 fn tilde_global_jump_selects_the_global_row() {
     assert!(global_jump(KeyEvent::new(
         KeyCode::Char('~'),

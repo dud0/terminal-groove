@@ -613,8 +613,8 @@ pub(super) fn render_chord_popup(
     }
     f.render_widget(
         Paragraph::new(vec![
-            Line::from("[←/→] select   [↑/↓] adjust   [PageUp/Down] step"),
-            Line::from("[Enter/Esc] close   ties inherit note-trigger settings"),
+            Line::from("[←/→] select   [↑/↓] adjust   [PageUp/Down] step   [1–8] note"),
+            Line::from("[ / ] octave   [Enter/Esc] close   ties inherit note-trigger settings"),
         ])
         .alignment(Alignment::Center),
         Rect {

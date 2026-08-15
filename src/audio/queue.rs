@@ -57,6 +57,38 @@ impl Audio {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_queue_only(
+        project: &Project,
+        command_capacity: usize,
+    ) -> (Self, Consumer<AudioCommand>) {
+        let status = Arc::new(AudioStatus::default());
+        let (recording_worker, _recording) =
+            super::recording::RecordingWorker::spawn(8_000, status.clone()).unwrap();
+        let (producer, commands) = rtrb::RingBuffer::new(command_capacity);
+        let (retire_producer, retired) = rtrb::RingBuffer::<Box<AudioProject>>::new(1);
+        drop(retire_producer);
+        let (error_producer, stream_errors) = rtrb::RingBuffer::<StreamError>::new(1);
+        drop(error_producer);
+        (
+            Self {
+                stream: None,
+                device_name: "test".into(),
+                status,
+                producer,
+                retired,
+                stream_errors,
+                log_path: PathBuf::new(),
+                sample_rate: 8_000,
+                recording_worker,
+                recording_state: super::RecordingState::Idle,
+                recording_path: None,
+                snapshot_project: AudioProject::from_project(project),
+            },
+            commands,
+        )
+    }
+
     pub fn send(&mut self, command: AudioCommand) -> Result<(), QueueFull> {
         self.reap_retired();
         // Full replacements are also used by project open/new. Keep the UI-side
@@ -293,37 +325,12 @@ impl Drop for Audio {
 mod tests {
     use super::*;
     use rtrb::RingBuffer;
-    use std::sync::Arc;
 
     fn queue_only_audio(
         project: &Project,
         command_capacity: usize,
     ) -> (Audio, Consumer<AudioCommand>) {
-        let status = Arc::new(AudioStatus::default());
-        let (recording_worker, _recording) =
-            super::super::recording::RecordingWorker::spawn(8_000, status.clone()).unwrap();
-        let (producer, commands) = RingBuffer::new(command_capacity);
-        let (retire_producer, retired) = RingBuffer::<Box<AudioProject>>::new(1);
-        drop(retire_producer);
-        let (error_producer, stream_errors) = RingBuffer::<StreamError>::new(1);
-        drop(error_producer);
-        (
-            Audio {
-                stream: None,
-                device_name: "test".into(),
-                status,
-                producer,
-                retired,
-                stream_errors,
-                log_path: PathBuf::new(),
-                sample_rate: 8_000,
-                recording_worker,
-                recording_state: super::super::RecordingState::Idle,
-                recording_path: None,
-                snapshot_project: AudioProject::from_project(project),
-            },
-            commands,
-        )
+        Audio::test_queue_only(project, command_capacity)
     }
 
     #[test]
