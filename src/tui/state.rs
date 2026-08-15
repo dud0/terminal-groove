@@ -4,8 +4,8 @@ use crate::{
     audio::RecordingState,
     generator::{ChordShapePool, Target as GeneratorTarget},
     model::{
-        ChordShape, DrumRecipeSlot, GlobalParameterId, ParameterId, Percent, Project, TRACK_COUNT,
-        TrackKind,
+        ChordShape, DrumRecipeSlot, FmOperatorField, GlobalParameterId, ParameterId, Percent,
+        Project, TRACK_COUNT, TrackKind,
     },
     reducer::{Editor, Scope},
 };
@@ -17,6 +17,11 @@ pub(crate) enum Mode {
     PatternDialog,
     GeneratorDialog(GeneratorDialog),
     ParameterEdit(ParameterId),
+    FmOperatorEdit {
+        operator: usize,
+        field: FmOperatorField,
+        return_to_parameter: bool,
+    },
     LfoEdit {
         parameter: ParameterId,
         field: LfoField,
@@ -250,6 +255,9 @@ pub struct App {
     pub(super) remembered_parameters: [[Option<ParameterFocus>; 2]; TRACK_COUNT],
     pub(super) mode: Mode,
     pub(super) chord_field: ChordField,
+    pub(super) fm_operator: usize,
+    pub(super) fm_operator_field: FmOperatorField,
+    pub(super) fm_lfo_return: Option<(usize, FmOperatorField, bool)>,
     pub(super) status: String,
     pub(super) path: Option<PathBuf>,
     pub(super) pending_open: Option<PathBuf>,
@@ -312,6 +320,9 @@ impl App {
             remembered_parameters: [[None; 2]; TRACK_COUNT],
             mode: Mode::Navigation,
             chord_field: ChordField::Shape,
+            fm_operator: 0,
+            fm_operator_field: FmOperatorField::Level,
+            fm_lfo_return: None,
             status: "Ready".into(),
             path,
             pending_open: None,

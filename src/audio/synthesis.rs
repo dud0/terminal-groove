@@ -11,8 +11,8 @@ use crate::dsp::{EnvelopeProfile, StereoChorus};
 use crate::engine::{GateAction, synth_action};
 use crate::model::{
     ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT, DrumRecipeSlot,
-    FM_TRACK_INDEX, Instrument, LEAD_TRACK_INDEX, ParameterId, ParameterLocks, Percent,
-    SYNTH_TRACK_START, StepEvent,
+    FM_TRACK_INDEX, FmOperatorField, Instrument, LEAD_TRACK_INDEX, ParameterId, ParameterLocks,
+    Percent, SYNTH_TRACK_START, StepEvent,
 };
 use std::sync::atomic::Ordering;
 
@@ -324,22 +324,59 @@ impl Renderer {
         if let Instrument::Fm(p) = t.instrument {
             voice.kind = SynthVoiceKind::Fm;
             voice.env.set_profile(EnvelopeProfile::Generic);
-            voice.fm_waveform = locks.fm_waveform().unwrap_or(p.waveform);
-            voice.fm_ratio = locks.fm_ratio().unwrap_or(p.ratio);
-            voice.fm_amount.set(
-                locks
-                    .percent(ParameterId::FmAmount)
-                    .unwrap_or(p.amount)
-                    .get() as f32,
-                smoothing,
-            );
-            voice.fm_feedback.set(
-                locks
-                    .percent(ParameterId::FmFeedback)
-                    .unwrap_or(p.feedback)
-                    .get() as f32,
-                smoothing,
-            );
+            let algorithm = locks.fm_algorithm().unwrap_or(p.algorithm);
+            voice.fm_algorithm = algorithm;
+            let carrier_count = (0..4)
+                .filter(|operator| algorithm.is_carrier(*operator))
+                .count() as f32;
+            voice
+                .fm_carrier_normalization
+                .set(carrier_count.sqrt().recip(), smoothing);
+            for operator in 0..4 {
+                let ratio_id = ParameterId::fm_operator(operator, FmOperatorField::Ratio).unwrap();
+                let level_id = ParameterId::fm_operator(operator, FmOperatorField::Level).unwrap();
+                let feedback_id =
+                    ParameterId::fm_operator(operator, FmOperatorField::Feedback).unwrap();
+                voice.fm_ratios[operator].set(
+                    locks
+                        .fm_ratio(ratio_id)
+                        .unwrap_or(p.operators[operator].ratio)
+                        .value(),
+                    smoothing,
+                );
+                voice.fm_levels[operator].set(
+                    locks
+                        .percent(level_id)
+                        .unwrap_or(p.operators[operator].level)
+                        .get() as f32,
+                    smoothing,
+                );
+                voice.fm_feedback[operator].set(
+                    locks
+                        .percent(feedback_id)
+                        .unwrap_or(p.operators[operator].feedback)
+                        .get() as f32,
+                    smoothing,
+                );
+                voice.fm_carriers[operator].set(
+                    if algorithm.is_carrier(operator) {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    smoothing,
+                );
+                for target in 0..4 {
+                    voice.fm_routes[operator][target].set(
+                        if algorithm.routes(operator, target) {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                        smoothing,
+                    );
+                }
+            }
             voice.fm_brightness.set(
                 locks
                     .percent(ParameterId::Brightness)

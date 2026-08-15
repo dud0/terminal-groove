@@ -1017,4 +1017,24 @@ mod tests {
         assert_eq!(load_track_preset(&path).unwrap(), preset);
         assert_eq!(preset.format_version, 1);
     }
+
+    #[test]
+    fn unreleased_two_operator_fm_schema_is_rejected_as_version_22() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy-fm.groove.json");
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["tracks"][crate::model::FM_TRACK_INDEX]["instrument"] = serde_json::json!({
+            "waveform": "sine",
+            "ratio": "2",
+            "amount": 35,
+            "feedback": 8,
+            "brightness": 72,
+            "attack": 0,
+            "decay": 55,
+            "sustain": 55,
+            "release": 40
+        });
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+    }
 }

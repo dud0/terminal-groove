@@ -4,8 +4,7 @@ use crate::dsp::{
     additive_source_gains,
 };
 use crate::model::{
-    ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, FmRatio, FmWaveform, ParameterLocks,
-    Waveform,
+    ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, FmAlgorithm, ParameterLocks, Waveform,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,13 +33,15 @@ pub(super) struct SynthVoice {
     pub(super) lead_filter: LeadFilter,
     pub(super) chord_highpass: Biquad,
     pub(super) fm_filter: Biquad,
-    pub(super) fm_carrier_phase: f32,
-    pub(super) fm_modulator_phase: f32,
-    pub(super) fm_previous_modulator: f32,
-    pub(super) fm_waveform: FmWaveform,
-    pub(super) fm_ratio: FmRatio,
-    pub(super) fm_amount: Smoother,
-    pub(super) fm_feedback: Smoother,
+    pub(super) fm_phases: [f32; 4],
+    pub(super) fm_previous: [f32; 4],
+    pub(super) fm_algorithm: FmAlgorithm,
+    pub(super) fm_ratios: [Smoother; 4],
+    pub(super) fm_levels: [Smoother; 4],
+    pub(super) fm_feedback: [Smoother; 4],
+    pub(super) fm_routes: [[Smoother; 4]; 4],
+    pub(super) fm_carriers: [Smoother; 4],
+    pub(super) fm_carrier_normalization: Smoother,
     pub(super) fm_brightness: Smoother,
     pub(super) freq: Smoother,
     pub(super) wave: Waveform,
@@ -509,13 +510,41 @@ impl SynthVoice {
             lead_filter: Default::default(),
             chord_highpass,
             fm_filter: Biquad::new(),
-            fm_carrier_phase: 0.0,
-            fm_modulator_phase: 0.0,
-            fm_previous_modulator: 0.0,
-            fm_waveform: FmWaveform::Sine,
-            fm_ratio: FmRatio::Two,
-            fm_amount: Smoother::new(35.0),
-            fm_feedback: Smoother::new(8.0),
+            fm_phases: [0.0; 4],
+            fm_previous: [0.0; 4],
+            fm_algorithm: FmAlgorithm::Cascade,
+            fm_ratios: [
+                Smoother::new(1.0),
+                Smoother::new(2.0),
+                Smoother::new(1.0),
+                Smoother::new(1.0),
+            ],
+            fm_levels: [
+                Smoother::new(100.0),
+                Smoother::new(35.0),
+                Smoother::new(0.0),
+                Smoother::new(0.0),
+            ],
+            fm_feedback: [
+                Smoother::new(0.0),
+                Smoother::new(8.0),
+                Smoother::new(0.0),
+                Smoother::new(0.0),
+            ],
+            fm_routes: {
+                let mut routes = [[Smoother::new(0.0); 4]; 4];
+                routes[3][2] = Smoother::new(1.0);
+                routes[2][1] = Smoother::new(1.0);
+                routes[1][0] = Smoother::new(1.0);
+                routes
+            },
+            fm_carriers: [
+                Smoother::new(1.0),
+                Smoother::new(0.0),
+                Smoother::new(0.0),
+                Smoother::new(0.0),
+            ],
+            fm_carrier_normalization: Smoother::new(1.0),
             fm_brightness: Smoother::new(72.0),
             freq: Smoother::new(110.0),
             wave: Waveform::Saw,
@@ -605,9 +634,8 @@ impl SynthVoice {
         self.lead_filter.reset();
         self.chord_highpass.clear_state();
         self.fm_filter.clear_state();
-        self.fm_carrier_phase = 0.0;
-        self.fm_modulator_phase = 0.0;
-        self.fm_previous_modulator = 0.0;
+        self.fm_phases = [0.0; 4];
+        self.fm_previous = [0.0; 4];
     }
 
     pub(super) fn gate_off(&mut self) {

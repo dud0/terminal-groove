@@ -23,9 +23,9 @@ use crate::{
     generator::{ChordShapePool, Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
         ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT,
-        DrumRecipeSlot, FmRatio, FmWaveform, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
-        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, STEP_ROW_SIZE,
-        StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
+        DrumRecipeSlot, FmAlgorithm, FmOperatorField, FmRatio, LfoConfig, LfoDivision, LfoRate,
+        LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE,
+        STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
     },
     reducer::{Editor, Scope},
 };
@@ -39,6 +39,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             a.mode,
             Mode::Navigation
                 | Mode::ParameterEdit(_)
+                | Mode::FmOperatorEdit { .. }
                 | Mode::LfoEdit { .. }
                 | Mode::ChordEdit { .. }
                 | Mode::TriggerEdit { .. }
@@ -94,6 +95,12 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     }
     if matches!(a.mode, Mode::SidechainEdit { .. }) {
         handle_sidechain_key(a, audio, k)?;
+        return Ok(());
+    }
+    if matches!(a.mode, Mode::FmOperatorEdit { .. }) {
+        if handle_fm_operator_key(a, audio, k)? || handle_shared_key(a, audio, k) {
+            return Ok(());
+        }
         return Ok(());
     }
     if matches!(a.mode, Mode::TrackLengthInput(_)) {
@@ -267,6 +274,11 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     }
     match k.code {
         KeyCode::Char('p') if a.row > 0 => enter_lock_parameter_mode(a),
+        KeyCode::Char('O')
+            if a.row > 0 && a.editor.project.tracks[a.row - 1].kind == TrackKind::Fm =>
+        {
+            open_fm_operator_editor(a, false)
+        }
         KeyCode::Char('g') => {
             let track = a.row.saturating_sub(1).min(TRACK_COUNT - 1);
             let defaults = GeneratorConfig::default();
@@ -1342,13 +1354,13 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
                     );
                     return Ok(true);
                 }
-                Ok(ParameterValue::FmWaveform(mode)) => {
-                    let index = FmWaveform::ALL
+                Ok(ParameterValue::FmAlgorithm(mode)) => {
+                    let index = FmAlgorithm::ALL
                         .iter()
                         .position(|choice| *choice == mode)
                         .unwrap_or(0);
                     let next = if k.code == KeyCode::Up {
-                        (index + 1).min(FmWaveform::ALL.len() - 1)
+                        (index + 1).min(FmAlgorithm::ALL.len() - 1)
                     } else {
                         index.saturating_sub(1)
                     };
@@ -1356,7 +1368,7 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
                         a,
                         audio,
                         parameter,
-                        ParameterValue::FmWaveform(FmWaveform::ALL[next]),
+                        ParameterValue::FmAlgorithm(FmAlgorithm::ALL[next]),
                         true,
                         false,
                     );
@@ -1404,6 +1416,14 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
         KeyCode::Char('C') if track == CHORD_TRACK_INDEX => {
             a.mode = Mode::Navigation;
             open_chord_editor(a);
+            Ok(true)
+        }
+        KeyCode::Char('O') if a.editor.project.tracks[track].kind == TrackKind::Fm => {
+            open_fm_operator_editor(a, true);
+            Ok(true)
+        }
+        KeyCode::Enter if parameter.fm_operator_field().is_some() => {
+            open_fm_operator_editor(a, true);
             Ok(true)
         }
         KeyCode::Char('p') => {
@@ -1956,6 +1976,204 @@ pub(super) fn handle_track_probability_key(
     }
 }
 
+pub(super) fn open_fm_operator_editor(a: &mut App, return_to_parameter: bool) {
+    if a.row == 0 || a.editor.project.tracks[a.row - 1].kind != TrackKind::Fm {
+        a.status = "FM operator editor is available on the FM track only".into();
+        return;
+    }
+    if let Mode::ParameterEdit(parameter) = a.mode
+        && let Some((operator, _)) = parameter.fm_operator_field()
+    {
+        a.fm_operator = operator;
+    }
+    a.editor.end_coalescing();
+    a.mode = Mode::FmOperatorEdit {
+        operator: a.fm_operator,
+        field: a.fm_operator_field,
+        return_to_parameter,
+    };
+    a.status = format!("Editing FM operator {}", a.fm_operator + 1);
+}
+
+pub(super) fn handle_fm_operator_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
+    let Mode::FmOperatorEdit {
+        operator,
+        field,
+        return_to_parameter,
+    } = a.mode
+    else {
+        return Ok(false);
+    };
+    let track = a.row.saturating_sub(1);
+    let parameter = ParameterId::fm_operator(operator, field).unwrap();
+    match k.code {
+        KeyCode::Char(' ') | KeyCode::Char('.') | KeyCode::Char('o') => return Ok(false),
+        KeyCode::Enter | KeyCode::Esc => {
+            a.editor.end_coalescing();
+            a.fm_operator = operator;
+            a.fm_operator_field = field;
+            a.mode = if return_to_parameter {
+                Mode::ParameterEdit(
+                    ParameterId::fm_operator(operator, FmOperatorField::Level).unwrap(),
+                )
+            } else {
+                Mode::Navigation
+            };
+            a.status = "FM operator editing finished".into();
+        }
+        KeyCode::Left | KeyCode::Right => {
+            a.editor.end_coalescing();
+            let next = if k.code == KeyCode::Right {
+                (operator + 1).min(3)
+            } else {
+                operator.saturating_sub(1)
+            };
+            a.fm_operator = next;
+            a.mode = Mode::FmOperatorEdit {
+                operator: next,
+                field,
+                return_to_parameter,
+            };
+        }
+        KeyCode::Tab | KeyCode::BackTab => {
+            a.editor.end_coalescing();
+            let index = FmOperatorField::ALL
+                .iter()
+                .position(|candidate| *candidate == field)
+                .unwrap_or(0);
+            let next = if k.code == KeyCode::Tab {
+                (index + 1) % FmOperatorField::ALL.len()
+            } else {
+                (index + FmOperatorField::ALL.len() - 1) % FmOperatorField::ALL.len()
+            };
+            a.fm_operator_field = FmOperatorField::ALL[next];
+            a.mode = Mode::FmOperatorEdit {
+                operator,
+                field: a.fm_operator_field,
+                return_to_parameter,
+            };
+        }
+        KeyCode::PageUp | KeyCode::PageDown => {
+            if k.modifiers.contains(KeyModifiers::SHIFT) {
+                move_step_bank(a, k.code == KeyCode::PageDown);
+            } else {
+                move_step_page(a, k.code == KeyCode::PageDown);
+            }
+        }
+        KeyCode::Char('[' | ']') => {
+            let Ok(ParameterValue::FmAlgorithm(current)) =
+                editor_parameter_value(a, track, ParameterId::FmAlgorithm)
+            else {
+                return Ok(true);
+            };
+            let index = FmAlgorithm::ALL
+                .iter()
+                .position(|candidate| *candidate == current)
+                .unwrap_or(0);
+            let next = if k.code == KeyCode::Char(']') {
+                (index + 1).min(FmAlgorithm::ALL.len() - 1)
+            } else {
+                index.saturating_sub(1)
+            };
+            set_parameter(
+                a,
+                audio,
+                ParameterId::FmAlgorithm,
+                ParameterValue::FmAlgorithm(FmAlgorithm::ALL[next]),
+                true,
+                false,
+            );
+        }
+        KeyCode::Up | KeyCode::Down => {
+            let current = match editor_parameter_value(a, track, parameter) {
+                Ok(value) => value,
+                Err(error) => {
+                    a.status = error.to_string();
+                    return Ok(true);
+                }
+            };
+            let value = match current {
+                ParameterValue::FmRatio(current) => {
+                    let index = FmRatio::ALL
+                        .iter()
+                        .position(|candidate| *candidate == current)
+                        .unwrap_or(0);
+                    let next = if k.code == KeyCode::Up {
+                        (index + 1).min(FmRatio::ALL.len() - 1)
+                    } else {
+                        index.saturating_sub(1)
+                    };
+                    ParameterValue::FmRatio(FmRatio::ALL[next])
+                }
+                ParameterValue::Percent(current) => {
+                    let delta = if k.modifiers.contains(KeyModifiers::SHIFT) {
+                        10
+                    } else {
+                        1
+                    };
+                    let delta = if k.code == KeyCode::Up { delta } else { -delta };
+                    ParameterValue::Percent(current.saturating_add(delta))
+                }
+                _ => return Ok(true),
+            };
+            set_parameter(a, audio, parameter, value, true, false);
+        }
+        KeyCode::Char('L')
+            if matches!(field, FmOperatorField::Level | FmOperatorField::Feedback) =>
+        {
+            a.fm_lfo_return = Some((operator, field, return_to_parameter));
+            open_lfo_editor(a, audio, parameter);
+            if !matches!(a.mode, Mode::LfoEdit { .. }) {
+                a.fm_lfo_return = None;
+            }
+        }
+        KeyCode::Char(c) if matches!(field, FmOperatorField::Level | FmOperatorField::Feedback) => {
+            if let Some(value) = crate::reducer::percentage_key(c) {
+                set_parameter(
+                    a,
+                    audio,
+                    parameter,
+                    ParameterValue::Percent(value),
+                    true,
+                    true,
+                );
+            }
+        }
+        KeyCode::Backspace | KeyCode::Delete if a.scope == Scope::Lock => {
+            if audio.available_commands() == 0 {
+                a.status = "Audio command queue full; edit rejected".into();
+            } else {
+                match a.editor.clear_parameter_lock(track, a.step, parameter) {
+                    Ok(true) => {
+                        sync_project(a, audio);
+                        a.status = format!("Removed {} lock", parameter.display_name());
+                    }
+                    Ok(false) => a.status = "No lock to clear".into(),
+                    Err(error) => a.status = error.to_string(),
+                }
+            }
+        }
+        KeyCode::Char('?') => a.mode = Mode::Help,
+        _ => {}
+    }
+    Ok(true)
+}
+
+fn finish_lfo_editor(a: &mut App, parameter: ParameterId, status: String) {
+    if let Some((operator, field, return_to_parameter)) = a.fm_lfo_return.take() {
+        a.fm_operator = operator;
+        a.fm_operator_field = field;
+        a.mode = Mode::FmOperatorEdit {
+            operator,
+            field,
+            return_to_parameter,
+        };
+    } else {
+        a.mode = Mode::ParameterEdit(parameter);
+    }
+    a.status = status;
+}
+
 pub(super) fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::LfoEdit { parameter, field } = a.mode.clone() else {
         return Ok(false);
@@ -1969,14 +2187,16 @@ pub(super) fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Res
         }
         KeyCode::Enter | KeyCode::Esc | KeyCode::Char('L') => {
             a.editor.end_coalescing();
-            a.mode = Mode::ParameterEdit(parameter);
-            a.status = "LFO editing finished".into();
+            finish_lfo_editor(a, parameter, "LFO editing finished".into());
             return Ok(true);
         }
         KeyCode::Backspace | KeyCode::Delete => {
             if set_lfo_config(a, audio, parameter, None, None) {
-                a.mode = Mode::ParameterEdit(parameter);
-                a.status = format!("Removed {} LFO", parameter.display_name());
+                finish_lfo_editor(
+                    a,
+                    parameter,
+                    format!("Removed {} LFO", parameter.display_name()),
+                );
             }
             return Ok(true);
         }
@@ -2001,7 +2221,7 @@ pub(super) fn handle_lfo_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Res
     }
 
     let Some(mut config) = a.editor.lfo(track, parameter).ok().flatten() else {
-        a.mode = Mode::ParameterEdit(parameter);
+        finish_lfo_editor(a, parameter, "LFO assignment is unavailable".into());
         return Ok(true);
     };
     let direction = if k.code == KeyCode::Down { -1 } else { 1 };
@@ -2327,7 +2547,7 @@ pub(super) fn set_parameter(
             ParameterValue::Chorus(_) => None,
             ParameterValue::Spread(_) => None,
             ParameterValue::LeadSubMode(_) => None,
-            ParameterValue::FmWaveform(_) | ParameterValue::FmRatio(_) => None,
+            ParameterValue::FmAlgorithm(_) | ParameterValue::FmRatio(_) => None,
         });
     let key = keep_editing.then_some(coalesce_key(track, step, parameter, a.parameter_recipe));
     let kind = a.editor.project.tracks[track].kind;

@@ -430,28 +430,95 @@ pub enum Waveform {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FmWaveform {
+pub enum FmAlgorithm {
     #[default]
-    Sine,
-    Triangle,
-    Saw,
+    Cascade,
+    SplitStack,
+    Converge,
+    Pairs,
+    FanIn,
+    FanOut,
+    Mixed,
+    Additive,
 }
 
-impl FmWaveform {
-    pub const ALL: [Self; 3] = [Self::Sine, Self::Triangle, Self::Saw];
+impl FmAlgorithm {
+    pub const ALL: [Self; 8] = [
+        Self::Cascade,
+        Self::SplitStack,
+        Self::Converge,
+        Self::Pairs,
+        Self::FanIn,
+        Self::FanOut,
+        Self::Mixed,
+        Self::Additive,
+    ];
+
+    pub const fn number(self) -> u8 {
+        self as u8 + 1
+    }
+
+    pub const fn diagram(self) -> &'static str {
+        match self {
+            Self::Cascade => "4>3>2>1 · OUT 1",
+            Self::SplitStack => "4>3 · 3>1+2 · OUT 1+2",
+            Self::Converge => "4+3>2>1 · OUT 1",
+            Self::Pairs => "4>3 · 2>1 · OUT 1+3",
+            Self::FanIn => "4+3+2>1 · OUT 1",
+            Self::FanOut => "4>1+2+3 · OUT 1+2+3",
+            Self::Mixed => "4>3 · OUT 1+2+3",
+            Self::Additive => "OUT 1+2+3+4",
+        }
+    }
+
+    pub const fn routes(self, source: usize, target: usize) -> bool {
+        match self {
+            Self::Cascade => matches!((source, target), (3, 2) | (2, 1) | (1, 0)),
+            Self::SplitStack => matches!((source, target), (3, 2) | (2, 1) | (2, 0)),
+            Self::Converge => matches!((source, target), (3, 1) | (2, 1) | (1, 0)),
+            Self::Pairs => matches!((source, target), (3, 2) | (1, 0)),
+            Self::FanIn => matches!((source, target), (3, 0) | (2, 0) | (1, 0)),
+            Self::FanOut => matches!((source, target), (3, 0) | (3, 1) | (3, 2)),
+            Self::Mixed => matches!((source, target), (3, 2)),
+            Self::Additive => false,
+        }
+    }
+
+    pub const fn is_carrier(self, operator: usize) -> bool {
+        match self {
+            Self::Cascade | Self::Converge | Self::FanIn => operator == 0,
+            Self::SplitStack => operator <= 1,
+            Self::Pairs => matches!(operator, 0 | 2),
+            Self::FanOut | Self::Mixed => operator <= 2,
+            Self::Additive => true,
+        }
+    }
+
+    pub const fn role(self, operator: usize) -> &'static str {
+        if self.is_carrier(operator) {
+            return "OUT";
+        }
+        match (self, operator) {
+            (Self::Cascade, 1) => ">1",
+            (Self::Cascade, 2) => ">2",
+            (Self::Cascade, 3) => ">3",
+            (Self::SplitStack, 2) => ">1+2",
+            (Self::SplitStack, 3) => ">3",
+            (Self::Converge, 1) => ">1",
+            (Self::Converge, 2 | 3) => ">2",
+            (Self::Pairs, 1) => ">1",
+            (Self::Pairs, 3) => ">3",
+            (Self::FanIn, 1..=3) => ">1",
+            (Self::FanOut, 3) => ">1+2+3",
+            (Self::Mixed, 3) => ">3",
+            _ => "---",
+        }
+    }
 }
 
-impl fmt::Display for FmWaveform {
+impl fmt::Display for FmAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::Sine => "Sine",
-                Self::Triangle => "Triangle",
-                Self::Saw => "Saw",
-            }
-        )
+        write!(f, "A{}", self.number())
     }
 }
 
@@ -1158,11 +1225,28 @@ pub struct LeadParameters {
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct FmParameters {
-    pub waveform: FmWaveform,
+pub struct FmOperator {
     pub ratio: FmRatio,
-    pub amount: Percent,
+    pub level: Percent,
     pub feedback: Percent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FmOperatorField {
+    Ratio,
+    Level,
+    Feedback,
+}
+
+impl FmOperatorField {
+    pub const ALL: [Self; 3] = [Self::Ratio, Self::Level, Self::Feedback];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmParameters {
+    pub algorithm: FmAlgorithm,
+    pub operators: [FmOperator; 4],
     pub brightness: Percent,
     pub attack: Percent,
     pub decay: Percent,
@@ -1380,15 +1464,15 @@ impl ParameterLocks {
         }
     }
 
-    pub fn fm_waveform(&self) -> Option<FmWaveform> {
-        match self.get(ParameterId::FmWaveform) {
-            Some(ParameterValue::FmWaveform(value)) => Some(value),
+    pub fn fm_algorithm(&self) -> Option<FmAlgorithm> {
+        match self.get(ParameterId::FmAlgorithm) {
+            Some(ParameterValue::FmAlgorithm(value)) => Some(value),
             _ => None,
         }
     }
 
-    pub fn fm_ratio(&self) -> Option<FmRatio> {
-        match self.get(ParameterId::FmRatio) {
+    pub fn fm_ratio(&self, parameter: ParameterId) -> Option<FmRatio> {
+        match self.get(parameter) {
             Some(ParameterValue::FmRatio(value)) => Some(value),
             _ => None,
         }
@@ -1444,7 +1528,7 @@ impl Serialize for ParameterLocks {
                     ParameterValue::LeadSubMode(value) => {
                         map.serialize_entry(parameter.name(), &value)?
                     }
-                    ParameterValue::FmWaveform(value) => {
+                    ParameterValue::FmAlgorithm(value) => {
                         map.serialize_entry(parameter.name(), &value)?
                     }
                     ParameterValue::FmRatio(value) => {
@@ -1493,9 +1577,9 @@ impl<'de> Visitor<'de> for ParameterLocksVisitor {
                 ParameterValueKind::LeadSubMode => map
                     .next_value::<Option<LeadSubMode>>()?
                     .map(ParameterValue::LeadSubMode),
-                ParameterValueKind::FmWaveform => map
-                    .next_value::<Option<FmWaveform>>()?
-                    .map(ParameterValue::FmWaveform),
+                ParameterValueKind::FmAlgorithm => map
+                    .next_value::<Option<FmAlgorithm>>()?
+                    .map(ParameterValue::FmAlgorithm),
                 ParameterValueKind::FmRatio => map
                     .next_value::<Option<FmRatio>>()?
                     .map(ParameterValue::FmRatio),
@@ -2154,10 +2238,29 @@ impl Project {
                     TrackKind::Fm,
                     "FM",
                     Instrument::Fm(FmParameters {
-                        waveform: FmWaveform::Sine,
-                        ratio: FmRatio::Two,
-                        amount: p(35),
-                        feedback: p(8),
+                        algorithm: FmAlgorithm::Cascade,
+                        operators: [
+                            FmOperator {
+                                ratio: FmRatio::One,
+                                level: p(100),
+                                feedback: p(0),
+                            },
+                            FmOperator {
+                                ratio: FmRatio::Two,
+                                level: p(35),
+                                feedback: p(8),
+                            },
+                            FmOperator {
+                                ratio: FmRatio::One,
+                                level: p(0),
+                                feedback: p(0),
+                            },
+                            FmOperator {
+                                ratio: FmRatio::One,
+                                level: p(0),
+                                feedback: p(0),
+                            },
+                        ],
                         brightness: p(72),
                         attack: p(0),
                         decay: p(55),
@@ -2536,10 +2639,19 @@ pub enum ParameterId {
     BitCrusherBits,
     BitCrusherRate,
     BitCrusherMix,
-    FmWaveform,
-    FmRatio,
-    FmAmount,
-    FmFeedback,
+    FmAlgorithm,
+    FmOp1Ratio,
+    FmOp1Level,
+    FmOp1Feedback,
+    FmOp2Ratio,
+    FmOp2Level,
+    FmOp2Feedback,
+    FmOp3Ratio,
+    FmOp3Level,
+    FmOp3Feedback,
+    FmOp4Ratio,
+    FmOp4Level,
+    FmOp4Feedback,
     Brightness,
 }
 
@@ -2550,7 +2662,7 @@ pub enum ParameterValue {
     Chorus(ChorusMode),
     Spread(ChordSpread),
     LeadSubMode(LeadSubMode),
-    FmWaveform(FmWaveform),
+    FmAlgorithm(FmAlgorithm),
     FmRatio(FmRatio),
 }
 
@@ -2561,12 +2673,12 @@ pub enum ParameterValueKind {
     Chorus,
     Spread,
     LeadSubMode,
-    FmWaveform,
+    FmAlgorithm,
     FmRatio,
 }
 
 impl ParameterId {
-    pub const COUNT: usize = 45;
+    pub const COUNT: usize = 54;
     pub const ALL: [Self; Self::COUNT] = [
         Self::Level,
         Self::Pan,
@@ -2608,10 +2720,19 @@ impl ParameterId {
         Self::BitCrusherBits,
         Self::BitCrusherRate,
         Self::BitCrusherMix,
-        Self::FmWaveform,
-        Self::FmRatio,
-        Self::FmAmount,
-        Self::FmFeedback,
+        Self::FmAlgorithm,
+        Self::FmOp1Ratio,
+        Self::FmOp1Level,
+        Self::FmOp1Feedback,
+        Self::FmOp2Ratio,
+        Self::FmOp2Level,
+        Self::FmOp2Feedback,
+        Self::FmOp3Ratio,
+        Self::FmOp3Level,
+        Self::FmOp3Feedback,
+        Self::FmOp4Ratio,
+        Self::FmOp4Level,
+        Self::FmOp4Feedback,
         Self::Brightness,
     ];
 
@@ -2627,9 +2748,47 @@ impl ParameterId {
             Self::Chorus => ParameterValueKind::Chorus,
             Self::Spread => ParameterValueKind::Spread,
             Self::LeadSubMode => ParameterValueKind::LeadSubMode,
-            Self::FmWaveform => ParameterValueKind::FmWaveform,
-            Self::FmRatio => ParameterValueKind::FmRatio,
+            Self::FmAlgorithm => ParameterValueKind::FmAlgorithm,
+            Self::FmOp1Ratio | Self::FmOp2Ratio | Self::FmOp3Ratio | Self::FmOp4Ratio => {
+                ParameterValueKind::FmRatio
+            }
             _ => ParameterValueKind::Percent,
+        }
+    }
+
+    pub const fn fm_operator(operator: usize, field: FmOperatorField) -> Option<Self> {
+        match (operator, field) {
+            (0, FmOperatorField::Ratio) => Some(Self::FmOp1Ratio),
+            (0, FmOperatorField::Level) => Some(Self::FmOp1Level),
+            (0, FmOperatorField::Feedback) => Some(Self::FmOp1Feedback),
+            (1, FmOperatorField::Ratio) => Some(Self::FmOp2Ratio),
+            (1, FmOperatorField::Level) => Some(Self::FmOp2Level),
+            (1, FmOperatorField::Feedback) => Some(Self::FmOp2Feedback),
+            (2, FmOperatorField::Ratio) => Some(Self::FmOp3Ratio),
+            (2, FmOperatorField::Level) => Some(Self::FmOp3Level),
+            (2, FmOperatorField::Feedback) => Some(Self::FmOp3Feedback),
+            (3, FmOperatorField::Ratio) => Some(Self::FmOp4Ratio),
+            (3, FmOperatorField::Level) => Some(Self::FmOp4Level),
+            (3, FmOperatorField::Feedback) => Some(Self::FmOp4Feedback),
+            _ => None,
+        }
+    }
+
+    pub const fn fm_operator_field(self) -> Option<(usize, FmOperatorField)> {
+        match self {
+            Self::FmOp1Ratio => Some((0, FmOperatorField::Ratio)),
+            Self::FmOp1Level => Some((0, FmOperatorField::Level)),
+            Self::FmOp1Feedback => Some((0, FmOperatorField::Feedback)),
+            Self::FmOp2Ratio => Some((1, FmOperatorField::Ratio)),
+            Self::FmOp2Level => Some((1, FmOperatorField::Level)),
+            Self::FmOp2Feedback => Some((1, FmOperatorField::Feedback)),
+            Self::FmOp3Ratio => Some((2, FmOperatorField::Ratio)),
+            Self::FmOp3Level => Some((2, FmOperatorField::Level)),
+            Self::FmOp3Feedback => Some((2, FmOperatorField::Feedback)),
+            Self::FmOp4Ratio => Some((3, FmOperatorField::Ratio)),
+            Self::FmOp4Level => Some((3, FmOperatorField::Level)),
+            Self::FmOp4Feedback => Some((3, FmOperatorField::Feedback)),
+            _ => None,
         }
     }
 
@@ -2669,8 +2828,14 @@ impl ParameterId {
                 | Self::Sustain
                 | Self::Release
                 | Self::Pitch
-                | Self::FmAmount
-                | Self::FmFeedback
+                | Self::FmOp1Level
+                | Self::FmOp1Feedback
+                | Self::FmOp2Level
+                | Self::FmOp2Feedback
+                | Self::FmOp3Level
+                | Self::FmOp3Feedback
+                | Self::FmOp4Level
+                | Self::FmOp4Feedback
                 | Self::Brightness
         )
     }
@@ -2687,7 +2852,7 @@ impl ParameterId {
             | (ParameterValueKind::Chorus, ParameterValue::Chorus(_))
             | (ParameterValueKind::Spread, ParameterValue::Spread(_))
             | (ParameterValueKind::LeadSubMode, ParameterValue::LeadSubMode(_)) => true,
-            (ParameterValueKind::FmWaveform, ParameterValue::FmWaveform(_))
+            (ParameterValueKind::FmAlgorithm, ParameterValue::FmAlgorithm(_))
             | (ParameterValueKind::FmRatio, ParameterValue::FmRatio(_)) => true,
             _ => false,
         }
@@ -2759,10 +2924,19 @@ impl ParameterId {
             Self::Sustain | Self::Release => {
                 matches!(kind, TrackKind::Chord | TrackKind::Lead | TrackKind::Fm)
             }
-            Self::FmWaveform
-            | Self::FmRatio
-            | Self::FmAmount
-            | Self::FmFeedback
+            Self::FmAlgorithm
+            | Self::FmOp1Ratio
+            | Self::FmOp1Level
+            | Self::FmOp1Feedback
+            | Self::FmOp2Ratio
+            | Self::FmOp2Level
+            | Self::FmOp2Feedback
+            | Self::FmOp3Ratio
+            | Self::FmOp3Level
+            | Self::FmOp3Feedback
+            | Self::FmOp4Ratio
+            | Self::FmOp4Level
+            | Self::FmOp4Feedback
             | Self::Brightness => matches!(kind, TrackKind::Fm),
             Self::Pitch => false,
         }
@@ -2806,8 +2980,11 @@ impl ParameterId {
                         | Self::PortamentoTime
                         | Self::Chorus
                         | Self::Spread
-                        | Self::FmWaveform
-                        | Self::FmRatio
+                        | Self::FmAlgorithm
+                        | Self::FmOp1Ratio
+                        | Self::FmOp2Ratio
+                        | Self::FmOp3Ratio
+                        | Self::FmOp4Ratio
                 ))
     }
 
@@ -2853,10 +3030,19 @@ impl ParameterId {
             Self::BitCrusherBits => "bit_crusher_bits",
             Self::BitCrusherRate => "bit_crusher_rate",
             Self::BitCrusherMix => "bit_crusher_mix",
-            Self::FmWaveform => "fm_waveform",
-            Self::FmRatio => "fm_ratio",
-            Self::FmAmount => "fm_amount",
-            Self::FmFeedback => "fm_feedback",
+            Self::FmAlgorithm => "fm_algorithm",
+            Self::FmOp1Ratio => "fm_op1_ratio",
+            Self::FmOp1Level => "fm_op1_level",
+            Self::FmOp1Feedback => "fm_op1_feedback",
+            Self::FmOp2Ratio => "fm_op2_ratio",
+            Self::FmOp2Level => "fm_op2_level",
+            Self::FmOp2Feedback => "fm_op2_feedback",
+            Self::FmOp3Ratio => "fm_op3_ratio",
+            Self::FmOp3Level => "fm_op3_level",
+            Self::FmOp3Feedback => "fm_op3_feedback",
+            Self::FmOp4Ratio => "fm_op4_ratio",
+            Self::FmOp4Level => "fm_op4_level",
+            Self::FmOp4Feedback => "fm_op4_feedback",
             Self::Brightness => "brightness",
         }
     }
@@ -2885,10 +3071,19 @@ impl ParameterId {
             Self::BitCrusherBits => "bit crusher bits",
             Self::BitCrusherRate => "bit crusher rate",
             Self::BitCrusherMix => "bit crusher mix",
-            Self::FmWaveform => "waveform",
-            Self::FmRatio => "ratio",
-            Self::FmAmount => "FM amount",
-            Self::FmFeedback => "feedback",
+            Self::FmAlgorithm => "FM algorithm",
+            Self::FmOp1Ratio => "operator 1 ratio",
+            Self::FmOp1Level => "operator 1 level",
+            Self::FmOp1Feedback => "operator 1 feedback",
+            Self::FmOp2Ratio => "operator 2 ratio",
+            Self::FmOp2Level => "operator 2 level",
+            Self::FmOp2Feedback => "operator 2 feedback",
+            Self::FmOp3Ratio => "operator 3 ratio",
+            Self::FmOp3Level => "operator 3 level",
+            Self::FmOp3Feedback => "operator 3 feedback",
+            Self::FmOp4Ratio => "operator 4 ratio",
+            Self::FmOp4Level => "operator 4 level",
+            Self::FmOp4Feedback => "operator 4 feedback",
             Self::Brightness => "brightness",
             _ => self.name(),
         }
@@ -2968,6 +3163,17 @@ impl Track {
     }
 
     pub fn parameter(&self, parameter: ParameterId) -> Option<ParameterValue> {
+        if let Some((operator, field)) = parameter.fm_operator_field() {
+            let Instrument::Fm(parameters) = self.instrument else {
+                return None;
+            };
+            let operator = parameters.operators[operator];
+            return Some(match field {
+                FmOperatorField::Ratio => ParameterValue::FmRatio(operator.ratio),
+                FmOperatorField::Level => ParameterValue::Percent(operator.level),
+                FmOperatorField::Feedback => ParameterValue::Percent(operator.feedback),
+            });
+        }
         let value = match parameter {
             ParameterId::Level => ParameterValue::Percent(self.level),
             ParameterId::Pan => ParameterValue::Percent(self.pan),
@@ -3101,22 +3307,22 @@ impl Track {
                 Instrument::Fm(p) => ParameterValue::Percent(p.release),
                 _ => return None,
             },
-            ParameterId::FmWaveform => match self.instrument {
-                Instrument::Fm(p) => ParameterValue::FmWaveform(p.waveform),
+            ParameterId::FmAlgorithm => match self.instrument {
+                Instrument::Fm(p) => ParameterValue::FmAlgorithm(p.algorithm),
                 _ => return None,
             },
-            ParameterId::FmRatio => match self.instrument {
-                Instrument::Fm(p) => ParameterValue::FmRatio(p.ratio),
-                _ => return None,
-            },
-            ParameterId::FmAmount => match self.instrument {
-                Instrument::Fm(p) => ParameterValue::Percent(p.amount),
-                _ => return None,
-            },
-            ParameterId::FmFeedback => match self.instrument {
-                Instrument::Fm(p) => ParameterValue::Percent(p.feedback),
-                _ => return None,
-            },
+            ParameterId::FmOp1Ratio
+            | ParameterId::FmOp1Level
+            | ParameterId::FmOp1Feedback
+            | ParameterId::FmOp2Ratio
+            | ParameterId::FmOp2Level
+            | ParameterId::FmOp2Feedback
+            | ParameterId::FmOp3Ratio
+            | ParameterId::FmOp3Level
+            | ParameterId::FmOp3Feedback
+            | ParameterId::FmOp4Ratio
+            | ParameterId::FmOp4Level
+            | ParameterId::FmOp4Feedback => unreachable!("operator parameters returned above"),
             ParameterId::Brightness => match self.instrument {
                 Instrument::Fm(p) => ParameterValue::Percent(p.brightness),
                 _ => return None,
@@ -3156,6 +3362,24 @@ impl Track {
     }
 
     pub fn set_parameter(&mut self, parameter: ParameterId, value: ParameterValue) -> bool {
+        if let Some((operator, field)) = parameter.fm_operator_field() {
+            let Instrument::Fm(parameters) = &mut self.instrument else {
+                return false;
+            };
+            match (field, value) {
+                (FmOperatorField::Ratio, ParameterValue::FmRatio(value)) => {
+                    parameters.operators[operator].ratio = value
+                }
+                (FmOperatorField::Level, ParameterValue::Percent(value)) => {
+                    parameters.operators[operator].level = value
+                }
+                (FmOperatorField::Feedback, ParameterValue::Percent(value)) => {
+                    parameters.operators[operator].feedback = value
+                }
+                _ => return false,
+            }
+            return true;
+        }
         match (parameter, value) {
             (ParameterId::Level, ParameterValue::Percent(v)) => self.level = v,
             (ParameterId::Pan, ParameterValue::Percent(v)) => self.pan = v,
@@ -3326,24 +3550,12 @@ impl Track {
                 Instrument::Fm(p) => p.release = v,
                 _ => return false,
             },
-            (ParameterId::FmWaveform, ParameterValue::FmWaveform(v)) => {
+            (ParameterId::FmAlgorithm, ParameterValue::FmAlgorithm(v)) => {
                 match &mut self.instrument {
-                    Instrument::Fm(p) => p.waveform = v,
+                    Instrument::Fm(p) => p.algorithm = v,
                     _ => return false,
                 }
             }
-            (ParameterId::FmRatio, ParameterValue::FmRatio(v)) => match &mut self.instrument {
-                Instrument::Fm(p) => p.ratio = v,
-                _ => return false,
-            },
-            (ParameterId::FmAmount, ParameterValue::Percent(v)) => match &mut self.instrument {
-                Instrument::Fm(p) => p.amount = v,
-                _ => return false,
-            },
-            (ParameterId::FmFeedback, ParameterValue::Percent(v)) => match &mut self.instrument {
-                Instrument::Fm(p) => p.feedback = v,
-                _ => return false,
-            },
             (ParameterId::Brightness, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Fm(p) => p.brightness = v,
                 _ => return false,
@@ -3816,9 +4028,9 @@ mod tests {
                 ParameterValue::Spread(ChordSpread::Wide)
             } else if parameter == ParameterId::LeadSubMode {
                 ParameterValue::LeadSubMode(LeadSubMode::TwoOctaveSquare)
-            } else if parameter == ParameterId::FmWaveform {
-                ParameterValue::FmWaveform(FmWaveform::Triangle)
-            } else if parameter == ParameterId::FmRatio {
+            } else if parameter == ParameterId::FmAlgorithm {
+                ParameterValue::FmAlgorithm(FmAlgorithm::Pairs)
+            } else if matches!(parameter.value_kind(), ParameterValueKind::FmRatio) {
                 ParameterValue::FmRatio(FmRatio::Four)
             } else {
                 percent
@@ -4086,11 +4298,33 @@ mod tests {
         let Instrument::Fm(fm) = project.tracks[FM_TRACK_INDEX].instrument else {
             panic!("expected FM")
         };
-        assert_eq!((fm.waveform, fm.ratio), (FmWaveform::Sine, FmRatio::Two));
+        assert_eq!(fm.algorithm, FmAlgorithm::Cascade);
         assert_eq!(
-            (fm.amount, fm.feedback, fm.brightness),
-            (p(35), p(8), p(72))
+            fm.operators,
+            [
+                FmOperator {
+                    ratio: FmRatio::One,
+                    level: p(100),
+                    feedback: p(0)
+                },
+                FmOperator {
+                    ratio: FmRatio::Two,
+                    level: p(35),
+                    feedback: p(8)
+                },
+                FmOperator {
+                    ratio: FmRatio::One,
+                    level: p(0),
+                    feedback: p(0)
+                },
+                FmOperator {
+                    ratio: FmRatio::One,
+                    level: p(0),
+                    feedback: p(0)
+                },
+            ]
         );
+        assert_eq!(fm.brightness, p(72));
         assert_eq!(
             (fm.attack, fm.decay, fm.sustain, fm.release),
             (p(0), p(55), p(55), p(40))
@@ -4101,9 +4335,11 @@ mod tests {
             serde_json::to_string(&FmRatio::OneAndHalf).unwrap(),
             "\"1.5\""
         );
-        assert!(ParameterId::FmAmount.supports_lfo(TrackKind::Fm));
+        assert!(ParameterId::FmOp2Level.supports_lfo(TrackKind::Fm));
+        assert!(ParameterId::FmOp2Feedback.supports_lfo(TrackKind::Fm));
         assert!(ParameterId::Pitch.supports_lfo(TrackKind::Fm));
-        assert!(!ParameterId::FmRatio.supports_lfo(TrackKind::Fm));
+        assert!(!ParameterId::FmOp2Ratio.supports_lfo(TrackKind::Fm));
+        assert!(!ParameterId::FmAlgorithm.supports_lfo(TrackKind::Fm));
 
         project.patterns[0].tracks[FM_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
             degree: 1,
@@ -4120,5 +4356,27 @@ mod tests {
             project.validate(),
             Err(ValidationError::EventKind(FM_TRACK_INDEX, 0))
         );
+    }
+
+    #[test]
+    fn fm_algorithms_have_stable_acyclic_routes_and_carriers() {
+        let expected_carriers = [1, 2, 1, 2, 1, 3, 3, 4];
+        for (algorithm, expected) in FmAlgorithm::ALL.into_iter().zip(expected_carriers) {
+            assert_eq!(
+                (0..4)
+                    .filter(|operator| algorithm.is_carrier(*operator))
+                    .count(),
+                expected
+            );
+            for source in 0..4 {
+                for target in 0..4 {
+                    if algorithm.routes(source, target) {
+                        assert!(source > target, "{} contains a cyclic route", algorithm);
+                        assert!(!algorithm.is_carrier(source));
+                    }
+                }
+            }
+            assert!(!algorithm.diagram().is_empty());
+        }
     }
 }

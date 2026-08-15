@@ -1,9 +1,9 @@
 use super::overlays::{
     overwrite_destination, overwrite_popup_rect, popup, popup_at, probability_popup_rect,
-    quit_popup_rect, render_chord_popup, render_generator_popup, render_lfo_popup,
-    render_lfo_selector, render_pattern_popup, render_preset_browser, render_preset_dialog,
-    render_project_browser, render_sidechain_popup, render_trigger_popup, swing_popup_rect,
-    tempo_popup_rect,
+    quit_popup_rect, render_chord_popup, render_fm_operator_popup, render_generator_popup,
+    render_lfo_popup, render_lfo_selector, render_pattern_popup, render_preset_browser,
+    render_preset_dialog, render_project_browser, render_sidechain_popup, render_trigger_popup,
+    swing_popup_rect, tempo_popup_rect,
 };
 use super::{
     controller::{
@@ -18,9 +18,9 @@ use crate::tui::DIRECT_PERCENTAGE_HINT;
 use crate::{
     audio::{Audio, RecordingState},
     model::{
-        ChordShape, ChorusMode, DelayDivision, FmRatio, FmWaveform, GlobalParameterId, ParameterId,
-        ParameterValue, PitchClass, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT,
-        TrackKind, TriggerCondition, Waveform,
+        ChordShape, ChorusMode, DelayDivision, FmAlgorithm, FmRatio, GlobalParameterId,
+        ParameterId, ParameterValue, PitchClass, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent,
+        TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
     },
     reducer::Scope,
 };
@@ -45,6 +45,9 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::GeneratorDialog(_) => "Pattern idea generator".into(),
         Mode::ParameterEdit(parameter) => {
             format!("Parameter edit ({})", parameter.display_name())
+        }
+        Mode::FmOperatorEdit { operator, .. } => {
+            format!("FM operator edit (OP{})", operator + 1)
         }
         Mode::LfoEdit { parameter, .. } => {
             format!("Track LFO edit ({})", parameter.display_name())
@@ -78,6 +81,7 @@ pub(super) fn help_available(mode: &Mode) -> bool {
         mode,
         Mode::Navigation
             | Mode::ParameterEdit(_)
+            | Mode::FmOperatorEdit { .. }
             | Mode::LfoEdit { .. }
             | Mode::ChordEdit { .. }
             | Mode::TriggerEdit { .. }
@@ -110,9 +114,9 @@ PARAMETERS  v level · n pan · y delay send · b reverb send
            Snare: u tune · t tone · s snappy · Hat recipes: u tune · d decay
            Tom recipes/Cymbal/Rimshot: u tune · t tone · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
-           Chord/Lead: w osc mix · P pulse · u sub · O noise · i pitch LFO
-           Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR · FM: w/q/m/f/c + i + ADSR
-           Chord: h chorus · e spread
+           Chord/Lead: w mix · P pulse · u sub · O noise · c cutoff · R resonance · f filter · i pitch · ADSR
+           Chord: h chorus · e spread · FM: q algorithm · O operators · c brightness · i pitch · ADSR
+           FM operator: ←/→ select · Tab field · ↑/↓ edit · [/] algorithm
            Shift+L LFO · [`/-/1–9/0] percent · ↑/↓ adjust · ←/→ switch parameter
            Enter/Esc finish · Backspace/Delete remove lock/LFO
 GLOBAL  t tempo · y delay division · f feedback · r reverb time
@@ -786,33 +790,39 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 19] = [
     RELEASE_PARAMETER,
 ];
 
-const FM_PARAMETERS: [ParameterDescriptor; 14] = [
+const FM_PARAMETERS: [ParameterDescriptor; 15] = [
     LEVEL_PARAMETER,
     DELAY_SEND_PARAMETER,
     REVERB_SEND_PARAMETER,
     PAN_PARAMETER,
     ParameterDescriptor {
-        id: ParameterId::FmWaveform,
-        label: "Waveform",
-        shortcut: "w",
-        group: ParameterGroup::Instrument,
-    },
-    ParameterDescriptor {
-        id: ParameterId::FmRatio,
-        label: "Ratio",
+        id: ParameterId::FmAlgorithm,
+        label: "Algo",
         shortcut: "q",
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
-        id: ParameterId::FmAmount,
-        label: "Amount",
-        shortcut: "m",
+        id: ParameterId::FmOp1Level,
+        label: "OP1",
+        shortcut: "O",
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
-        id: ParameterId::FmFeedback,
-        label: "Feedback",
-        shortcut: "f",
+        id: ParameterId::FmOp2Level,
+        label: "OP2",
+        shortcut: "O",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::FmOp3Level,
+        label: "OP3",
+        shortcut: "O",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::FmOp4Level,
+        label: "OP4",
+        shortcut: "O",
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
@@ -1130,7 +1140,7 @@ pub(super) fn physical_parameter_readout(
         ParameterValue::Chorus(ChorusMode::Ii) => "Mode II".into(),
         ParameterValue::Spread(value) => value.to_string(),
         ParameterValue::LeadSubMode(value) => format!("{value:?}"),
-        ParameterValue::FmWaveform(value) => value.to_string(),
+        ParameterValue::FmAlgorithm(value) => format!("{value} · {}", value.diagram()),
         ParameterValue::FmRatio(value) => format!("{value}:1"),
         ParameterValue::Percent(value) => {
             let value = value.get();
@@ -1279,10 +1289,30 @@ pub(super) fn physical_parameter_readout(
                 (TrackKind::Lead, ParameterId::Decay | ParameterId::Release) => {
                     format!("{:.3} s", crate::dsp::exp_map(value, 0.002, 10.0))
                 }
-                (TrackKind::Fm, ParameterId::FmAmount) => {
-                    format!("index {:.2} rad", 12.0 * (value as f32 / 100.0).powi(2))
+                (TrackKind::Fm, parameter)
+                    if matches!(
+                        parameter.fm_operator_field(),
+                        Some((_, crate::model::FmOperatorField::Level))
+                    ) =>
+                {
+                    let operator = parameter.fm_operator_field().unwrap().0;
+                    let algorithm =
+                        match displayed_parameter(a, track, step, ParameterId::FmAlgorithm) {
+                            Some((ParameterValue::FmAlgorithm(value), _)) => value,
+                            _ => FmAlgorithm::default(),
+                        };
+                    if algorithm.is_carrier(operator) {
+                        format!("{}% carrier gain", value)
+                    } else {
+                        format!("index {:.2} rad", 12.0 * (value as f32 / 100.0).powi(2))
+                    }
                 }
-                (TrackKind::Fm, ParameterId::FmFeedback) => {
+                (TrackKind::Fm, parameter)
+                    if matches!(
+                        parameter.fm_operator_field(),
+                        Some((_, crate::model::FmOperatorField::Feedback))
+                    ) =>
+                {
                     format!("{:.2}π rad", 0.95 * value as f32 / 100.0)
                 }
                 (TrackKind::Fm, ParameterId::Brightness) => {
@@ -1793,6 +1823,13 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             }
         };
         f.render_widget(block, slot);
+        if t.kind == TrackKind::Fm
+            && let Some((operator, crate::model::FmOperatorField::Level)) =
+                descriptor.id.fm_operator_field()
+        {
+            render_fm_operator_summary(f, content, a, track, operator, descriptor, active, compact);
+            continue;
+        }
         let style = if active {
             Style::default()
                 .fg(group_color)
@@ -1839,7 +1876,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 crate::model::ChordSpread::Wide => "WIDE".into(),
             },
             ParameterValue::LeadSubMode(value) => format!("{value:?}"),
-            ParameterValue::FmWaveform(value) => value.to_string().to_uppercase(),
+            ParameterValue::FmAlgorithm(value) => value.to_string(),
             ParameterValue::FmRatio(value) => format!("{value}:1"),
         };
         let has_lfo = t.lfos.get(descriptor.id).is_some();
@@ -1935,14 +1972,14 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                     };
                     if segment == selected { "●" } else { "│" }
                 }
-                ParameterValue::FmWaveform(mode) => {
-                    let index = FmWaveform::ALL
+                ParameterValue::FmAlgorithm(mode) => {
+                    let index = FmAlgorithm::ALL
                         .iter()
                         .position(|choice| *choice == mode)
                         .unwrap_or(0);
-                    let selected = ((FmWaveform::ALL.len() - 1 - index)
+                    let selected = ((FmAlgorithm::ALL.len() - 1 - index)
                         * usize::from(segment_count.saturating_sub(1))
-                        / (FmWaveform::ALL.len() - 1)) as u16;
+                        / (FmAlgorithm::ALL.len() - 1)) as u16;
                     if segment == selected { "●" } else { "│" }
                 }
                 ParameterValue::FmRatio(mode) => {
@@ -2036,6 +2073,113 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             ]))
             .alignment(Alignment::Center),
             shortcut_area,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_fm_operator_summary(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    a: &App,
+    track: usize,
+    operator: usize,
+    descriptor: &ParameterDescriptor,
+    active: bool,
+    compact: bool,
+) {
+    use crate::model::FmOperatorField;
+    let style = if active {
+        Style::default()
+            .fg(Color::LightCyan)
+            .reversed()
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::LightCyan)
+            .add_modifier(Modifier::BOLD)
+    };
+    let value = |field| {
+        let id = ParameterId::fm_operator(operator, field).unwrap();
+        displayed_parameter(a, track, a.step, id).map(|(value, origin)| (id, value, origin))
+    };
+    let Some((_, ParameterValue::FmRatio(ratio), ratio_origin)) = value(FmOperatorField::Ratio)
+    else {
+        return;
+    };
+    let Some((level_id, ParameterValue::Percent(level), level_origin)) =
+        value(FmOperatorField::Level)
+    else {
+        return;
+    };
+    let Some((feedback_id, ParameterValue::Percent(feedback), feedback_origin)) =
+        value(FmOperatorField::Feedback)
+    else {
+        return;
+    };
+    let algorithm = match displayed_parameter(a, track, a.step, ParameterId::FmAlgorithm) {
+        Some((ParameterValue::FmAlgorithm(value), _)) => value,
+        _ => FmAlgorithm::default(),
+    };
+    let origin = |origin| {
+        if origin == ValueOrigin::Lock {
+            "L"
+        } else {
+            "B"
+        }
+    };
+    let lfo = |id| {
+        if a.editor.project.tracks[track].lfos.get(id).is_some() {
+            "~"
+        } else {
+            ""
+        }
+    };
+    let lines = [
+        format!("R{ratio}{}", origin(ratio_origin)),
+        format!("L{}{}{}", level.get(), origin(level_origin), lfo(level_id)),
+        format!(
+            "F{}{}{}",
+            feedback.get(),
+            origin(feedback_origin),
+            lfo(feedback_id)
+        ),
+        algorithm.role(operator).to_string(),
+    ];
+    let available = area.height.saturating_sub(if compact { 1 } else { 2 });
+    let start = area.y + available.saturating_sub(lines.len() as u16) / 2;
+    for (row, line) in lines.iter().take(usize::from(available)).enumerate() {
+        render_centered(
+            f,
+            line,
+            Rect {
+                y: start + row as u16,
+                height: 1,
+                ..area
+            },
+            style,
+        );
+    }
+    render_centered(
+        f,
+        descriptor.label,
+        Rect {
+            y: area.y + area.height.saturating_sub(if compact { 1 } else { 2 }),
+            height: 1,
+            ..area
+        },
+        style,
+    );
+    if !compact {
+        render_centered(
+            f,
+            "[O]",
+            Rect {
+                y: area.y + area.height.saturating_sub(1),
+                height: 1,
+                ..area
+            },
+            style,
         );
     }
 }
@@ -2505,13 +2649,19 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         let track = a.row - 1;
         render_parameter_bank(f, chunks[3], a, track);
     }
-    let lock_editing =
-        a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_) | Mode::LfoEdit { .. });
+    let lock_editing = a.scope == Scope::Lock
+        && matches!(
+            a.mode,
+            Mode::ParameterEdit(_) | Mode::LfoEdit { .. } | Mode::FmOperatorEdit { .. }
+        );
     let mode_line = if lock_editing {
         let parameter = match a.mode {
             Mode::ParameterEdit(parameter) | Mode::LfoEdit { parameter, .. } => {
-                parameter.display_name()
+                parameter.display_name().to_owned()
             }
+            Mode::FmOperatorEdit {
+                operator, field, ..
+            } => format!("operator {} {field:?}", operator + 1).to_lowercase(),
             _ => unreachable!(),
         };
         Line::from(vec![
@@ -2616,6 +2766,9 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     match &a.mode {
         Mode::PatternDialog => render_pattern_popup(f, area, a),
         Mode::GeneratorDialog(dialog) => render_generator_popup(f, area, dialog, a),
+        Mode::FmOperatorEdit {
+            operator, field, ..
+        } => render_fm_operator_popup(f, area, a, *operator, *field),
         Mode::LfoEdit { parameter, field } => {
             let track = a.row - 1;
             if let Ok(Some(config)) = a.editor.lfo(track, *parameter) {

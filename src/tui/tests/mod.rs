@@ -73,11 +73,11 @@ fn parameter_shortcuts_follow_track_context() {
     assert_eq!(parameter_shortcut(TrackKind::Chord, 't'), None);
     assert_eq!(
         parameter_shortcut(TrackKind::Fm, 'q'),
-        Some(ParameterId::FmRatio)
+        Some(ParameterId::FmAlgorithm)
     );
     assert_eq!(
-        parameter_shortcut(TrackKind::Fm, 'm'),
-        Some(ParameterId::FmAmount)
+        parameter_shortcut(TrackKind::Fm, 'O'),
+        Some(ParameterId::FmOp1Level)
     );
     assert_eq!(
         parameter_shortcut(TrackKind::Fm, 'b'),
@@ -100,7 +100,7 @@ fn parameter_banks_are_contextual_and_model_compatible() {
         (TrackKind::Bass, 9),
         (TrackKind::Chord, 18),
         (TrackKind::Lead, 19),
-        (TrackKind::Fm, 14),
+        (TrackKind::Fm, 15),
     ];
     let common = [
         ParameterId::Level,
@@ -1128,7 +1128,7 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
     assert!(screen.contains("o audition selected step"));
     assert!(screen.contains("[`/-/1–9/0] percent"));
     assert!(screen.contains("Backspace/Delete remove lock/LFO"));
-    assert!(screen.contains("FM: w/q/m/f/c + i + ADSR"));
+    assert!(screen.contains("FM: q algorithm · O operators"));
     assert!(screen.contains("Esc close help"));
 
     let minimum_screen = rendered(&app, 120, 34);
@@ -1692,11 +1692,11 @@ fn rimshot_readouts_show_reference_modes_and_longest_decay() {
 fn fm_readouts_show_synthesis_units() {
     let mut app = App::new(Project::new(), None);
     assert!(
-        physical_parameter_readout(&app, FM_TRACK_INDEX, 0, ParameterId::FmAmount)
+        physical_parameter_readout(&app, FM_TRACK_INDEX, 0, ParameterId::FmOp2Level)
             .contains("index 1.47 rad")
     );
     assert!(
-        physical_parameter_readout(&app, FM_TRACK_INDEX, 0, ParameterId::FmFeedback)
+        physical_parameter_readout(&app, FM_TRACK_INDEX, 0, ParameterId::FmOp2Feedback)
             .contains("0.08π rad")
     );
     assert!(
@@ -1709,6 +1709,40 @@ fn fm_readouts_show_synthesis_units() {
     let screen = rendered(&app, 220, 34);
     assert!(screen.contains("Bright"));
     assert!(screen.contains("[c]"));
+}
+
+#[test]
+fn fm_parameter_strip_shows_four_operator_summaries() {
+    let mut app = App::new(Project::new(), None);
+    app.row = FM_TRACK_INDEX + 1;
+    app.mode = Mode::ParameterEdit(ParameterId::FmOp1Level);
+    let screen = rendered(&app, 120, 34);
+    for label in ["OP1", "OP2", "OP3", "OP4"] {
+        assert!(screen.contains(label));
+    }
+    assert!(screen.contains("R1B"));
+    assert!(screen.contains("L100B"));
+    assert!(screen.contains("F0B"));
+    assert!(screen.contains("OUT"));
+    assert!(screen.contains("[O]"));
+}
+
+#[test]
+fn fm_operator_popup_shows_route_grid_and_active_detail() {
+    let mut app = App::new(Project::new(), None);
+    app.row = FM_TRACK_INDEX + 1;
+    app.mode = Mode::FmOperatorEdit {
+        operator: 1,
+        field: crate::model::FmOperatorField::Feedback,
+        return_to_parameter: true,
+    };
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("FM Operators · A1 · Step 1 · BASE"));
+    assert!(screen.contains("4>3>2>1 · OUT 1"));
+    assert!(screen.contains("OP2 · >1"));
+    assert!(screen.contains("OP2 Feedback"));
+    assert!(screen.contains("Tab/BackTab"));
+    assert!(screen.contains("[Shift+L] LFO"));
 }
 
 #[test]

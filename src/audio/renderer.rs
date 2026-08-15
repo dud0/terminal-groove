@@ -7,7 +7,7 @@ use super::{
 use crate::dsp::{
     Delay, EnvStage, Lfo, MasterLimiter, Reverb, SidechainCompressor, Smoother, exp_map_f32,
 };
-use crate::model::{FmWaveform, MAX_STEP_COUNT, Waveform};
+use crate::model::{FmOperatorField, MAX_STEP_COUNT, Waveform};
 use rtrb::{Producer, RingBuffer};
 use std::f32::consts::TAU;
 use std::sync::{Arc, atomic::Ordering};
@@ -338,42 +338,57 @@ impl Renderer {
             offsets[ParameterId::Sustain as usize],
             offsets[ParameterId::Release as usize],
         );
-        let amount = modulated_percent(
-            v.fm_amount.next_value(),
-            offsets[ParameterId::FmAmount as usize],
-        ) / 100.0;
-        let feedback = modulated_percent(
-            v.fm_feedback.next_value(),
-            offsets[ParameterId::FmFeedback as usize],
-        ) / 100.0;
         let brightness = modulated_percent(
             v.fm_brightness.next_value(),
             offsets[ParameterId::Brightness as usize],
         );
-        let index = 12.0 * amount * amount * (1.0 + v.accent_filter.next_value());
-        let feedback_phase = feedback * 0.95 * std::f32::consts::PI;
+        let accent_index = 1.0 + v.accent_filter.next_value();
+        let mut ratios = [1.0; 4];
+        let mut levels = [0.0; 4];
+        let mut feedback = [0.0; 4];
+        let mut routes = [[0.0; 4]; 4];
+        let mut carriers = [0.0; 4];
+        for operator in 0..4 {
+            let level_id = ParameterId::fm_operator(operator, FmOperatorField::Level).unwrap();
+            let feedback_id =
+                ParameterId::fm_operator(operator, FmOperatorField::Feedback).unwrap();
+            ratios[operator] = v.fm_ratios[operator].next_value();
+            levels[operator] = modulated_percent(
+                v.fm_levels[operator].next_value(),
+                offsets[level_id as usize],
+            ) / 100.0;
+            feedback[operator] = modulated_percent(
+                v.fm_feedback[operator].next_value(),
+                offsets[feedback_id as usize],
+            ) / 100.0;
+            carriers[operator] = v.fm_carriers[operator].next_value();
+            for (target, route) in routes[operator].iter_mut().enumerate() {
+                *route = v.fm_routes[operator][target].next_value();
+            }
+        }
+        let carrier_normalization = v.fm_carrier_normalization.next_value();
         let oversampled_rate = sr * 4.0;
-        let mod_frequency = (frequency * v.fm_ratio.value()).clamp(1.0, oversampled_rate * 0.45);
         let mut sample = 0.0;
         for _ in 0..4 {
-            let modulator =
-                (TAU * v.fm_modulator_phase + v.fm_previous_modulator * feedback_phase).sin();
-            v.fm_previous_modulator = if modulator.is_finite() {
-                modulator
-            } else {
-                0.0
-            };
-            let phase = (v.fm_carrier_phase + modulator * index / TAU).rem_euclid(1.0);
-            sample += match v.fm_waveform {
-                FmWaveform::Sine => (TAU * phase).sin(),
-                FmWaveform::Triangle => 1.0 - 4.0 * (phase - 0.5).abs(),
-                FmWaveform::Saw => 2.0 * phase - 1.0,
-            };
-            v.fm_carrier_phase = (v.fm_carrier_phase + frequency / oversampled_rate).fract();
-            v.fm_modulator_phase =
-                (v.fm_modulator_phase + mod_frequency / oversampled_rate).fract();
+            let mut operator_samples = [0.0; 4];
+            for operator in (0..4).rev() {
+                let mut phase_modulation =
+                    v.fm_previous[operator] * feedback[operator] * 0.95 * std::f32::consts::PI;
+                for source in operator + 1..4 {
+                    let index = 12.0 * levels[source] * levels[source] * accent_index;
+                    phase_modulation += operator_samples[source] * index * routes[source][operator];
+                }
+                let value = (TAU * v.fm_phases[operator] + phase_modulation).sin();
+                operator_samples[operator] = if value.is_finite() { value } else { 0.0 };
+                v.fm_previous[operator] = operator_samples[operator];
+                sample += operator_samples[operator] * levels[operator] * carriers[operator];
+                let operator_frequency =
+                    (frequency * ratios[operator]).clamp(1.0, oversampled_rate * 0.45);
+                v.fm_phases[operator] =
+                    (v.fm_phases[operator] + operator_frequency / oversampled_rate).fract();
+            }
         }
-        sample *= 0.25;
+        sample *= 0.25 * carrier_normalization;
         if v.filter_control_remaining == 0 {
             let cutoff = exp_map_f32(brightness, 200.0, 20_000.0_f32.min(sr * 0.45));
             v.fm_filter.set_lowpass(cutoff, 0.707, sr);

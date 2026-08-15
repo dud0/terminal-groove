@@ -1,5 +1,5 @@
 use super::{
-    render::{fader_segments, render_centered},
+    render::{ValueOrigin, displayed_parameter, fader_segments, render_centered},
     state::{
         App, ChordField, GeneratorDialog, LfoField, PatternPage, PresetAction, SidechainField,
         TriggerField,
@@ -8,8 +8,9 @@ use super::{
 use crate::{
     generator::Target as GeneratorTarget,
     model::{
-        ArpeggioRate, ArpeggioType, ChordShape, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
-        ParameterId, StepEvent, TriggerCondition,
+        ArpeggioRate, ArpeggioType, ChordShape, FmAlgorithm, FmOperatorField, FmRatio, LfoConfig,
+        LfoDivision, LfoRate, LfoWaveform, ParameterId, ParameterValue, StepEvent,
+        TriggerCondition,
     },
 };
 use ratatui::{
@@ -20,6 +21,211 @@ use ratatui::{
 };
 use std::path::PathBuf;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+pub(super) fn render_fm_operator_popup(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    a: &App,
+    selected_operator: usize,
+    selected_field: FmOperatorField,
+) {
+    let popup_area = compact_popup_rect(area, 116, 28);
+    f.render_widget(Clear, popup_area);
+    let track = a.row.saturating_sub(1);
+    let algorithm = match displayed_parameter(a, track, a.step, ParameterId::FmAlgorithm) {
+        Some((ParameterValue::FmAlgorithm(value), _)) => value,
+        _ => FmAlgorithm::default(),
+    };
+    let panel = Block::bordered().title(format!(
+        "FM Operators · {} · Step {} · {}",
+        algorithm,
+        a.step + 1,
+        if a.scope == crate::reducer::Scope::Lock {
+            "LOCK"
+        } else {
+            "BASE"
+        },
+    ));
+    let inner = panel.inner(popup_area);
+    f.render_widget(panel, popup_area);
+    if inner.height < 8 {
+        return;
+    }
+    render_centered(
+        f,
+        algorithm.diagram(),
+        Rect { height: 1, ..inner },
+        Style::default()
+            .fg(Color::LightCyan)
+            .add_modifier(Modifier::BOLD),
+    );
+    let overview = Rect {
+        y: inner.y + 2,
+        height: 7.min(inner.height.saturating_sub(5)),
+        ..inner
+    };
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1, 4); 4])
+        .split(overview);
+    for operator in 0..4 {
+        render_fm_operator_column(
+            f,
+            columns[operator],
+            a,
+            track,
+            algorithm,
+            operator,
+            selected_operator,
+            selected_field,
+        );
+    }
+    let footer_height = 2.min(inner.height);
+    let detail_y = overview.y + overview.height + 1;
+    let detail = Rect {
+        x: inner.x + inner.width / 3,
+        y: detail_y,
+        width: inner.width / 3,
+        height: inner
+            .y
+            .saturating_add(inner.height)
+            .saturating_sub(detail_y)
+            .saturating_sub(footer_height),
+    };
+    render_fm_operator_detail(f, detail, a, track, selected_operator, selected_field);
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from("[←/→] operator  [Tab/BackTab] field  [↑/↓] adjust  [Shift+↑/↓] ±10%  [[/]] algorithm"),
+            Line::from("[Shift+L] LFO  [Backspace/Del] remove lock  [o] audition  [Enter/Esc] close"),
+        ])
+        .alignment(Alignment::Center),
+        Rect {
+            y: inner.y + inner.height.saturating_sub(footer_height),
+            height: footer_height,
+            ..inner
+        },
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_fm_operator_column(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    a: &App,
+    track: usize,
+    algorithm: FmAlgorithm,
+    operator: usize,
+    selected_operator: usize,
+    selected_field: FmOperatorField,
+) {
+    let active = operator == selected_operator;
+    let accent = if active {
+        Color::Yellow
+    } else {
+        Color::LightCyan
+    };
+    let block = Block::bordered()
+        .border_type(if active {
+            BorderType::Double
+        } else {
+            BorderType::Plain
+        })
+        .border_style(Style::default().fg(accent))
+        .title(format!("OP{} · {}", operator + 1, algorithm.role(operator)));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    for (row, field) in FmOperatorField::ALL.into_iter().enumerate() {
+        let parameter = ParameterId::fm_operator(operator, field).unwrap();
+        let Some((value, origin)) = displayed_parameter(a, track, a.step, parameter) else {
+            continue;
+        };
+        let value = match value {
+            ParameterValue::FmRatio(value) => format!("{value}:1"),
+            ParameterValue::Percent(value) => format!("{}%", value.get()),
+            _ => continue,
+        };
+        let lfo = a.editor.project.tracks[track].lfos.get(parameter).is_some();
+        let text = format!(
+            "{} {:>5} {}{}",
+            match field {
+                FmOperatorField::Ratio => "RATIO",
+                FmOperatorField::Level => "LEVEL",
+                FmOperatorField::Feedback => "FDBK ",
+            },
+            value,
+            if origin == ValueOrigin::Lock {
+                "L"
+            } else {
+                "B"
+            },
+            if lfo { "~" } else { "" },
+        );
+        let selected = active && field == selected_field;
+        render_centered(
+            f,
+            &text,
+            Rect {
+                y: inner.y + row as u16 * 2,
+                height: 1,
+                ..inner
+            },
+            Style::default()
+                .fg(if origin == ValueOrigin::Lock {
+                    Color::LightMagenta
+                } else {
+                    accent
+                })
+                .add_modifier(if selected {
+                    Modifier::REVERSED | Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        );
+    }
+}
+
+fn render_fm_operator_detail(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    a: &App,
+    track: usize,
+    operator: usize,
+    field: FmOperatorField,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let parameter = ParameterId::fm_operator(operator, field).unwrap();
+    let Some((value, _)) = displayed_parameter(a, track, a.step, parameter) else {
+        return;
+    };
+    let label = match field {
+        FmOperatorField::Ratio => "Ratio",
+        FmOperatorField::Level => "Level",
+        FmOperatorField::Feedback => "Feedback",
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(format!("OP{} {label}", operator + 1));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let style = Style::default()
+        .fg(Color::LightCyan)
+        .add_modifier(Modifier::BOLD);
+    match value {
+        ParameterValue::FmRatio(value) => {
+            let choices = FmRatio::ALL.map(|ratio| format!("{ratio}:1"));
+            let selected = FmRatio::ALL
+                .iter()
+                .position(|ratio| *ratio == value)
+                .unwrap_or(0);
+            render_lfo_selector(f, inner, &choices, selected, style);
+        }
+        ParameterValue::Percent(value) => render_lfo_fader(f, inner, value.get(), style),
+        _ => {}
+    }
+}
 
 pub(super) fn render_trigger_popup(
     f: &mut ratatui::Frame,

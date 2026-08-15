@@ -4,7 +4,7 @@ mod tests {
     use super::*;
     use crate::model::{
         ArpeggioRate, ArpeggioType, ChordShape, ChordSpread, DistortionParameters,
-        FlangerParameters, LEAD_TRACK_INDEX, FM_TRACK_INDEX, FmWaveform, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
+        FlangerParameters, LEAD_TRACK_INDEX, FM_TRACK_INDEX, FmAlgorithm, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
         ParameterValue, PhaserParameters, RIMSHOT_TRACK_INDEX, TrackEffects,
         Microtiming,
     };
@@ -1218,17 +1218,16 @@ mod tests {
         }
         assert!(renderer.synth[0].bass_vca.value() > 0.0);
         assert!(renderer.preview[0].bass_vca.value() > 0.0);
-        assert_ne!(renderer.synth[fm].fm_carrier_phase, 0.0);
-        assert_ne!(renderer.preview[fm].fm_carrier_phase, 0.0);
+        assert!(renderer.synth[fm].fm_phases.iter().any(|phase| *phase != 0.0));
+        assert!(renderer.preview[fm].fm_phases.iter().any(|phase| *phase != 0.0));
 
         renderer.command(AudioCommand::Stop);
 
         assert!(!renderer.synth[0].is_idle());
         assert!(!renderer.preview[0].is_idle());
         for voice in [&mut renderer.synth[fm], &mut renderer.preview[fm]] {
-            assert_eq!(voice.fm_carrier_phase, 0.0);
-            assert_eq!(voice.fm_modulator_phase, 0.0);
-            assert_eq!(voice.fm_previous_modulator, 0.0);
+            assert_eq!(voice.fm_phases, [0.0; 4]);
+            assert_eq!(voice.fm_previous, [0.0; 4]);
             assert_eq!(voice.fm_filter.process(0.0), 0.0);
         }
         for _ in 0..1_000 {
@@ -3199,10 +3198,10 @@ mod tests {
         let Instrument::Fm(parameters) = &mut track.instrument else {
             unreachable!()
         };
-        parameters.waveform = FmWaveform::Triangle;
-        parameters.ratio = crate::model::FmRatio::Four;
-        parameters.amount = Percent::new(81).unwrap();
-        parameters.feedback = Percent::new(67).unwrap();
+        parameters.algorithm = FmAlgorithm::Pairs;
+        parameters.operators[1].ratio = crate::model::FmRatio::Four;
+        parameters.operators[1].level = Percent::new(81).unwrap();
+        parameters.operators[1].feedback = Percent::new(67).unwrap();
         parameters.brightness = Percent::new(23).unwrap();
         parameters.attack = Percent::new(12).unwrap();
         parameters.decay = Percent::new(34).unwrap();
@@ -3211,10 +3210,10 @@ mod tests {
     }
 
     fn assert_edited_fm_parameters(voice: &SynthVoice) {
-        assert_eq!(voice.fm_waveform, FmWaveform::Triangle);
-        assert_eq!(voice.fm_ratio, crate::model::FmRatio::Four);
-        assert_eq!(voice.fm_amount.value(), 81.0);
-        assert_eq!(voice.fm_feedback.value(), 67.0);
+        assert_eq!(voice.fm_algorithm, FmAlgorithm::Pairs);
+        assert_eq!(voice.fm_ratios[1].value(), 4.0);
+        assert_eq!(voice.fm_levels[1].value(), 81.0);
+        assert_eq!(voice.fm_feedback[1].value(), 67.0);
         assert_eq!(voice.fm_brightness.value(), 23.0);
         assert_eq!(voice.env.parameter_values(), (12.0, 34.0, 56.0, 78.0));
         assert_eq!(voice.level.value(), 31.0);
@@ -3239,8 +3238,8 @@ mod tests {
             &project,
             ParameterSmoothing::Fader,
         ));
-        assert_eq!(renderer.synth[index].fm_waveform, FmWaveform::Triangle);
-        assert_eq!(renderer.preview[index].fm_ratio, crate::model::FmRatio::Four);
+        assert_eq!(renderer.synth[index].fm_algorithm, FmAlgorithm::Pairs);
+        assert_eq!(renderer.preview[index].fm_algorithm, FmAlgorithm::Pairs);
         for _ in 0..ParameterSmoothing::Fader.samples(renderer.sr) {
             Renderer::render_synth(
                 &mut renderer.synth[index],
@@ -3262,11 +3261,11 @@ mod tests {
 
         let mut locks = ParameterLocks::default();
         assert!(locks.set(
-            ParameterId::FmWaveform,
-            ParameterValue::FmWaveform(FmWaveform::Saw),
+            ParameterId::FmAlgorithm,
+            ParameterValue::FmAlgorithm(FmAlgorithm::Additive),
         ));
         assert!(locks.set(
-            ParameterId::FmAmount,
+            ParameterId::FmOp2Level,
             ParameterValue::Percent(Percent::new(17).unwrap()),
         ));
         for voice in [&mut renderer.synth[index], &mut renderer.preview[index]] {
@@ -3290,17 +3289,17 @@ mod tests {
         let Instrument::Fm(parameters) = &mut lock_edit.tracks[FM_TRACK_INDEX].instrument else {
             unreachable!()
         };
-        parameters.waveform = FmWaveform::Sine;
-        parameters.amount = Percent::new(99).unwrap();
+        parameters.algorithm = FmAlgorithm::Cascade;
+        parameters.operators[1].level = Percent::new(99).unwrap();
         renderer.command(Audio::snapshot(&lock_edit));
-        assert_eq!(renderer.synth[index].fm_waveform, FmWaveform::Saw);
-        assert_eq!(renderer.preview[index].fm_waveform, FmWaveform::Saw);
+        assert_eq!(renderer.synth[index].fm_algorithm, FmAlgorithm::Additive);
+        assert_eq!(renderer.preview[index].fm_algorithm, FmAlgorithm::Additive);
         for _ in 0..ParameterSmoothing::Default.samples(renderer.sr) {
-            renderer.synth[index].fm_amount.next_value();
-            renderer.preview[index].fm_amount.next_value();
+            renderer.synth[index].fm_levels[1].next_value();
+            renderer.preview[index].fm_levels[1].next_value();
         }
-        assert_eq!(renderer.synth[index].fm_amount.value(), 17.0);
-        assert_eq!(renderer.preview[index].fm_amount.value(), 17.0);
+        assert_eq!(renderer.synth[index].fm_levels[1].value(), 17.0);
+        assert_eq!(renderer.preview[index].fm_levels[1].value(), 17.0);
     }
 
     #[test]
@@ -3356,13 +3355,15 @@ mod tests {
     }
 
     #[test]
-    fn fm_voice_is_deterministic_finite_and_waveforms_are_distinct() {
-        fn render(waveform: FmWaveform) -> Vec<f32> {
+    fn fm_voice_is_deterministic_finite_and_algorithms_are_distinct() {
+        fn render(algorithm: FmAlgorithm) -> Vec<f32> {
             let mut project = Project::new();
             let Instrument::Fm(parameters) = &mut project.tracks[FM_TRACK_INDEX].instrument else { unreachable!() };
-            parameters.waveform = waveform;
-            parameters.amount = Percent::new(100).unwrap();
-            parameters.feedback = Percent::new(100).unwrap();
+            parameters.algorithm = algorithm;
+            for operator in &mut parameters.operators {
+                operator.level = Percent::new(100).unwrap();
+                operator.feedback = Percent::new(100).unwrap();
+            }
             parameters.brightness = Percent::new(100).unwrap();
             let audio = AudioProject::from_project(&project);
             let mut voice = SynthVoice::new(44_100.0);
@@ -3374,11 +3375,15 @@ mod tests {
             let offsets = [0.0; ParameterId::ALL.len()];
             (0..2048).map(|_| Renderer::render_synth(&mut voice, 44_100.0, &offsets).0).collect()
         }
-        let sine = render(FmWaveform::Sine);
-        let sine_again = render(FmWaveform::Sine);
-        let saw = render(FmWaveform::Saw);
-        assert_eq!(sine, sine_again);
-        assert!(sine.iter().chain(&saw).all(|sample| sample.is_finite() && sample.abs() <= 2.0));
-        assert!(sine.iter().zip(&saw).any(|(left, right)| (left - right).abs() > 1.0e-4));
+        let rendered = FmAlgorithm::ALL.map(render);
+        assert_eq!(rendered[0], render(FmAlgorithm::Cascade));
+        assert!(rendered
+            .iter()
+            .flatten()
+            .all(|sample| sample.is_finite() && sample.abs() <= 2.0));
+        assert!(rendered[0]
+            .iter()
+            .zip(&rendered[7])
+            .any(|(left, right)| (left - right).abs() > 1.0e-4));
     }
 }
