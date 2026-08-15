@@ -351,7 +351,7 @@ The application uses ordinary portable terminal press events. It must not requir
 - `Backspace` or `Delete` clears the selected event and its locks.
 - `Shift+Delete` immediately clears every event and lock from the selected track in the active pattern. It preserves the track length and all non-sequence settings, and is one undoable edit.
 - `l` opens numeric track-length input. Digits plus Enter set an exact length; up/down changes it by 1 and Shift+up/down by 16, clamped to 1–64. Arrow changes apply immediately and remain applied on Esc.
-- `Tab` or `Shift+Tab` enters Parameter mode for the selected track at its remembered control in the active `PARAMS` or `EFFECTS` bank, falling back to that bank's first compatible control. On the global row it leaves the mode unchanged and reports that a track is required.
+- `Tab` or `Shift+Tab` enters Parameter mode for the selected track at its remembered control in the active `PARAMS` or `EFFECTS` bank, including its Hi-hat or Tom recipe card where applicable, falling back to that bank's first compatible control. On the global row it leaves the mode unchanged and reports that a track is required.
 - `Esc` exits overlays or Parameter mode first; from Sequencer mode it returns lock scope to `BASE`.
 
 ### 5.2 Key map
@@ -442,7 +442,7 @@ Track parameter shortcuts are resolved only in Parameter mode, while step, event
 
 - Press `Tab` or `Shift+Tab` from Sequencer mode to enter a visibly labelled Parameter editor; the same keys return to Sequencer mode. `Enter` and `Esc` also return without reverting changes already made.
 - Pressing another valid parameter shortcut switches the editor to that parameter without leaving the current BASE/LOCK scope.
-- Left/right cycles through the selected track's visible parameter controls and wraps at either end. Shift+left selects `PARAMS` and Shift+right selects `EFFECTS`; either selection restores that track and bank's remembered control, or activates the bank's first compatible control when none has been remembered. Tab re-enters Parameter mode at the selected track and bank's remembered control.
+- Left/right cycles through the selected track's visible parameter controls and wraps at either end. Shift+left selects `PARAMS` and Shift+right selects `EFFECTS`; either selection restores that track and bank's remembered control (including its recipe card), or activates the bank's first compatible control when none has been remembered. Tab re-enters Parameter mode at the selected track and bank's remembered control.
 - PageUp/PageDown moves to the previous/next step of the current track, wrapping at its length, while keeping the active parameter and BASE/LOCK scope. Shift+PageUp/PageDown moves between 16-step banks. Shift+1 through Shift+9 jumps to the corresponding track; an incompatible parameter switches to that track's first compatible parameter.
 - A number-row percentage assignment applies immediately, keeps the parameter editor open, and ramps the affected continuous control to its new value over approximately 30 ms like a quick fader movement.
 - Up/down assignments apply immediately and keep the editor open for repeated changes. On Bass waveform, either direction switches between Saw and Square; on Chord chorus, Up/Down moves through Off, I, and II without wrapping.

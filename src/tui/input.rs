@@ -12,7 +12,8 @@ use super::{
         selected_chord_shape, selected_drum_recipe, visible_parameter_descriptors,
     },
     state::{
-        App, ChordField, GeneratorDialog, LfoField, Mode, ParameterBank, PatternPage, TriggerField,
+        App, ChordField, GeneratorDialog, LfoField, Mode, ParameterBank, ParameterFocus,
+        PatternPage, TriggerField,
     },
 };
 use crate::{
@@ -543,8 +544,7 @@ pub(super) fn select_track(a: &mut App, track: usize) {
     }
 
     if matches!(a.mode, Mode::ParameterEdit(_)) {
-        let replacement = remembered_parameter(a, track, a.parameter_bank);
-        enter_parameter_edit(a, replacement);
+        restore_parameter_edit(a, remembered_parameter(a, track, a.parameter_bank));
     }
 
     if a.scope == Scope::Lock
@@ -2054,16 +2054,19 @@ pub(super) fn active_parameter_shortcut(a: &App, c: char) -> Option<ParameterId>
         .map(|descriptor| descriptor.id)
 }
 
-fn remembered_parameter(a: &App, track: usize, bank: ParameterBank) -> ParameterId {
+fn remembered_parameter(a: &App, track: usize, bank: ParameterBank) -> ParameterFocus {
     let kind = a.editor.project.tracks[track].kind;
     let descriptors = visible_parameter_descriptors(bank, kind);
     a.remembered_parameters[track][bank.index()]
-        .filter(|parameter| {
-            descriptors
-                .iter()
-                .any(|descriptor| descriptor.id == *parameter)
+        .filter(|focus| {
+            descriptors.iter().enumerate().any(|(index, descriptor)| {
+                descriptor.id == focus.parameter && parameter_recipe(kind, index) == focus.recipe
+            })
         })
-        .unwrap_or_else(|| descriptors[0].id)
+        .unwrap_or(ParameterFocus {
+            parameter: descriptors[0].id,
+            recipe: parameter_recipe(kind, 0),
+        })
 }
 
 pub(super) fn enter_parameter_mode(a: &mut App) {
@@ -2071,8 +2074,7 @@ pub(super) fn enter_parameter_mode(a: &mut App) {
         a.status = "Select a track to edit parameters".into();
         return;
     }
-    let parameter = remembered_parameter(a, a.row - 1, a.parameter_bank);
-    enter_parameter_edit(a, parameter);
+    restore_parameter_edit(a, remembered_parameter(a, a.row - 1, a.parameter_bank));
 }
 
 pub(super) fn enter_lock_parameter_mode(a: &mut App) {
@@ -2081,8 +2083,7 @@ pub(super) fn enter_lock_parameter_mode(a: &mut App) {
         return;
     }
     a.scope = Scope::Lock;
-    let parameter = remembered_parameter(a, a.row - 1, a.parameter_bank);
-    enter_parameter_edit(a, parameter);
+    restore_parameter_edit(a, remembered_parameter(a, a.row - 1, a.parameter_bank));
 }
 
 pub(super) fn finish_parameter_edit(a: &mut App) {
@@ -2096,8 +2097,7 @@ pub(super) fn select_parameter_bank(a: &mut App, bank: ParameterBank) {
     a.parameter_bank = bank;
     a.parameter_recipe = DrumRecipeSlot::ONE;
     if let Mode::ParameterEdit(_) = a.mode {
-        let parameter = remembered_parameter(a, a.row - 1, a.parameter_bank);
-        enter_parameter_edit(a, parameter);
+        restore_parameter_edit(a, remembered_parameter(a, a.row - 1, a.parameter_bank));
         refresh_lock_recipe(a);
     }
     a.status = match a.parameter_bank {
@@ -2109,22 +2109,53 @@ pub(super) fn select_parameter_bank(a: &mut App, bank: ParameterBank) {
 pub(super) fn enter_parameter_edit(a: &mut App, parameter: ParameterId) {
     let track = a.row.saturating_sub(1);
     let kind = a.editor.project.tracks[track].kind;
+    let recipe = if is_recipe_parameter(kind, parameter) {
+        if a.scope == Scope::Lock {
+            selected_drum_recipe(a, track)
+        } else if matches!(a.mode, Mode::ParameterEdit(_)) {
+            a.parameter_recipe
+        } else {
+            DrumRecipeSlot::ONE
+        }
+    } else {
+        DrumRecipeSlot::ONE
+    };
+    enter_parameter_focus(a, ParameterFocus { parameter, recipe });
+}
+
+fn restore_parameter_edit(a: &mut App, focus: ParameterFocus) {
+    let track = a.row - 1;
+    let kind = a.editor.project.tracks[track].kind;
+    let recipe = if a.scope == Scope::Lock && is_recipe_parameter(kind, focus.parameter) {
+        selected_drum_recipe(a, track)
+    } else {
+        focus.recipe
+    };
+    enter_parameter_focus(
+        a,
+        ParameterFocus {
+            parameter: focus.parameter,
+            recipe,
+        },
+    );
+}
+
+fn enter_parameter_focus(a: &mut App, focus: ParameterFocus) {
+    let track = a.row.saturating_sub(1);
+    let kind = a.editor.project.tracks[track].kind;
     if a.row > 0
         && visible_parameter_descriptors(a.parameter_bank, kind)
             .iter()
-            .any(|descriptor| descriptor.id == parameter)
+            .enumerate()
+            .any(|(index, descriptor)| {
+                descriptor.id == focus.parameter && parameter_recipe(kind, index) == focus.recipe
+            })
     {
-        a.remembered_parameters[track][a.parameter_bank.index()] = Some(parameter);
+        a.remembered_parameters[track][a.parameter_bank.index()] = Some(focus);
     }
-    if is_recipe_parameter(kind, parameter) && !matches!(a.mode, Mode::ParameterEdit(_)) {
-        a.parameter_recipe = if a.scope == Scope::Lock {
-            selected_drum_recipe(a, track)
-        } else {
-            DrumRecipeSlot::ONE
-        };
-    }
-    a.mode = Mode::ParameterEdit(parameter);
-    a.status = format!("Editing {}", parameter.display_name());
+    a.parameter_recipe = focus.recipe;
+    a.mode = Mode::ParameterEdit(focus.parameter);
+    a.status = format!("Editing {}", focus.parameter.display_name());
 }
 
 pub(super) fn switch_parameter_editor(a: &mut App, parameter: ParameterId) {

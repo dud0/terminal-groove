@@ -159,6 +159,25 @@ fn parameter_mode_remembers_the_last_control_per_track_and_bank() {
 }
 
 #[test]
+fn parameter_mode_remembers_the_open_hihat_recipe_card() {
+    let mut app = App::new(Project::new(), None);
+    app.row = 3;
+
+    enter_parameter_mode(&mut app);
+    for _ in 0..6 {
+        move_parameter_editor(&mut app, true);
+    }
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Tune));
+    assert_eq!(app.parameter_recipe, crate::model::DrumRecipeSlot::TWO);
+
+    finish_parameter_edit(&mut app);
+    enter_parameter_mode(&mut app);
+
+    assert_eq!(app.mode, Mode::ParameterEdit(ParameterId::Tune));
+    assert_eq!(app.parameter_recipe, crate::model::DrumRecipeSlot::TWO);
+}
+
+#[test]
 fn sequencer_lock_shortcut_enters_lock_scope_at_remembered_parameter() {
     let mut app = App::new(Project::new(), None);
     app.row = 1;

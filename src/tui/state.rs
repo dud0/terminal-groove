@@ -52,6 +52,12 @@ pub(crate) enum Mode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ParameterFocus {
+    pub(super) parameter: ParameterId,
+    pub(super) recipe: DrumRecipeSlot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PatternPage {
     Patterns,
     Song,
@@ -185,7 +191,7 @@ pub struct App {
     pub(super) scope: Scope,
     pub(super) parameter_bank: ParameterBank,
     pub(super) parameter_recipe: DrumRecipeSlot,
-    pub(super) remembered_parameters: [[Option<ParameterId>; 2]; TRACK_COUNT],
+    pub(super) remembered_parameters: [[Option<ParameterFocus>; 2]; TRACK_COUNT],
     pub(super) mode: Mode,
     pub(super) chord_field: ChordField,
     pub(super) status: String,
