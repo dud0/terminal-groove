@@ -39,8 +39,22 @@ pub(crate) enum Mode {
         entries: Vec<PathBuf>,
         selected: usize,
     },
+    PresetBrowser {
+        track: usize,
+        entries: Vec<PathBuf>,
+        selected: usize,
+    },
     FileInput(FileAction, String),
+    PresetNameInput {
+        track: usize,
+        input: String,
+    },
     OverwriteConfirm {
+        path: PathBuf,
+        input: String,
+    },
+    PresetOverwriteConfirm {
+        track: usize,
         path: PathBuf,
         input: String,
     },

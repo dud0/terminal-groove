@@ -1150,16 +1150,50 @@ pub(super) fn render_project_browser(
     entries: &[PathBuf],
     selected: usize,
 ) {
+    render_file_browser(
+        f,
+        area,
+        entries,
+        selected,
+        "Open project",
+        "No projects in .projects",
+    );
+}
+
+pub(super) fn render_preset_browser(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    entries: &[PathBuf],
+    selected: usize,
+) {
+    render_file_browser(
+        f,
+        area,
+        entries,
+        selected,
+        "Load track preset",
+        "No presets for this track kind",
+    );
+}
+
+fn render_file_browser(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    entries: &[PathBuf],
+    selected: usize,
+    title: &str,
+    empty_message: &str,
+) {
     let popup_area = project_browser_popup_rect(area, entries.len());
     f.render_widget(Clear, popup_area);
     let block = Block::bordered()
-        .title("Open project")
+        .title(title)
         .title_bottom("[↑/↓] select  [Home/End] jump  [Enter] open  [Esc] cancel");
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
 
     if entries.is_empty() {
-        f.render_widget(Paragraph::new("No projects in .projects"), inner);
+        f.render_widget(Paragraph::new(empty_message), inner);
         return;
     }
 

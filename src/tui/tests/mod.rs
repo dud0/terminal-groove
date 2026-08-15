@@ -2027,6 +2027,49 @@ fn save_as_uses_the_gitignored_default_project_path() {
 }
 
 #[test]
+fn preset_paths_are_kind_scoped_and_normalize_extensions() {
+    let path = preset_path_for_name(TrackKind::Lead, "bright.preset.json").unwrap();
+    assert!(path.ends_with(".presets/lead/bright.preset.json"));
+    assert!(preset_path_for_name(TrackKind::Kick, "bad/name").is_err());
+    assert!(preset_path_for_name(TrackKind::Kick, "").is_err());
+}
+
+#[test]
+fn preset_browser_and_save_dialog_render_their_local_controls() {
+    let mut app = App::new(Project::new(), None);
+    app.mode = Mode::PresetBrowser {
+        track: 0,
+        entries: vec![PathBuf::from(".presets/kick/punch.preset.json")],
+        selected: 0,
+    };
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("Load track preset"));
+    assert!(screen.contains("punch.preset.json"));
+
+    app.mode = Mode::PresetNameInput {
+        track: 0,
+        input: "punch".into(),
+    };
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("Save track preset"));
+    assert!(screen.contains("Track: Kick"));
+    assert!(screen.contains("Enter confirms"));
+}
+
+#[test]
+fn preset_overwrite_confirmation_identifies_the_preset() {
+    let mut app = App::new(Project::new(), None);
+    app.mode = Mode::PresetOverwriteConfirm {
+        track: 0,
+        path: PathBuf::from(".presets/kick/punch.preset.json"),
+        input: "punch".into(),
+    };
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("Overwrite existing preset?"));
+    assert!(screen.contains("Overwrite [Enter/O]"));
+}
+
+#[test]
 fn save_as_overwrite_check_applies_to_every_existing_destination() {
     let directory = tempfile::tempdir().unwrap();
     let existing = directory.path().join("existing.groove.json");
@@ -2086,6 +2129,28 @@ fn project_browser_lists_sorted_regular_non_temporary_files() {
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
         vec!["alpha.groove.json", "zeta"]
+    );
+}
+
+#[test]
+fn preset_browser_lists_only_sorted_preset_files() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("zeta.preset.json"), b"preset").unwrap();
+    std::fs::write(directory.path().join("alpha.preset.json"), b"preset").unwrap();
+    std::fs::write(directory.path().join("not-a-preset.json"), b"other").unwrap();
+    std::fs::write(
+        directory.path().join(".saving.preset.json.1234.tmp"),
+        b"temporary",
+    )
+    .unwrap();
+
+    let entries = list_presets(directory.path()).unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        vec!["alpha.preset.json", "zeta.preset.json"]
     );
 }
 

@@ -2,6 +2,7 @@
 *.groove.json.tmp
 terminal-groove-audio.log
 .projects/
+.presets/
 .recordings/
 .antigravitycli/
 .gemini/

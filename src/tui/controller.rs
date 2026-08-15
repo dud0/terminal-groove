@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
-    model::{DelayDivision, GlobalParameterId, Percent, Project, TRACK_COUNT},
+    model::{DelayDivision, GlobalParameterId, Percent, Project, TRACK_COUNT, TrackKind},
     persistence,
     reducer::Scope,
 };
@@ -18,6 +18,8 @@ use std::{
 
 pub(super) const PROJECT_DIRECTORY_NAME: &str = ".projects";
 pub(super) const PROJECT_EXTENSION: &str = ".groove.json";
+pub(super) const PRESET_DIRECTORY_NAME: &str = ".presets";
+pub(super) const PRESET_EXTENSION: &str = ".preset.json";
 
 fn is_atomic_save_temporary(name: &str) -> bool {
     let Some(name) = name.strip_prefix('.') else {
@@ -36,6 +38,26 @@ fn is_atomic_save_temporary(name: &str) -> bool {
 
 pub(super) fn project_directory() -> Result<PathBuf> {
     Ok(std::env::current_dir()?.join(PROJECT_DIRECTORY_NAME))
+}
+
+pub(super) fn preset_directory(kind: TrackKind) -> Result<PathBuf> {
+    Ok(std::env::current_dir()?
+        .join(PRESET_DIRECTORY_NAME)
+        .join(preset_kind_name(kind)))
+}
+
+fn preset_kind_name(kind: TrackKind) -> &'static str {
+    match kind {
+        TrackKind::Kick => "kick",
+        TrackKind::Snare => "snare",
+        TrackKind::Hat => "hat",
+        TrackKind::Tom => "tom",
+        TrackKind::Cymbal => "cymbal",
+        TrackKind::Rimshot => "rimshot",
+        TrackKind::Bass => "bass",
+        TrackKind::Chord => "chord",
+        TrackKind::Lead => "lead",
+    }
 }
 
 pub(super) fn save_as_mode() -> Mode {
@@ -80,6 +102,27 @@ pub(super) fn project_browser_mode() -> Result<Mode> {
     })
 }
 
+pub(super) fn list_presets(directory: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut entries = list_projects(directory)?;
+    entries.retain(|path| {
+        path.extension()
+            .is_some_and(|extension| extension == "json")
+            && path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(PRESET_EXTENSION))
+    });
+    Ok(entries)
+}
+
+pub(super) fn preset_browser_mode(track: usize, kind: TrackKind) -> Result<Mode> {
+    let entries = list_presets(&preset_directory(kind)?)?;
+    Ok(Mode::PresetBrowser {
+        track,
+        entries,
+        selected: 0,
+    })
+}
+
 pub(super) fn project_path_for_name(directory: &Path, name: &str) -> Result<PathBuf> {
     if name.trim().is_empty() {
         anyhow::bail!("Project name cannot be empty")
@@ -99,6 +142,23 @@ pub(super) fn project_path_for_name(directory: &Path, name: &str) -> Result<Path
 
 pub(super) fn save_path_for_name(name: &str) -> Result<PathBuf> {
     project_path_for_name(&project_directory()?, name)
+}
+
+pub(super) fn preset_path_for_name(track: TrackKind, name: &str) -> Result<PathBuf> {
+    if name.trim().is_empty() {
+        anyhow::bail!("Preset name cannot be empty")
+    }
+    if name == "." || name == ".." || name.contains(['/', '\\']) {
+        anyhow::bail!("Preset name must be a single file name")
+    }
+    let mut base_name = name;
+    while let Some(stripped) = base_name.strip_suffix(PRESET_EXTENSION) {
+        base_name = stripped;
+    }
+    if base_name.is_empty() {
+        anyhow::bail!("Preset name cannot be empty")
+    }
+    Ok(preset_directory(track)?.join(format!("{base_name}{PRESET_EXTENSION}")))
 }
 
 pub(super) fn save_as_needs_overwrite_confirmation(destination: &Path) -> io::Result<bool> {
@@ -302,6 +362,164 @@ pub(super) fn handle_project_browser(a: &mut App, audio: &mut Audio, k: KeyEvent
             }
         }
         _ => a.mode = Mode::ProjectBrowser { entries, selected },
+    }
+}
+
+pub(super) fn handle_preset_browser(a: &mut App, audio: &mut Audio, k: KeyEvent) {
+    let Mode::PresetBrowser {
+        track,
+        entries,
+        selected,
+    } = a.mode.clone()
+    else {
+        return;
+    };
+    match k.code {
+        KeyCode::Esc => a.mode = Mode::Navigation,
+        KeyCode::Up => {
+            a.mode = Mode::PresetBrowser {
+                track,
+                entries,
+                selected: selected.saturating_sub(1),
+            }
+        }
+        KeyCode::Down => {
+            a.mode = Mode::PresetBrowser {
+                track,
+                selected: selected
+                    .saturating_add(1)
+                    .min(entries.len().saturating_sub(1)),
+                entries,
+            }
+        }
+        KeyCode::Home => {
+            a.mode = Mode::PresetBrowser {
+                track,
+                entries,
+                selected: 0,
+            }
+        }
+        KeyCode::End => {
+            a.mode = Mode::PresetBrowser {
+                track,
+                selected: entries.len().saturating_sub(1),
+                entries,
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(path) = entries.get(selected) {
+                load_preset(a, audio, track, path);
+            } else {
+                a.status = format!("No {} presets found", a.editor.project.tracks[track].name);
+            }
+        }
+        _ => {
+            a.mode = Mode::PresetBrowser {
+                track,
+                entries,
+                selected,
+            }
+        }
+    }
+}
+
+pub(super) fn handle_preset_name_input(a: &mut App, k: KeyEvent) {
+    let Mode::PresetNameInput { track, mut input } = a.mode.clone() else {
+        return;
+    };
+    match k.code {
+        KeyCode::Esc => a.mode = Mode::Navigation,
+        KeyCode::Backspace => {
+            input.pop();
+            a.mode = Mode::PresetNameInput { track, input };
+        }
+        KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
+            input.push(c);
+            a.mode = Mode::PresetNameInput { track, input };
+        }
+        KeyCode::Enter => {
+            let kind = a.editor.project.tracks[track].kind;
+            match preset_path_for_name(kind, &input) {
+                Ok(path) => match save_as_needs_overwrite_confirmation(&path) {
+                    Ok(true) => a.mode = Mode::PresetOverwriteConfirm { path, track, input },
+                    Ok(false) => save_preset(a, track, path),
+                    Err(error) => enter_error(
+                        a,
+                        format!("Could not check whether {} exists: {error}", path.display()),
+                    ),
+                },
+                Err(error) => a.status = error.to_string(),
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn handle_preset_overwrite_confirm(a: &mut App, k: KeyEvent) {
+    let Mode::PresetOverwriteConfirm { track, path, input } = a.mode.clone() else {
+        return;
+    };
+    match k.code {
+        KeyCode::Enter | KeyCode::Char('o' | 'O') => save_preset(a, track, path),
+        KeyCode::Esc => a.mode = Mode::PresetNameInput { track, input },
+        _ => {}
+    }
+}
+
+fn save_preset(a: &mut App, track: usize, path: PathBuf) {
+    let preset = persistence::TrackPreset::from_track(a.editor.project.tracks[track].clone());
+    match persistence::save_track_preset_atomic(&path, &preset) {
+        Ok(()) => {
+            a.status = format!(
+                "Saved {} preset {}",
+                a.editor.project.tracks[track].name,
+                path.display()
+            );
+            a.mode = Mode::Navigation;
+        }
+        Err(error) => enter_error(a, error.to_string()),
+    }
+}
+
+fn load_preset(a: &mut App, audio: &mut Audio, track: usize, path: &Path) {
+    let preset = match persistence::load_track_preset(path) {
+        Ok(preset) => preset,
+        Err(error) => {
+            enter_error(a, error.to_string());
+            return;
+        }
+    };
+    if preset.track.kind != a.editor.project.tracks[track].kind {
+        enter_error(
+            a,
+            format!(
+                "Preset {} is incompatible with {}",
+                path.display(),
+                a.editor.project.tracks[track].name
+            ),
+        );
+        return;
+    }
+    if audio.available_commands() == 0 {
+        a.status = "Audio command queue full; preset load rejected".into();
+        return;
+    }
+    match a.editor.edit(None, |project, _| {
+        project.tracks[track] = preset.track;
+        Ok(())
+    }) {
+        Ok(true) if sync_project(a, audio) => {
+            a.scope = Scope::Base;
+            a.mode = Mode::Navigation;
+            a.status = format!("Loaded preset {}", path.display());
+        }
+        Ok(false) => {
+            a.scope = Scope::Base;
+            a.mode = Mode::Navigation;
+            a.status = "Preset already matches this track".into();
+        }
+        Ok(true) => {}
+        Err(error) => enter_error(a, error.to_string()),
     }
 }
 pub(super) fn handle_open_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {

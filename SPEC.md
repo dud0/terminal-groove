@@ -377,6 +377,8 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `Ctrl+S` | Save, prompting if no current path exists |
 | Anywhere | `Ctrl+Shift+S` | Save as |
 | Anywhere | `Ctrl+O` | Open project browser |
+| Track Sequencer/Parameter mode | `Ctrl+Shift+P` | Save the selected track's non-sequence settings as a named preset |
+| Track Sequencer/Parameter mode | `Ctrl+Shift+O` | Browse and load a preset for the selected track kind |
 | Anywhere | `Ctrl+Q` | Quit, with dirty confirmation |
 | Sequencer/editor modes | `Ctrl+R` | Start or stop live WAV recording |
 | Anywhere | `Ctrl+Z` | Undo |
@@ -438,7 +440,14 @@ The application uses ordinary portable terminal press events. It must not requir
 
 Track parameter shortcuts are resolved only in Parameter mode, while step, event, and track-action shortcuts are resolved only in Sequencer mode. Global-row shortcuts remain in Sequencer mode. Shared transport, audition, help, Ctrl project commands, undo/redo, and Ctrl copy/cut/paste remain available in both track modes.
 
-### 5.3 Parameter mode
+### 5.3 Track presets
+
+- User presets live outside project files in `.presets/<track-kind>/` and use the `.preset.json` extension. They are versioned strict JSON files and are not part of a saved project.
+- A preset contains every persistent setting of one track: mixer, instrument, effects, LFO assignments, input defaults, mute, swing, and probability. It never contains patterns, steps, or parameter locks.
+- `Ctrl+Shift+P` opens a name editor for the selected track; existing preset names require an overwrite confirmation. Saving a preset does not alter the project or its dirty state.
+- `Ctrl+Shift+O` opens a same-kind preset browser. Loading replaces only the selected track's persistent settings, preserves all pattern data, is one undoable dirty project edit, synchronizes audio, and returns to Sequencer mode in `BASE` scope. Invalid, unsupported, or wrong-kind presets are rejected without changing the project.
+
+### 5.4 Parameter mode
 
 - Press `Tab` or `Shift+Tab` from Sequencer mode to enter a visibly labelled Parameter editor; the same keys return to Sequencer mode. `Enter` and `Esc` also return without reverting changes already made.
 - Pressing another valid parameter shortcut switches the editor to that parameter without leaving the current BASE/LOCK scope.

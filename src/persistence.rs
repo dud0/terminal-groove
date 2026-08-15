@@ -1,4 +1,5 @@
-use crate::model::Project;
+use crate::model::{Project, Track};
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
@@ -26,6 +27,48 @@ pub enum ProjectIoError {
         source: crate::model::ValidationError,
     },
     #[error("could not save {path}: {source}")]
+    Save {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
+pub const PRESET_FORMAT_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackPreset {
+    pub format_version: u32,
+    pub track: Track,
+}
+
+impl TrackPreset {
+    pub fn from_track(track: Track) -> Self {
+        Self {
+            format_version: PRESET_FORMAT_VERSION,
+            track,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PresetIoError {
+    #[error("could not read preset {path}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("invalid preset JSON in {path}: {source}")]
+    Json {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("invalid preset in {path}: {message}")]
+    Validation { path: PathBuf, message: String },
+    #[error("could not save preset {path}: {source}")]
     Save {
         path: PathBuf,
         #[source]
@@ -100,6 +143,74 @@ pub fn save_atomic(path: &Path, project: &Project) -> Result<(), ProjectIoError>
     })
 }
 
+fn validate_preset(preset: &TrackPreset) -> Result<(), String> {
+    if preset.format_version != PRESET_FORMAT_VERSION {
+        return Err(format!(
+            "unsupported preset format version {}",
+            preset.format_version
+        ));
+    }
+    let mut project = Project::new();
+    let index = project
+        .tracks
+        .iter()
+        .position(|track| track.kind == preset.track.kind)
+        .ok_or_else(|| format!("unsupported track kind {:?}", preset.track.kind))?;
+    project.tracks[index] = preset.track.clone();
+    project.validate().map_err(|error| error.to_string())
+}
+
+pub fn load_track_preset(path: &Path) -> Result<TrackPreset, PresetIoError> {
+    let bytes = fs::read(path).map_err(|source| PresetIoError::Read {
+        path: path.into(),
+        source,
+    })?;
+    let preset: TrackPreset =
+        serde_json::from_slice(&bytes).map_err(|source| PresetIoError::Json {
+            path: path.into(),
+            source,
+        })?;
+    validate_preset(&preset).map_err(|message| PresetIoError::Validation {
+        path: path.into(),
+        message,
+    })?;
+    Ok(preset)
+}
+
+pub fn save_track_preset_atomic(path: &Path, preset: &TrackPreset) -> Result<(), PresetIoError> {
+    validate_preset(preset).map_err(|message| PresetIoError::Validation {
+        path: path.into(),
+        message,
+    })?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("preset");
+    let tmp = parent.join(format!(".{name}.{}.tmp", std::process::id()));
+    let result = (|| -> io::Result<()> {
+        fs::create_dir_all(parent)?;
+        let file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        let mut out = BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut out, preset).map_err(io::Error::other)?;
+        out.write_all(b"\n")?;
+        out.flush()?;
+        out.get_ref().sync_all()?;
+        fs::rename(&tmp, path)?;
+        if let Ok(dir) = File::open(parent) {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result.map_err(|source| PresetIoError::Save {
+        path: path.into(),
+        source,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +233,42 @@ mod tests {
 
         assert!(f.is_file());
         assert_eq!(load(&f).unwrap(), Project::new());
+    }
+
+    #[test]
+    fn track_preset_round_trips_with_a_separate_versioned_schema() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("kick.preset.json");
+        let mut project = Project::new();
+        project.tracks[0].level = crate::model::Percent::new(73).unwrap();
+        let preset = TrackPreset::from_track(project.tracks[0].clone());
+
+        save_track_preset_atomic(&path, &preset).unwrap();
+
+        assert_eq!(load_track_preset(&path).unwrap(), preset);
+        assert!(fs::read(&path).unwrap().ends_with(b"\n"));
+    }
+
+    #[test]
+    fn track_preset_rejects_unsupported_versions_and_invalid_tracks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invalid.preset.json");
+        let preset = TrackPreset::from_track(Project::new().tracks[0].clone());
+        let mut value = serde_json::to_value(&preset).unwrap();
+        value["format_version"] = 2.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            load_track_preset(&path),
+            Err(PresetIoError::Validation { .. })
+        ));
+
+        let mut value = serde_json::to_value(&preset).unwrap();
+        value["track"]["name"] = "Not Kick".into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            load_track_preset(&path),
+            Err(PresetIoError::Validation { .. })
+        ));
     }
 
     #[test]

@@ -1,11 +1,14 @@
 use super::overlays::{
     overwrite_destination, overwrite_popup_rect, popup, popup_at, probability_popup_rect,
     quit_popup_rect, render_chord_popup, render_generator_popup, render_lfo_popup,
-    render_lfo_selector, render_pattern_popup, render_project_browser, render_sidechain_popup,
-    render_trigger_popup, swing_popup_rect, tempo_popup_rect,
+    render_lfo_selector, render_pattern_popup, render_preset_browser, render_project_browser,
+    render_sidechain_popup, render_trigger_popup, swing_popup_rect, tempo_popup_rect,
 };
 use super::{
-    controller::{PROJECT_EXTENSION, global_name, project_directory, project_path_for_name},
+    controller::{
+        PRESET_EXTENSION, PROJECT_EXTENSION, global_name, preset_directory, preset_path_for_name,
+        project_directory, project_path_for_name,
+    },
     controls::{GLOBAL_CONTROLS, global_control},
     input::parameter_supports_direct_percentage,
     state::{App, Mode, ParameterBank},
@@ -54,8 +57,11 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::TempoInput(_) => "Tempo numeric input".into(),
         Mode::TrackLengthInput(_) => "Track length input".into(),
         Mode::ProjectBrowser { .. } => "Project browser".into(),
+        Mode::PresetBrowser { .. } => "Preset browser".into(),
         Mode::FileInput(_, _) => "Project-name input".into(),
+        Mode::PresetNameInput { .. } => "Preset-name input".into(),
         Mode::OverwriteConfirm { .. } => "Overwrite confirmation".into(),
+        Mode::PresetOverwriteConfirm { .. } => "Overwrite confirmation".into(),
         Mode::OpenConfirm(_) => "Unsaved confirmation".into(),
         Mode::NewConfirm => "Unsaved confirmation".into(),
         Mode::Error(_) => "Error dialog".into(),
@@ -79,7 +85,7 @@ pub(super) fn help_available(mode: &Mode) -> bool {
 
 const HELP_TEXT: &str =
     "CORE  Space play/pause · . stop/reset · ? help · Esc close help
-      Ctrl+N new project · Ctrl+O browse projects · Ctrl+S save · Ctrl+Shift+S save as
+      Ctrl+N new · Ctrl+O projects · Ctrl+S save · Ctrl+Shift+S save as · Ctrl+Shift+P/O presets
       Ctrl+Q quit · Ctrl+R record WAV · Ctrl+Z undo · Ctrl+Y redo · Ctrl+C/X/V copy/cut/paste selected step
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
@@ -2564,6 +2570,9 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         Mode::ProjectBrowser { entries, selected } => {
             render_project_browser(f, area, entries, *selected);
         }
+        Mode::PresetBrowser {
+            entries, selected, ..
+        } => render_preset_browser(f, area, entries, *selected),
         Mode::FileInput(_, input) => {
             let directory_path = project_directory().ok();
             let directory = directory_path
@@ -2589,6 +2598,30 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 &format!("Name: {input}_\nDestination: {destination}\nEnter confirms  Esc cancels"),
             );
         }
+        Mode::PresetNameInput { track, input } => {
+            let kind = a.editor.project.tracks[*track].kind;
+            let directory_path = preset_directory(kind).ok();
+            let directory = directory_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| ".presets".into());
+            let destination = if input.is_empty() {
+                format!("{directory}/<name>{PRESET_EXTENSION}")
+            } else {
+                preset_path_for_name(kind, input)
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|_| format!("{directory}/{input}{PRESET_EXTENSION}"))
+            };
+            popup(
+                f,
+                area,
+                "Save track preset",
+                &format!(
+                    "Track: {}\nName: {input}_\nDestination: {destination}\nEnter confirms  Esc cancels",
+                    a.editor.project.tracks[*track].name
+                ),
+            );
+        }
         Mode::OverwriteConfirm { path, .. } => {
             let destination = path.display().to_string();
             let popup_area = overwrite_popup_rect(area, &destination);
@@ -2597,6 +2630,17 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 f,
                 popup_area,
                 "Overwrite existing project?",
+                &format!("{destination}\n\nOverwrite [Enter/O]  Cancel [Esc]"),
+            )
+        }
+        Mode::PresetOverwriteConfirm { path, .. } => {
+            let destination = path.display().to_string();
+            let popup_area = overwrite_popup_rect(area, &destination);
+            let destination = overwrite_destination(&destination, popup_area);
+            popup_at(
+                f,
+                popup_area,
+                "Overwrite existing preset?",
                 &format!("{destination}\n\nOverwrite [Enter/O]  Cancel [Esc]"),
             )
         }
