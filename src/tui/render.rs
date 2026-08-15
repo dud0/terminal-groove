@@ -91,11 +91,11 @@ const HELP_TEXT: &str =
       Ctrl+N new · Ctrl+O open · Ctrl+S save · Ctrl+Shift+S save as · Ctrl+L track presets
       Ctrl+Q quit · Ctrl+R record WAV · Ctrl+Z undo · Ctrl+Y redo · Ctrl+C/X/V copy/cut/paste selected step
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
-          N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
+          N insert · D duplicate · C copy · X cut · V paste · Delete/Backspace remove · Esc close
 SEQUENCER  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
-           Tab parameters · p LOCK parameters · ~ globals · Shift+1..0 tracks · Enter event · Del clear · Esc BASE
+           Tab params · p LOCK params · ~ global · Shift+1..0 tracks · Enter event · Del/Bksp clear · Esc BASE
            g pattern generator · o audition selected step
-           Shift+Delete clear selected track
+           Shift+Delete/Backspace clear selected track
 EVENTS & TRACKS  m mute · l length · Shift+D double
                  a accent/default · Shift+G Bass/Lead slide · Shift+T microtiming/condition/retrigger · Shift+S swing · Shift+Q probability
                  Hat 1/2 Closed/Open · Tom 1/2/3 Low/Medium/High · 0 clear recipe locks
@@ -113,7 +113,7 @@ PARAMETERS  v level · n pan · y delay send · b reverb send
            Chord/Lead: w osc mix · P pulse · u sub · O noise · i pitch LFO
            Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR · FM: w/q/m/f/c + i + ADSR
            Chord: h chorus · e spread
-           Shift+L LFO · [`/1–9/0] percent · ↑/↓ adjust · ←/→ switch parameter
+           Shift+L LFO · [`/-/1–9/0] percent · ↑/↓ adjust · ←/→ switch parameter
            Enter/Esc finish · Backspace/Delete remove lock/LFO
 GLOBAL  t tempo · y delay division · f feedback · r reverb time
         b reverb tone · p pre-delay · m reverb return · k key · s scale · ←/→ select · ↑/↓ adjust";
@@ -2555,7 +2555,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         )));
     } else if matches!(a.mode, Mode::LfoEdit { .. }) {
         status_lines.push(Line::from(
-            "Track-level LFO · [←/→] field  [↑/↓] adjust  [Shift+↑/↓] ±10% fields  [`/1–9/0] phase/free rate/depth  [Backspace/Del] remove  [Enter/Esc] finish",
+            "Track-level LFO · [←/→] field  [↑/↓] adjust  [Shift+↑/↓] ±10% fields  [`/-/1–9/0] phase/free rate/depth  [Backspace/Del] remove  [Enter/Esc] finish",
         ));
     } else if matches!(a.mode, Mode::ChordEdit { .. }) {
         status_lines.push(Line::from(
@@ -2567,7 +2567,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         ));
     } else if matches!(a.mode, Mode::SidechainEdit { .. }) {
         status_lines.push(Line::from(
-            "Ducking · [←/→] field  [↑/↓] ±1%  [Shift+↑/↓] ±10%  [`/1–9/0] depth  [Enter/Esc] close",
+            "Ducking · [←/→] field  [↑/↓] ±1%  [Shift+↑/↓] ±10%  [`/-/1–9/0] depth  [Enter/Esc] close",
         ));
     } else if matches!(a.mode, Mode::TrackLengthInput(_)) {
         status_lines.push(Line::from(

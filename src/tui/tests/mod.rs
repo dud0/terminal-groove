@@ -1116,7 +1116,7 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
 
     assert!(screen.contains("PATTERNS  Ctrl+P open dialog"));
     assert!(screen.contains("SEQUENCER  ↑/↓ rows"));
-    assert!(screen.contains("Shift+Delete clear selected track"));
+    assert!(screen.contains("Shift+Delete/Backspace clear selected track"));
     assert!(screen.contains("EVENTS & TRACKS  m mute"));
     assert!(screen.contains("PARAMETERS  v level"));
     assert!(screen.contains("Shift+← PARAMS · Shift+→ EFFECTS"));
@@ -1126,7 +1126,7 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
     assert!(screen.contains("Ctrl+L track presets"));
     assert!(!screen.contains("Ctrl+Shift+P/O/D presets"));
     assert!(screen.contains("o audition selected step"));
-    assert!(screen.contains("[`/1–9/0] percent"));
+    assert!(screen.contains("[`/-/1–9/0] percent"));
     assert!(screen.contains("Backspace/Delete remove lock/LFO"));
     assert!(screen.contains("FM: w/q/m/f/c + i + ADSR"));
     assert!(screen.contains("Esc close help"));
@@ -1137,8 +1137,10 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
 }
 
 #[test]
-fn shifted_delete_is_limited_to_navigation_track_rows() {
+fn shifted_delete_or_backspace_is_limited_to_navigation_track_rows() {
     let clear = KeyEvent::new(KeyCode::Delete, KeyModifiers::SHIFT);
+    assert!(is_clear_track_shortcut(&Mode::Navigation, 1, clear));
+    let clear = KeyEvent::new(KeyCode::Backspace, KeyModifiers::SHIFT);
     assert!(is_clear_track_shortcut(&Mode::Navigation, 1, clear));
     assert!(!is_clear_track_shortcut(&Mode::Navigation, 0, clear));
     assert!(!is_clear_track_shortcut(

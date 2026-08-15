@@ -1695,7 +1695,7 @@ fn cleanup_invalid_ties(steps: &mut [Step]) {
 
 pub fn percentage_key(c: char) -> Option<Percent> {
     match c {
-        '`' => Percent::new(0),
+        '`' | '-' => Percent::new(0),
         '1'..='9' => Percent::new(c.to_digit(10).unwrap() as u8 * 10),
         '0' => Percent::new(100),
         _ => None,
@@ -1900,6 +1900,7 @@ mod tests {
     fn direct_percentage_keys_cover_the_complete_mapping() {
         for (key, expected) in [
             ('`', 0),
+            ('-', 0),
             ('1', 10),
             ('2', 20),
             ('3', 30),
@@ -1913,7 +1914,7 @@ mod tests {
         ] {
             assert_eq!(percentage_key(key).map(Percent::get), Some(expected));
         }
-        for key in ['-', '=', 'a', ' '] {
+        for key in ['=', 'a', ' '] {
             assert_eq!(percentage_key(key), None);
         }
     }

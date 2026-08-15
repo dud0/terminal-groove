@@ -14,7 +14,7 @@ use std::{
 };
 
 const DIRECT_PARAMETER_RAMP: Duration = Duration::from_millis(30);
-const DIRECT_PERCENTAGE_HINT: &str = "[`/1–9/0] 0/10–90/100%";
+const DIRECT_PERCENTAGE_HINT: &str = "[`/-/1–9/0] 0/10–90/100%";
 
 struct TerminalGuard;
 impl TerminalGuard {

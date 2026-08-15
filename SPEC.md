@@ -147,7 +147,7 @@ In `LOCK` scope, attempting to edit a parameter on an empty step is rejected. Wh
 
 Track parameters use an integer `Percent` value from 0 through 100 inclusive. Persistence and UI presentation use the same integer.
 
-- `` ` `` enters 0%.
+- `` ` `` or `-` enters 0%.
 - `1` through `9` enter 10% through 90%.
 - `0` enters 100%.
 - Up/down changes the value by 1 percentage point.
@@ -358,7 +358,7 @@ The application uses ordinary portable terminal press events. It must not requir
 - On the global row, left/right cycles through global parameters and wraps.
 - `Enter` edits the selected global control or toggles/inserts the selected track event as defined in the sequencer model.
 - `Backspace` or `Delete` clears the selected event and its locks.
-- `Shift+Delete` immediately clears every event and lock from the selected track in the active pattern. It preserves the track length and all non-sequence settings, and is one undoable edit.
+- `Shift+Delete` or `Shift+Backspace` immediately clears every event and lock from the selected track in the active pattern. It preserves the track length and all non-sequence settings, and is one undoable edit.
 - `l` opens numeric track-length input. Digits plus Enter set an exact length; up/down changes it by 1 and Shift+up/down by 16, clamped to 1–64. Arrow changes apply immediately and remain applied on Esc.
 - `Tab` or `Shift+Tab` enters Parameter mode for the selected track at its remembered control in the active `PARAMS` or `EFFECTS` bank, including its Hi-hat or Tom recipe card where applicable, falling back to that bank's first compatible control. On the global row it leaves the mode unchanged and reports that a track is required.
 - `Esc` exits overlays or Parameter mode first; from Sequencer mode it returns lock scope to `BASE`.
@@ -376,12 +376,12 @@ The application uses ordinary portable terminal press events. It must not requir
 | Pattern dialog | `Enter` | Select or queue the cursor pattern and close |
 | Pattern dialog | `N` / `D` | Insert an empty pattern / duplicate the cursor pattern |
 | Pattern dialog | `C` / `X` / `V` | Copy / cut / paste after the cursor |
-| Pattern dialog | `Delete` | Remove the cursor pattern, resetting the final pattern instead |
+| Pattern dialog | `Delete` / `Backspace` | Remove the cursor pattern, resetting the final pattern instead |
 | Pattern/song dialog | `Tab` | Switch between Patterns and Song pages |
 | Song dialog | Left/right, `Home`, `End` | Move the song-entry cursor |
 | Song dialog | Up/down / `[` / `]` | Change bars / referenced pattern |
 | Song dialog | `Enter` | Select or queue Song mode from the cursor |
-| Song dialog | `N` / `D` / `C` / `X` / `V` / `Delete` | Manage song entries |
+| Song dialog | `N` / `D` / `C` / `X` / `V` / `Delete` / `Backspace` | Manage song entries |
 | Track, Parameter mode | `o` | Audition selected track/step without editing |
 | Anywhere | `Ctrl+S` | Save, prompting if no current path exists |
 | Anywhere | `Ctrl+Shift+S` | Save as |
@@ -403,7 +403,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Sequencer or Parameter mode | `Shift+1`–`Shift+0` | Jump to the corresponding track |
 | Sequencer mode Track | `l` | Edit the selected track length from 1 through 64 steps |
 | Sequencer mode Track | `Shift+D` | Double the selected track by appending an exact copy, when its length is at most 32 |
-| Sequencer mode Track | `Shift+Delete` | Clear all events and locks from the selected track in the active pattern |
+| Sequencer mode Track | `Shift+Delete` / `Shift+Backspace` | Clear all events and locks from the selected track in the active pattern |
 | Sequencer mode Trigger, note, or empty step | `a` | Toggle event accent, or the track's input accent default on an empty step |
 | Sequencer mode Bass/Lead note | `Shift+G` | Toggle slide |
 | Sequencer mode Trigger/note | `Shift+T` | Edit microtiming, condition, cycle/chance values, and retrigger count |

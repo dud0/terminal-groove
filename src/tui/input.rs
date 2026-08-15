@@ -327,7 +327,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 });
             }
         }
-        KeyCode::Delete if is_clear_track_shortcut(&a.mode, a.row, k) => {
+        KeyCode::Backspace | KeyCode::Delete if is_clear_track_shortcut(&a.mode, a.row, k) => {
             clear_selected_track(a, audio)
         }
         KeyCode::Backspace | KeyCode::Delete if a.row > 0 => {
@@ -1152,7 +1152,7 @@ pub(super) fn duplicate_selected_track(a: &mut App, audio: &mut Audio) {
 pub(super) fn is_clear_track_shortcut(mode: &Mode, row: usize, k: KeyEvent) -> bool {
     *mode == Mode::Navigation
         && row > 0
-        && k.code == KeyCode::Delete
+        && matches!(k.code, KeyCode::Backspace | KeyCode::Delete)
         && k.modifiers.contains(KeyModifiers::SHIFT)
 }
 

@@ -194,7 +194,7 @@ pub(super) fn render_sidechain_popup(
     }
     f.render_widget(
         Paragraph::new(vec![
-            Line::from("[←/→] select   [↑/↓] adjust   [Shift+↑/↓] ±10%   [`/1–9/0] depth"),
+            Line::from("[←/→] select   [↑/↓] adjust   [Shift+↑/↓] ±10%   [`/-/1–9/0] depth"),
             Line::from("[Enter/Esc] close · edits are immediate"),
         ])
         .alignment(Alignment::Center),
@@ -569,7 +569,7 @@ pub(super) fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) 
         Paragraph::new(vec![
             Line::from("▶ playing  ⏭ next  ·  ←/→ Home End  ·  Enter select (queue while playing)"),
             Line::from(
-                "N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close",
+                "N insert · D duplicate · C copy · X cut · V paste · Delete/Backspace remove · Esc close",
             ),
         ]),
         Rect {
@@ -672,7 +672,7 @@ fn render_song_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
         Paragraph::new(vec![
             Line::from(progress),
             Line::from("▶ playing  ⏭ next  ·  ←/→ Home End select · ↑/↓ bars · [/] pattern"),
-            Line::from("Enter play from entry · N insert · D duplicate · C copy · X cut · V paste · Delete remove · Tab patterns · Esc close"),
+            Line::from("Enter play from entry · N insert · D duplicate · C copy · X cut · V paste · Delete/Backspace remove · Tab patterns · Esc close"),
         ]),
         Rect { y: inner.y.saturating_add(2), height: inner.height.saturating_sub(2), ..inner },
     );
@@ -809,7 +809,7 @@ pub(super) fn render_lfo_popup(
         Paragraph::new(vec![
             Line::from("[←/→] select   [↑/↓] adjust   [Shift+↑/↓] ±10% fields"),
             Line::from(
-                "[`/1–9/0] phase/free rate/depth   [Backspace/Del] remove   [Enter/Esc] close",
+                "[`/-/1–9/0] phase/free rate/depth   [Backspace/Del] remove   [Enter/Esc] close",
             ),
         ])
         .alignment(Alignment::Center),
