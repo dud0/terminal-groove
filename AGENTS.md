@@ -1,73 +1,153 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Project Structure
 
-`terminal-groove` is a single Rust 2024 binary package. The executable entry point is `src/main.rs`; reusable behavior is exported through `src/lib.rs`.
+`terminal-groove` is one Cargo package with a library target (`src/lib.rs`) and
+the executable target (`src/main.rs`). It uses Rust 2024 and supports Linux and
+macOS. `SPEC.md` is authoritative for user-visible behavior, keyboard input,
+the JSON schema, and acceptance criteria. `docs/ARCHITECTURE.md` is authoritative
+for implementation boundaries and real-time ownership; `docs/AUDIO_PERFORMANCE.md`
+contains the callback benchmark method and evidence.
 
-- `src/model.rs`: project schema, bounded values, defaults, and validation
-- `src/reducer.rs`: editing commands, undo/redo, and dirty-state behavior
-- `src/persistence.rs`: strict JSON loading and atomic saves
-- `src/engine.rs`: transport, sequencing, and step scheduling
-- `src/dsp.rs`: oscillators, envelopes, filters, delay, and safety utilities
-- `src/audio.rs`: CPAL device integration and real-time command handling
-- `src/tui.rs`: Ratatui rendering, keyboard input, and terminal lifecycle
+- `src/model.rs`: persisted project types, bounds, defaults, compatibility, and validation
+- `src/reducer.rs`: project edits, clipboards, undo/redo, dirty revisions, and audio edit impacts
+- `src/persistence.rs`: strict versioned project and preset JSON, migrations, and atomic saves
+- `src/storage.rs`: platform directories for projects, presets, recordings, and logs
+- `src/presets.rs`: source-controlled built-in sound preset catalog
+- `src/generator.rs`: deterministic, fill-only pattern idea generation
+- `src/engine.rs`: transport-independent timing and gate decisions
+- `src/dsp/mod.rs`: allocation-free oscillators, envelopes, filters, effects, LFOs, and safety utilities
+- `src/audio.rs`: CPAL integration, mirrored audio snapshots, command handling, and status
+- `src/audio/`: scheduling, synthesis, voices, effects, rendering, queues, and WAV recording
+- `src/tui/mod.rs`: terminal lifecycle and application loop
+- `src/tui/render.rs`: main-screen rendering, parameter descriptors, and readouts
+- `src/tui/controls.rs`: global-control catalog, labels, groups, and shortcuts
+- `src/tui/overlays.rs`: popup rendering and safe popup geometry
+- `src/tui/input.rs`: keyboard dispatch and mode-specific editing
+- `src/tui/state.rs`: modes, cursor state, dialog fields, and UI-only state
+- `src/tui/controller.rs`: project/audio synchronization, storage operations, and file flows
+- `src/tui/tests/mod.rs`: Ratatui `TestBackend` rendering and input tests
 
-The authoritative behavior is documented in `SPEC.md`. Unit tests currently live beside their implementation in `#[cfg(test)]` modules. Build output belongs in `target/` and must not be committed.
+Build output belongs in `target/` and must not be committed. Legacy working-
+directory storage is ignored and must not be reintroduced or imported.
 
-## Build, Test, and Development Commands
+## Build and Verification
 
-- `cargo run --release -- --audio-device null`: run safely with ALSA's null output on Linux.
-- `cargo run --release -- --list-audio-devices`: list exact device names accepted by the CLI.
-- `cargo test`: run all unit, persistence, and documentation tests.
-- `cargo fmt --all -- --check`: verify standard Rust formatting.
-- `cargo clippy --all-targets -- -D warnings`: enforce lint-clean code.
-- `cargo build --release`: produce the optimized binary at `target/release/terminal-groove`.
+Install Rust 1.85 or newer. Linux builds also need `libasound2-dev` on
+Debian/Ubuntu or `alsa-lib-devel` on Fedora. macOS uses CoreAudio and needs no
+separate audio development package.
 
-On Linux, install `libasound2-dev` on Debian/Ubuntu or `alsa-lib-devel` on Fedora before building. macOS uses CoreAudio and needs no separate audio development package.
+- `cargo test`: run unit, persistence, audio, TUI, and documentation tests
+- `cargo fmt --all -- --check`: verify standard Rust formatting
+- `cargo clippy --all-targets -- -D warnings`: enforce lint-clean code
+- `cargo build --release`: build `target/release/terminal-groove`
+- `cargo run --release -- --audio-device null`: run with ALSA's null output when that device is available
+- `cargo run --release -- --list-audio-devices`: list exact output-device names
+- `cargo run --release -- --audio-device <exact-name> --audio-buffer <frames>`: test explicit device and buffer selection
+- `cargo test --release audio::tests::saturated_callback_benchmark -- --ignored --nocapture`: run the host-dependent callback benchmark
 
-## Coding Style & Naming Conventions
+The CLI accepts an optional project path, uses the default output device unless
+overridden, and rejects unsupported or ambiguous explicit devices and buffer
+sizes. Do not assume that the `null` device exists on every platform.
 
-Use `rustfmt` defaults and keep the code warning-free. Follow Rust conventions: `snake_case` for modules, functions, and tests; `CamelCase` for types and enum variants; `SCREAMING_SNAKE_CASE` for constants. Keep the model, reducer, and DSP independent of Ratatui and CPAL. Audio callbacks must not allocate, block, lock, access files, or format messages.
+## Code and Real-Time Rules
 
-## TUI Controls & Dialogs
+Use rustfmt defaults, Rust naming conventions, and warning-free code. Keep the
+model, reducer, and DSP independent of Ratatui and CPAL. Put file I/O and
+formatting on the main/UI or worker threads, never in the audio callback.
 
-The terminal UI is split by responsibility. Put persistent screen controls and their display formatting in `src/tui/render.rs`, reusable popup controls and popup geometry in `src/tui/overlays.rs`, keyboard dispatch and mode-specific editing in `src/tui/input.rs`, and project/audio synchronization or file operations in `src/tui/controller.rs`. Keep Ratatui types out of `model.rs` and `reducer.rs`.
+The audio callback must not allocate, deallocate, block, lock, access the
+filesystem, format messages, or log. It may only use preallocated state and
+bounded lock-free communication. In particular:
 
-### Creating a control
+- The main thread owns terminal input, rendering, file I/O, undo/redo, and the canonical `Project`.
+- Project edits become immutable audio snapshots and are sent through the bounded SPSC command queue.
+- Unchanged audio patterns should be structurally shared where the edit impact permits it.
+- The callback processes at most eight commands per callback and preserves ordering around structural or intervening commands.
+- Replaced snapshots go through the retirement queue and are reclaimed outside the callback.
+- Live playback and audition state remain independent, including voices, effects, LFOs, and effect tails.
+- CPAL errors, non-finite diagnostics, and callback telemetry leave the callback through bounded or atomic status paths and are reported outside it.
+- Recording captures the final limited internal stereo pair through a preallocated queue. The callback only queues frames and an ordered end marker; the named worker thread performs WAV I/O, 24-bit conversion, flushing, and finalization.
 
-When adding a control, follow the complete path from model value to visible interaction:
+## Persistence and Storage
 
-1. Define the bounded value, enum, option ordering, default, and validation in `src/model.rs`. Use the model's checked constructors and ranges; do not duplicate limits only in the UI.
-2. Add a stable `ParameterId`/`GlobalParameterId` or an explicit editor field as appropriate. For track parameter cards, add a `ParameterDescriptor` with its label, shortcut, and `ParameterGroup` in `src/tui/render.rs`.
-3. Add the keyboard behavior in the relevant mode handler in `src/tui/input.rs`. Arrow changes must clamp at the first/last valid value rather than wrap unless the specification explicitly says otherwise. Use Shift for the documented coarse increment and number-row percentage entry only for controls that support it.
-4. Apply project changes through `Editor::edit`/the reducer, check the audio command queue before committing, and call `sync_project` (or its smoothing variant) so UI and audio cannot diverge. Transport, cursor, mode, and status changes are not undoable; project edits are.
-5. Render the value from the current model in `render.rs` or `overlays.rs`; never maintain a second UI-only value. Add focused tests for lower and upper bounds, disabled/inapplicable values, and the resulting reducer command where practical.
+Project files are strict, pretty-printed UTF-8 JSON ending in a newline. Current
+projects save as format v25, reject duplicate keys, unknown fields, invalid
+ranges, incompatible events/locks/LFOs, invalid tie graphs, and invalid pattern
+or song references. Versions 21 through 24 are migrated as specified in
+`SPEC.md`; unsupported and malformed versions must be rejected without changing
+the current project or undo history. Saves validate first, write a temporary
+sibling, flush and sync it, then atomically rename it.
 
-Use the existing control vocabulary:
+The normal root is `Terminal Groove/` below the OS Music directory, with
+`Projects/`, `Presets/<track-kind>/`, `Recordings/`, and `Logs/` subdirectories.
+If no Music directory is available, use the visible home-directory fallback.
+Project files use `.groove.json`; user presets use `.preset.json`. Explicit CLI
+project paths remain literal. Do not import or modify legacy `.projects/`,
+`.presets/`, or `.recordings/` directories.
 
-- Continuous percentage controls are ten vertically stacked segments using `fader_segments`. Show the exact percentage and physical units or derived value when applicable. Direct percentage entry should use the existing short ramp/smoothing behavior.
-- Two-position controls are vertical switches rendered with `render_lfo_switch`; show both labels, a selected/unselected marker, and no color-only distinction.
-- Ordered discrete controls are selectors rendered with `render_lfo_selector`. Supply choices in the same order used by the model and keyboard handler, fill the available rows, and stop at the ends.
-- Track parameter cards use the existing `ParameterDescriptor`/group colors, centered labels, shortcut, BASE/LOCK origin, and `~` LFO marker. Use a double border, reverse styling, yellow/bold emphasis for the active card. LOCK mode must visibly identify effective values and whether they come from a lock or BASE.
-- Chord waveform/chorus/spread-style discrete values should retain the established vertical card geometry rather than introducing a new widget shape. The Pitch LFO card is LFO-only and must not pretend to have a BASE or LOCK value.
-- For every control, communicate state with text, symbols, or borders as well as color. Disabled controls use muted styling and remain visibly present.
+Track presets are separate sound-only strict JSON. New presets use format v4;
+versions 1 through 3 remain loadable through the documented migrations. Loading
+a preset must preserve track identity, mute, swing, probability, input defaults,
+patterns, steps, and locks. Built-in presets are immutable; default presets
+affect new untitled projects only.
 
-### Dialog guidelines
+## Feature Invariants
 
-- Add a `Mode` variant and any cursor/field state in `src/tui/state.rs`. Handle the mode early in `handle_key` in `src/tui/input.rs` so modal keys cannot leak into navigation. Add the matching render branch in `draw_with_device` and a dedicated renderer in `overlays.rs` when the dialog has more than a simple message.
-- Use `Clear` for the dialog rectangle, a bordered `Block` with a concise title, and a dedicated `Rect` helper. Center compact dialogs and size them to their content; cap editor dialogs instead of expanding them on large terminals. Keep the underlying project screen visible when that helps context.
-- Editors with several related fields use equal-width cards and a field enum with a fixed `ALL` ordering. Left/right selects a field; Up/Down changes it. The active card uses the standard double border/reverse/bold treatment. Use the same control renderer for switches, selectors, and faders as the main UI.
-- Show the current value, units/derived value, source or trigger origin where relevant, and visibly muted inactive fields. Keep labels in card borders for compact editors and avoid duplicate labels or empty padding.
-- Every dialog must show its local key hints in a short footer or status line. At minimum define Enter (confirm/close), Esc (cancel/close or the documented immediate-edit behavior), and any destructive action. Help text must match the actual handler.
-- Text-input dialogs must preserve literal user input, show the resolved path before file confirmation, reject empty/invalid input visibly, and define Backspace behavior. Confirmation dialogs use the consistent `Save [S]`, `Discard [D]`, `Cancel [Esc]` wording.
-- Modal edits must have an explicit commit policy. Immediate arrow edits keep their changes on Esc where the specification says so; destructive operations require confirmation; failed reducer/audio operations leave the project unchanged and report an actionable error.
-- Respect small terminals: use the existing minimum-size fallback and saturating `Rect` calculations. Do not panic when a popup is narrower or shorter than expected; render an empty-safe result or the fallback screen.
-- Update `SPEC.md` for new modes, controls, shortcuts, sizing, or commit semantics, and add rendering/input tests when behavior is non-trivial. Manually verify dialogs at the documented `120x34` size and at a smaller terminal size.
+- Projects have ten fixed track kinds in the documented order, one through 100 dynamic patterns, and one-based song references to those patterns.
+- Sequence data belongs to patterns; each pattern track has one through 64 steps. Structural pattern edits must preserve or correctly rebase active, queued, and song references.
+- The pattern-idea generator is session-only, deterministic from its seed, fills empty steps only, and is applied as one undoable project edit.
+- Audition voices and effects are independent from live playback. Recording is transport-independent and captures the final limited internal stereo pair until explicitly stopped or the application exits.
 
-## Testing Guidelines
+## TUI Controls and Dialogs
 
-Add focused tests in the module being changed. Name tests after observable behavior, such as `wrapped_tie` or `fractional_clock_has_no_drift`. Cover valid boundaries and rejection paths, especially JSON ranges, tie graphs, timing, and non-finite DSP values. Run formatting, tests, and Clippy before submitting.
+Keep TUI responsibilities in their designated modules above. Keep Ratatui types
+out of `model.rs` and `reducer.rs`. For a new control, complete the full path:
 
-## Commit & Pull Request Guidelines
+1. Define its bounded model value, enum ordering, default, compatibility, and validation in `model.rs`.
+2. Add `ParameterId`/`GlobalParameterId` policy in the model as appropriate, then add presentation metadata to `render.rs` or `controls.rs`.
+3. Add keyboard behavior in the correct mode handler in `input.rs`; clamp ordered values at their ends unless `SPEC.md` explicitly requires wrapping.
+4. Apply project edits through reducer APIs, check queue capacity before committing, synchronize the audio snapshot, and leave UI/audio state unchanged when synchronization fails.
+5. Render from the model, not a second UI-only value, and add focused boundary, rejection, input, or rendering tests as appropriate.
 
-History is small and uses concise, imperative summaries, for example `Initial terminal-groove implementation`. Keep commits scoped to one coherent change. Pull requests should explain user-visible behavior, identify affected `SPEC.md` sections, list verification commands, and include terminal screenshots for layout changes. Document any audio-device-specific manual testing and link relevant issues.
+Use the existing visual language without reintroducing removed concepts such as
+Chord spread:
+
+- Use the established fader helpers for continuous values, with exact values and physical units or derived readouts where applicable.
+- Use `render_lfo_switch` only for two-position switch-style controls and `render_lfo_selector` for ordered selector controls where those renderers fit the surrounding card or popup.
+- Preserve the established vertical parameter-card geometry for Bass waveform, Lead sub mode, Chorus, FM algorithms, ratios, and other discrete parameter cards.
+- Parameter cards must show their group, shortcut, active state, BASE/LOCK origin, and LFO marker where applicable. Disabled fields remain visible and communicate their state without relying on color alone.
+- Pitch LFO is LFO-only and must not display a BASE or LOCK value. Chord/FM voicing and arpeggio settings are not BASE/LOCK parameters.
+- Lock mode must show effective values and distinguish lock overrides from inherited BASE values.
+
+For dialogs and overlays:
+
+- Add a `Mode` variant and field state in `state.rs`, dispatch the mode before general navigation in `input.rs`, and add the matching render branch.
+- Clear the popup rectangle, use a bordered block, keep geometry in `overlays.rs`, and use saturating or capped rectangles that are safe on small terminals.
+- Use fixed field-order arrays or enums for multi-field editors. Left/right selects fields; Up/down changes values unless the specification says otherwise.
+- Display current values, units, derived values, origins, inactive state, and local key hints. Hints must match the actual handler.
+- Dirty-project confirmations use `Save [S]`, `Discard [D]`, and `Cancel [Esc]`. Overwrite confirmations use `Overwrite [Enter/O]` and `Cancel [Esc]`; preset-default confirmations use their documented Set/Clear keys.
+- Define whether edits are immediate or committed on confirmation. Immediate arrow edits retain their changes on Esc where specified; destructive actions require confirmation; failed reducer, storage, or audio operations leave the project unchanged.
+- Preserve literal text input, show the resolved destination before confirmation, reject invalid names visibly, and define Backspace behavior.
+- Keep the main screen's documented `120x34` layout and the small-terminal fallback working. Add or update `TestBackend` coverage for both.
+
+Update `SPEC.md` for new modes, controls, shortcuts, sizing, persistence, or
+commit semantics rather than letting this file become a second product spec.
+
+## Testing
+
+Add focused tests beside the implementation. Cover model bounds and rejection,
+strict JSON and migrations, duplicate keys, tie graphs, pattern/song rebasing,
+undo/redo and dirty revisions, timing and scheduling, finite DSP output, LFO
+behavior, effect tails, recording conversion, and callback allocation/deallocation
+safety. TUI changes should use `TestBackend` at `120x34`, larger sizes, and a
+smaller terminal where relevant. Name tests after observable behavior, such as
+`wrapped_tie` or `fractional_clock_has_no_drift`.
+
+## Commits and Pull Requests
+
+Keep commits scoped to one coherent change with concise imperative summaries.
+Pull requests should describe user-visible behavior, affected `SPEC.md` or
+architecture sections, verification commands, and any device-specific manual
+testing. Include terminal screenshots when they materially clarify a layout
+change.
