@@ -59,9 +59,19 @@ impl Audio {
 
     pub fn send(&mut self, command: AudioCommand) -> Result<(), QueueFull> {
         self.reap_retired();
+        // Full replacements are also used by project open/new. Keep the UI-side
+        // incremental builder aligned only after the command has been accepted.
+        let replacement = match &command {
+            AudioCommand::ReplaceProject { project, .. } => Some((**project).clone()),
+            _ => None,
+        };
         self.producer
             .push(command)
-            .map_err(|rtrb::PushError::Full(_)| QueueFull)
+            .map_err(|rtrb::PushError::Full(_)| QueueFull)?;
+        if let Some(project) = replacement {
+            self.snapshot_project = project;
+        }
+        Ok(())
     }
     pub(crate) fn send_project_update(
         &mut self,
@@ -79,7 +89,6 @@ impl Audio {
             song_map,
         };
         self.send(command)?;
-        self.snapshot_project = next;
         Ok(())
     }
     pub fn available_commands(&self) -> usize {
@@ -284,6 +293,38 @@ impl Drop for Audio {
 mod tests {
     use super::*;
     use rtrb::RingBuffer;
+    use std::sync::Arc;
+
+    fn queue_only_audio(
+        project: &Project,
+        command_capacity: usize,
+    ) -> (Audio, Consumer<AudioCommand>) {
+        let status = Arc::new(AudioStatus::default());
+        let (recording_worker, _recording) =
+            super::super::recording::RecordingWorker::spawn(8_000, status.clone()).unwrap();
+        let (producer, commands) = RingBuffer::new(command_capacity);
+        let (retire_producer, retired) = RingBuffer::<Box<AudioProject>>::new(1);
+        drop(retire_producer);
+        let (error_producer, stream_errors) = RingBuffer::<StreamError>::new(1);
+        drop(error_producer);
+        (
+            Audio {
+                stream: None,
+                device_name: "test".into(),
+                status,
+                producer,
+                retired,
+                stream_errors,
+                log_path: PathBuf::new(),
+                sample_rate: 8_000,
+                recording_worker,
+                recording_state: super::super::RecordingState::Idle,
+                recording_path: None,
+                snapshot_project: AudioProject::from_project(project),
+            },
+            commands,
+        )
+    }
 
     #[test]
     fn finalization_wait_can_release_every_retirement_slot() {
@@ -297,5 +338,53 @@ mod tests {
         assert_eq!(producer.slots(), 0);
         reap_retired_queue(&mut retired);
         assert_eq!(producer.slots(), 32);
+    }
+
+    #[test]
+    fn full_snapshot_updates_the_incremental_cache_only_after_enqueue_succeeds() {
+        let initial = Project::new();
+        let mut loaded = initial.clone();
+        loaded.globals.tempo_bpm = 137;
+        loaded.patterns[0].tracks[1].steps[0] = Some(crate::model::StepEvent::Trigger {
+            accent: false,
+            recipe: Default::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: crate::model::Microtiming::ZERO,
+            locks: Default::default(),
+        });
+        let mut edited = loaded.clone();
+        edited.tracks[0].muted = true;
+
+        let (mut audio, mut commands) = queue_only_audio(&initial, 4);
+        audio.send(Audio::snapshot(&loaded)).unwrap();
+        audio
+            .send_project_update(
+                &edited,
+                &crate::reducer::EditImpact {
+                    tracks: 1,
+                    ..Default::default()
+                },
+                ParameterSmoothing::Default,
+                PatternIndexMap::identity(),
+                SongIndexMap::identity(),
+            )
+            .unwrap();
+        let _ = commands.pop().unwrap();
+        let AudioCommand::ReplaceProject { project, .. } = commands.pop().unwrap() else {
+            panic!("expected project replacement")
+        };
+        let expected = AudioProject::from_project(&edited);
+        assert_eq!(project.globals.tempo_bpm, expected.globals.tempo_bpm);
+        assert_eq!(project.patterns[0], expected.patterns[0]);
+        assert_eq!(project.tracks[0].muted, expected.tracks[0].muted);
+
+        let (mut full_audio, _commands) = queue_only_audio(&initial, 1);
+        full_audio.send(Audio::snapshot(&loaded)).unwrap();
+        assert!(full_audio.send(Audio::snapshot(&initial)).is_err());
+        assert_eq!(
+            full_audio.snapshot_project.globals.tempo_bpm,
+            loaded.globals.tempo_bpm
+        );
     }
 }
