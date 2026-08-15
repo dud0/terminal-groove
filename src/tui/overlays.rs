@@ -1,7 +1,8 @@
 use super::{
     render::{fader_segments, render_centered},
     state::{
-        App, ChordField, GeneratorDialog, LfoField, PatternPage, SidechainField, TriggerField,
+        App, ChordField, GeneratorDialog, LfoField, PatternPage, PresetAction, SidechainField,
+        TriggerField,
     },
 };
 use crate::{
@@ -1174,6 +1175,44 @@ pub(super) fn render_preset_browser(
         "Load track preset",
         "No presets for this track kind",
     );
+}
+
+pub(super) fn render_preset_dialog(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    track_name: &str,
+    selected: PresetAction,
+    has_default: bool,
+) {
+    let popup_area = compact_popup_rect(area, 48, 9);
+    f.render_widget(Clear, popup_area);
+    let block = Block::bordered()
+        .title(format!("Track presets · {track_name}"))
+        .title_bottom("[↑/↓] select  [Enter] continue  [Esc] close");
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    let lines = PresetAction::ALL
+        .into_iter()
+        .map(|action| {
+            let disabled = action == PresetAction::ClearDefault && !has_default;
+            let active = action == selected;
+            let marker = if active { "▶ " } else { "  " };
+            let suffix = if disabled { " (unavailable)" } else { "" };
+            let style = if disabled {
+                Style::default().fg(Color::DarkGray)
+            } else if active {
+                Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(
+                format!("{marker}{}{}", action.label(), suffix),
+                style,
+            ))
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_file_browser(

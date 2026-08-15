@@ -1,6 +1,9 @@
 use super::{
     controls::{GLOBAL_CONTROLS, global_control},
-    state::{App, FileAction, Mode, ParameterBank, PatternPage, SidechainField},
+    state::{
+        App, DefaultPresetAction, FileAction, Mode, ParameterBank, PatternPage, PresetAction,
+        SidechainField,
+    },
 };
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
@@ -121,6 +124,15 @@ pub(super) fn preset_browser_mode(track: usize, kind: TrackKind) -> Result<Mode>
         track,
         entries,
         selected: 0,
+    })
+}
+
+pub(super) fn preset_dialog_mode(a: &App, track: usize) -> Result<Mode> {
+    let path = default_preset_path(a.editor.project.tracks[track].kind)?;
+    Ok(Mode::PresetDialog {
+        track,
+        selected: PresetAction::SaveNamed,
+        has_default: path.try_exists()?,
     })
 }
 
@@ -435,6 +447,81 @@ pub(super) fn handle_preset_browser(a: &mut App, audio: &mut Audio, k: KeyEvent)
     }
 }
 
+pub(super) fn handle_preset_dialog(a: &mut App, k: KeyEvent) {
+    let Mode::PresetDialog {
+        track,
+        selected,
+        has_default,
+    } = a.mode.clone()
+    else {
+        return;
+    };
+    match k.code {
+        KeyCode::Esc => a.mode = Mode::Navigation,
+        KeyCode::Up | KeyCode::Down => {
+            let direction = if k.code == KeyCode::Up { -1 } else { 1 };
+            let next = next_preset_action(selected, has_default, direction);
+            a.mode = Mode::PresetDialog {
+                track,
+                selected: next,
+                has_default,
+            };
+        }
+        KeyCode::Enter => match selected {
+            PresetAction::SaveNamed => {
+                a.mode = Mode::PresetNameInput {
+                    track,
+                    input: String::new(),
+                };
+            }
+            PresetAction::SaveDefault => {
+                a.mode = Mode::DefaultPresetConfirm {
+                    track,
+                    action: DefaultPresetAction::Save,
+                };
+            }
+            PresetAction::Load => {
+                match preset_browser_mode(track, a.editor.project.tracks[track].kind) {
+                    Ok(mode) => a.mode = mode,
+                    Err(error) => enter_error(a, error.to_string()),
+                }
+            }
+            PresetAction::ClearDefault if has_default => {
+                a.mode = Mode::DefaultPresetConfirm {
+                    track,
+                    action: DefaultPresetAction::Clear,
+                };
+            }
+            PresetAction::ClearDefault => {}
+        },
+        _ => {}
+    }
+}
+
+pub(super) fn next_preset_action(
+    selected: PresetAction,
+    has_default: bool,
+    direction: i8,
+) -> PresetAction {
+    let current = PresetAction::ALL
+        .iter()
+        .position(|action| *action == selected)
+        .unwrap_or(0) as i8;
+    let last = PresetAction::ALL.len() as i8 - 1;
+    let mut index = current;
+    loop {
+        let next = (index + direction).clamp(0, last);
+        if next == index {
+            return selected;
+        }
+        let action = PresetAction::ALL[next as usize];
+        if action != PresetAction::ClearDefault || has_default {
+            return action;
+        }
+        index = next;
+    }
+}
+
 pub(super) fn handle_preset_name_input(a: &mut App, k: KeyEvent) {
     let Mode::PresetNameInput { track, mut input } = a.mode.clone() else {
         return;
@@ -478,26 +565,18 @@ pub(super) fn handle_preset_overwrite_confirm(a: &mut App, k: KeyEvent) {
     }
 }
 
-pub(super) fn default_preset_confirm_mode(a: &App, track: usize) -> Result<Mode> {
-    let path = default_preset_path(a.editor.project.tracks[track].kind)?;
-    Ok(Mode::DefaultPresetConfirm {
-        track,
-        has_default: path.try_exists()?,
-    })
-}
-
 pub(super) fn handle_default_preset_confirm(a: &mut App, k: KeyEvent) {
-    let Mode::DefaultPresetConfirm { track, has_default } = a.mode.clone() else {
+    let Mode::DefaultPresetConfirm { track, action } = a.mode.clone() else {
         return;
     };
     match k.code {
-        KeyCode::Enter | KeyCode::Char('s' | 'S') => {
+        KeyCode::Enter | KeyCode::Char('s' | 'S') if action == DefaultPresetAction::Save => {
             match default_preset_path(a.editor.project.tracks[track].kind) {
                 Ok(path) => save_default_preset(a, track, path),
                 Err(error) => enter_error(a, error.to_string()),
             }
         }
-        KeyCode::Char('d' | 'D') if has_default => {
+        KeyCode::Enter | KeyCode::Char('d' | 'D') if action == DefaultPresetAction::Clear => {
             match default_preset_path(a.editor.project.tracks[track].kind) {
                 Ok(path) => match fs::remove_file(&path) {
                     Ok(()) => {

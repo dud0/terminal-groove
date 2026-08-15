@@ -1099,6 +1099,8 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
     assert!(screen.contains("GLOBAL  t tempo"));
     assert!(screen.contains("m reverb return"));
     assert!(screen.contains("Ctrl+Shift+S save as"));
+    assert!(screen.contains("Ctrl+L track presets"));
+    assert!(!screen.contains("Ctrl+Shift+P/O/D presets"));
     assert!(screen.contains("o audition selected step"));
     assert!(screen.contains("[`/1–9/0] percent"));
     assert!(screen.contains("Backspace/Delete remove lock/LFO"));
@@ -2062,6 +2064,161 @@ fn preset_browser_and_save_dialog_render_their_local_controls() {
 }
 
 #[test]
+fn ctrl_l_is_limited_to_track_sequencer_and_parameter_modes() {
+    let shortcut = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    assert!(is_preset_dialog_shortcut(&Mode::Navigation, shortcut));
+    assert!(is_preset_dialog_shortcut(
+        &Mode::ParameterEdit(ParameterId::Level),
+        shortcut
+    ));
+    assert!(!is_preset_dialog_shortcut(
+        &Mode::LfoEdit {
+            parameter: ParameterId::Cutoff,
+            field: LfoField::Depth,
+        },
+        shortcut
+    ));
+    assert!(!is_preset_dialog_shortcut(
+        &Mode::ChordEdit {
+            shape: ChordShape::TriadRoot,
+        },
+        shortcut
+    ));
+    assert!(!is_preset_dialog_shortcut(
+        &Mode::TriggerEdit {
+            field: TriggerField::Chance,
+        },
+        shortcut
+    ));
+    assert!(!is_preset_dialog_shortcut(
+        &Mode::Navigation,
+        KeyEvent::new(
+            KeyCode::Char('L'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+        ),
+    ));
+
+    let mut app = App::new(Project::new(), None);
+    app.row = 1;
+    open_preset_dialog(&mut app);
+    assert!(matches!(app.mode, Mode::PresetDialog { track: 0, .. }));
+
+    app.mode = Mode::ParameterEdit(ParameterId::Level);
+    open_preset_dialog(&mut app);
+    assert!(matches!(app.mode, Mode::PresetDialog { track: 0, .. }));
+
+    app.mode = Mode::Navigation;
+    app.row = 0;
+    open_preset_dialog(&mut app);
+    assert_eq!(app.mode, Mode::Navigation);
+    assert_eq!(app.status, "Select a track to manage presets");
+}
+
+#[test]
+fn preset_dialog_selects_available_actions_and_transitions_to_existing_flows() {
+    let mut app = App::new(Project::new(), None);
+    app.mode = Mode::PresetDialog {
+        track: 0,
+        selected: PresetAction::SaveNamed,
+        has_default: false,
+    };
+    handle_preset_dialog(&mut app, KeyEvent::from(KeyCode::Down));
+    assert_eq!(
+        app.mode,
+        Mode::PresetDialog {
+            track: 0,
+            selected: PresetAction::SaveDefault,
+            has_default: false,
+        }
+    );
+    handle_preset_dialog(&mut app, KeyEvent::from(KeyCode::Down));
+    assert!(matches!(
+        app.mode,
+        Mode::PresetDialog {
+            selected: PresetAction::Load,
+            ..
+        }
+    ));
+    handle_preset_dialog(&mut app, KeyEvent::from(KeyCode::Down));
+    assert!(matches!(
+        app.mode,
+        Mode::PresetDialog {
+            selected: PresetAction::Load,
+            ..
+        }
+    ));
+
+    app.mode = Mode::PresetDialog {
+        track: 0,
+        selected: PresetAction::SaveNamed,
+        has_default: false,
+    };
+    handle_preset_dialog(&mut app, KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(app.mode, Mode::PresetNameInput { track: 0, .. }));
+
+    app.mode = Mode::PresetDialog {
+        track: 0,
+        selected: PresetAction::SaveDefault,
+        has_default: false,
+    };
+    handle_preset_dialog(&mut app, KeyEvent::from(KeyCode::Enter));
+    assert_eq!(
+        app.mode,
+        Mode::DefaultPresetConfirm {
+            track: 0,
+            action: DefaultPresetAction::Save,
+        }
+    );
+
+    app.mode = Mode::PresetDialog {
+        track: 0,
+        selected: PresetAction::Load,
+        has_default: false,
+    };
+    handle_preset_dialog(&mut app, KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(app.mode, Mode::PresetBrowser { track: 0, .. }));
+
+    app.mode = Mode::PresetDialog {
+        track: 0,
+        selected: PresetAction::ClearDefault,
+        has_default: true,
+    };
+    handle_preset_dialog(&mut app, KeyEvent::from(KeyCode::Enter));
+    assert_eq!(
+        app.mode,
+        Mode::DefaultPresetConfirm {
+            track: 0,
+            action: DefaultPresetAction::Clear,
+        }
+    );
+
+    app.mode = Mode::PresetDialog {
+        track: 0,
+        selected: PresetAction::SaveNamed,
+        has_default: false,
+    };
+    handle_preset_dialog(&mut app, KeyEvent::from(KeyCode::Esc));
+    assert_eq!(app.mode, Mode::Navigation);
+}
+
+#[test]
+fn preset_dialog_renders_disabled_clear_default_action() {
+    let mut app = App::new(Project::new(), None);
+    app.mode = Mode::PresetDialog {
+        track: 0,
+        selected: PresetAction::SaveNamed,
+        has_default: false,
+    };
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("Track presets · Kick"));
+    assert!(screen.contains("Save named"));
+    assert!(screen.contains("Save as default"));
+    assert!(screen.contains("Load preset"));
+    assert!(screen.contains("Clear default (unavailable)"));
+    assert!(screen.contains("[Enter] continue"));
+}
+
+#[test]
 fn preset_overwrite_confirmation_identifies_the_preset() {
     let mut app = App::new(Project::new(), None);
     app.mode = Mode::PresetOverwriteConfirm {
@@ -2094,16 +2251,23 @@ fn valid_default_presets_apply_only_to_new_project_track_settings() {
 }
 
 #[test]
-fn default_preset_dialog_exposes_set_and_clear_actions() {
+fn default_preset_confirmations_are_explicit() {
     let mut app = App::new(Project::new(), None);
     app.mode = Mode::DefaultPresetConfirm {
         track: 0,
-        has_default: true,
+        action: DefaultPresetAction::Save,
     };
     let screen = rendered(&app, 120, 34);
-    assert!(screen.contains("Track default preset"));
-    assert!(screen.contains("Set current [Enter/S]"));
-    assert!(screen.contains("Clear [D]"));
+    assert!(screen.contains("Set track default preset?"));
+    assert!(screen.contains("Set [Enter/S]"));
+
+    app.mode = Mode::DefaultPresetConfirm {
+        track: 0,
+        action: DefaultPresetAction::Clear,
+    };
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("Clear track default preset?"));
+    assert!(screen.contains("Clear [Enter/D]"));
 }
 
 #[test]

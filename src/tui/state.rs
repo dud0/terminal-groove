@@ -44,6 +44,11 @@ pub(crate) enum Mode {
         entries: Vec<PathBuf>,
         selected: usize,
     },
+    PresetDialog {
+        track: usize,
+        selected: PresetAction,
+        has_default: bool,
+    },
     FileInput(FileAction, String),
     PresetNameInput {
         track: usize,
@@ -60,13 +65,46 @@ pub(crate) enum Mode {
     },
     DefaultPresetConfirm {
         track: usize,
-        has_default: bool,
+        action: DefaultPresetAction,
     },
     OpenConfirm(PathBuf),
     NewConfirm,
     Error(String),
     Help,
     QuitConfirm,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PresetAction {
+    SaveNamed,
+    SaveDefault,
+    Load,
+    ClearDefault,
+}
+
+impl PresetAction {
+    pub(super) const ALL: [Self; 4] = [
+        Self::SaveNamed,
+        Self::SaveDefault,
+        Self::Load,
+        Self::ClearDefault,
+    ];
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::SaveNamed => "Save named",
+            Self::SaveDefault => "Save as default",
+            Self::Load => "Load preset",
+            Self::ClearDefault => "Clear default",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DefaultPresetAction {
+    Save,
+    Clear,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

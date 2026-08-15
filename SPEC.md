@@ -377,9 +377,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `Ctrl+S` | Save, prompting if no current path exists |
 | Anywhere | `Ctrl+Shift+S` | Save as |
 | Anywhere | `Ctrl+O` | Open project browser |
-| Track Sequencer/Parameter mode | `Ctrl+Shift+P` | Save the selected track's non-sequence settings as a named preset |
-| Track Sequencer/Parameter mode | `Ctrl+Shift+O` | Browse and load a preset for the selected track kind |
-| Track Sequencer/Parameter mode | `Ctrl+Shift+D` | Set or clear the selected track's default preset |
+| Track Sequencer/Parameter mode | `Ctrl+L` | Open the selected track's preset dialog |
 | Anywhere | `Ctrl+Q` | Quit, with dirty confirmation |
 | Sequencer/editor modes | `Ctrl+R` | Start or stop live WAV recording |
 | Anywhere | `Ctrl+Z` | Undo |
@@ -445,9 +443,10 @@ Track parameter shortcuts are resolved only in Parameter mode, while step, event
 
 - User presets live outside project files in `Terminal Groove/Presets/<track-kind>/` below the OS Music folder and use the `.preset.json` extension. They are versioned strict JSON files and are not part of a saved project.
 - A preset contains every persistent setting of one track: mixer, instrument, effects, LFO assignments, input defaults, mute, swing, and probability. It never contains patterns, steps, or parameter locks.
-- `Ctrl+Shift+P` opens a name editor for the selected track; existing preset names require an overwrite confirmation. Saving a preset does not alter the project or its dirty state.
-- `Ctrl+Shift+O` opens a same-kind preset browser. Loading replaces only the selected track's persistent settings, preserves all pattern data, is one undoable dirty project edit, synchronizes audio, and returns to Sequencer mode in `BASE` scope. Invalid, unsupported, or wrong-kind presets are rejected without changing the project.
-- Each track kind can have one reserved `Terminal Groove/Presets/<track-kind>/default.preset.json`. `Ctrl+Shift+D` opens a confirmation dialog to set the selected track's current settings as that default, or clear an existing default. Default changes never alter the current project.
+- `Ctrl+L` is available only in Sequencer or Parameter mode with a selected track. It opens a keyboard-driven preset dialog with `Save named`, `Save as default`, `Load preset`, and `Clear default` actions. Up/Down selects an available action, Enter continues, and Esc closes; `Clear default` remains visibly unavailable when that track kind has no default. On the global row, `Ctrl+L` reports that a track must be selected.
+- `Save named` opens a name editor for the selected track; existing preset names require an overwrite confirmation. Saving a preset does not alter the project or its dirty state.
+- `Load preset` opens a same-kind preset browser. Loading replaces only the selected track's persistent settings, preserves all pattern data, is one undoable dirty project edit, synchronizes audio, and returns to Sequencer mode in `BASE` scope. Invalid, unsupported, or wrong-kind presets are rejected without changing the project.
+- Each track kind can have one reserved `Terminal Groove/Presets/<track-kind>/default.preset.json`. `Save as default` and `Clear default` each require an explicit confirmation. Default changes never alter the current project.
 - New untitled projects load every valid same-kind default preset before audio starts; missing or invalid defaults fall back to built-in settings without blocking project creation.
 
 ### 5.4 Parameter mode
@@ -530,6 +529,7 @@ The current mode is always named on screen. Modes are:
 - Tempo numeric input
 - Track-length input
 - Project browser
+- Track preset dialog and preset browser
 - Project-name input
 - Save As overwrite confirmation
 - Open, new-project, and quit confirmations

@@ -1,8 +1,9 @@
 use super::overlays::{
     overwrite_destination, overwrite_popup_rect, popup, popup_at, probability_popup_rect,
     quit_popup_rect, render_chord_popup, render_generator_popup, render_lfo_popup,
-    render_lfo_selector, render_pattern_popup, render_preset_browser, render_project_browser,
-    render_sidechain_popup, render_trigger_popup, swing_popup_rect, tempo_popup_rect,
+    render_lfo_selector, render_pattern_popup, render_preset_browser, render_preset_dialog,
+    render_project_browser, render_sidechain_popup, render_trigger_popup, swing_popup_rect,
+    tempo_popup_rect,
 };
 use super::{
     controller::{
@@ -11,7 +12,7 @@ use super::{
     },
     controls::{GLOBAL_CONTROLS, global_control},
     input::parameter_supports_direct_percentage,
-    state::{App, Mode, ParameterBank},
+    state::{App, DefaultPresetAction, Mode, ParameterBank},
 };
 use crate::tui::DIRECT_PERCENTAGE_HINT;
 use crate::{
@@ -58,6 +59,7 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::TrackLengthInput(_) => "Track length input".into(),
         Mode::ProjectBrowser { .. } => "Project browser".into(),
         Mode::PresetBrowser { .. } => "Preset browser".into(),
+        Mode::PresetDialog { .. } => "Track preset dialog".into(),
         Mode::FileInput(_, _) => "Project-name input".into(),
         Mode::PresetNameInput { .. } => "Preset-name input".into(),
         Mode::OverwriteConfirm { .. } => "Overwrite confirmation".into(),
@@ -86,7 +88,7 @@ pub(super) fn help_available(mode: &Mode) -> bool {
 
 const HELP_TEXT: &str =
     "CORE  Space play/pause · . stop/reset · ? help · Esc close help
-      Ctrl+N new · Ctrl+O open · Ctrl+S save · Ctrl+Shift+S save as · Ctrl+Shift+P/O/D presets
+      Ctrl+N new · Ctrl+O open · Ctrl+S save · Ctrl+Shift+S save as · Ctrl+L track presets
       Ctrl+Q quit · Ctrl+R record WAV · Ctrl+Z undo · Ctrl+Y redo · Ctrl+C/X/V copy/cut/paste selected step
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
@@ -2574,6 +2576,17 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         Mode::PresetBrowser {
             entries, selected, ..
         } => render_preset_browser(f, area, entries, *selected),
+        Mode::PresetDialog {
+            track,
+            selected,
+            has_default,
+        } => render_preset_dialog(
+            f,
+            area,
+            &a.editor.project.tracks[*track].name,
+            *selected,
+            *has_default,
+        ),
         Mode::FileInput(_, input) => {
             let directory_path = project_directory().ok();
             let directory = directory_path
@@ -2645,19 +2658,24 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 &format!("{destination}\n\nOverwrite [Enter/O]  Cancel [Esc]"),
             )
         }
-        Mode::DefaultPresetConfirm { track, has_default } => {
+        Mode::DefaultPresetConfirm { track, action } => {
             let name = &a.editor.project.tracks[*track].name;
-            let action = if *has_default {
-                "Set current [Enter/S]  Clear [D]  Cancel [Esc]"
+            let (title, text) = if *action == DefaultPresetAction::Save {
+                (
+                    "Set track default preset?",
+                    format!(
+                        "Set {name} as the default for new projects only.\n\nSet [Enter/S]  Cancel [Esc]"
+                    ),
+                )
             } else {
-                "Set current [Enter/S]  Cancel [Esc]"
+                (
+                    "Clear track default preset?",
+                    format!(
+                        "Clear the {name} default used by new projects.\n\nClear [Enter/D]  Cancel [Esc]"
+                    ),
+                )
             };
-            popup(
-                f,
-                area,
-                "Track default preset",
-                &format!("{name} defaults apply to new projects only.\n\n{action}"),
-            )
+            popup(f, area, title, &text)
         }
         Mode::OpenConfirm(path) => popup(
             f,
