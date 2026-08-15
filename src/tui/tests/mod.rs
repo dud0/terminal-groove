@@ -2146,9 +2146,9 @@ fn preset_browser_and_save_dialog_render_their_local_controls() {
     let mut app = App::new(Project::new(), None);
     app.mode = Mode::PresetBrowser {
         track: 0,
-        entries: vec![PathBuf::from(
+        entries: vec![crate::tui::state::PresetBrowserEntry::User(PathBuf::from(
             "/Music/Terminal Groove/Presets/kick/punch.preset.json",
-        )],
+        ))],
         selected: 0,
     };
     let screen = rendered(&app, 120, 34);
@@ -2163,6 +2163,43 @@ fn preset_browser_and_save_dialog_render_their_local_controls() {
     assert!(screen.contains("Save track preset"));
     assert!(screen.contains("Track: Kick"));
     assert!(screen.contains("Enter confirms"));
+}
+
+#[test]
+fn preset_browser_groups_origins_and_describes_built_ins() {
+    use crate::tui::state::PresetBrowserEntry;
+    let mut app = App::new(Project::new(), None);
+    app.mode = Mode::PresetBrowser {
+        track: crate::model::CHORD_TRACK_INDEX,
+        entries: vec![
+            PresetBrowserEntry::BuiltIn {
+                id: "warm-poly".into(),
+                name: "Warm Poly".into(),
+                description: "Warm, balanced polyphonic chords".into(),
+            },
+            PresetBrowserEntry::User(PathBuf::from("Warm Poly.preset.json")),
+        ],
+        selected: 0,
+    };
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("Built-in"));
+    assert!(screen.contains("User"));
+    assert_eq!(screen.matches("Warm Poly").count(), 2);
+    assert!(screen.contains("Warm, balanced polyphonic chords"));
+}
+
+#[test]
+fn empty_user_only_preset_browser_keeps_its_origin_visible() {
+    let mut app = App::new(Project::new(), None);
+    app.mode = Mode::PresetBrowser {
+        track: 0,
+        entries: Vec::new(),
+        selected: 0,
+    };
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("User"));
+    assert!(screen.contains("No user presets"));
+    assert!(!screen.contains("Built-in"));
 }
 
 #[test]
@@ -2440,6 +2477,7 @@ fn preset_browser_lists_only_sorted_preset_files() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("zeta.preset.json"), b"preset").unwrap();
     std::fs::write(directory.path().join("alpha.preset.json"), b"preset").unwrap();
+    std::fs::write(directory.path().join("Beta.preset.json"), b"preset").unwrap();
     std::fs::write(directory.path().join("not-a-preset.json"), b"other").unwrap();
     std::fs::write(directory.path().join(DEFAULT_PRESET_NAME), b"default").unwrap();
     std::fs::write(
@@ -2454,7 +2492,7 @@ fn preset_browser_lists_only_sorted_preset_files() {
             .iter()
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
-        vec!["alpha.preset.json", "zeta.preset.json"]
+        vec!["alpha.preset.json", "Beta.preset.json", "zeta.preset.json"]
     );
 }
 

@@ -2,13 +2,13 @@ use super::{
     controls::{GLOBAL_CONTROLS, global_control},
     state::{
         App, DefaultPresetAction, FileAction, Mode, ParameterBank, PatternPage, PresetAction,
-        SidechainField,
+        PresetBrowserEntry, SidechainField,
     },
 };
 use crate::{
     audio::{Audio, AudioCommand, ParameterSmoothing},
     model::{DelayDivision, GlobalParameterId, Percent, Project, TRACK_COUNT, TrackKind},
-    persistence,
+    persistence, presets,
     reducer::Scope,
     storage,
 };
@@ -116,11 +116,29 @@ pub(super) fn list_presets(directory: &Path) -> io::Result<Vec<PathBuf>> {
                 .file_name()
                 .is_none_or(|name| name != DEFAULT_PRESET_NAME)
     });
+    entries.sort_by(|left, right| {
+        let left = left.file_name().unwrap_or_default().to_string_lossy();
+        let right = right.file_name().unwrap_or_default().to_string_lossy();
+        left.to_lowercase()
+            .cmp(&right.to_lowercase())
+            .then_with(|| left.cmp(&right))
+    });
     Ok(entries)
 }
 
 pub(super) fn preset_browser_mode(track: usize, kind: TrackKind) -> Result<Mode> {
-    let entries = list_presets(&preset_directory(kind)?)?;
+    let mut entries = presets::for_kind(kind)
+        .map(|preset| PresetBrowserEntry::BuiltIn {
+            id: preset.id.into(),
+            name: preset.name.into(),
+            description: preset.description.into(),
+        })
+        .collect::<Vec<_>>();
+    entries.extend(
+        list_presets(&preset_directory(kind)?)?
+            .into_iter()
+            .map(PresetBrowserEntry::User),
+    );
     Ok(Mode::PresetBrowser {
         track,
         entries,
@@ -432,8 +450,8 @@ pub(super) fn handle_preset_browser(a: &mut App, audio: &mut Audio, k: KeyEvent)
             }
         }
         KeyCode::Enter => {
-            if let Some(path) = entries.get(selected) {
-                load_preset(a, audio, track, path);
+            if let Some(entry) = entries.get(selected) {
+                load_preset_entry(a, audio, track, entry);
             } else {
                 a.status = format!("No {} presets found", a.editor.project.tracks[track].name);
             }
@@ -629,20 +647,28 @@ fn save_default_preset(a: &mut App, track: usize, path: PathBuf) {
     }
 }
 
-fn load_preset(a: &mut App, audio: &mut Audio, track: usize, path: &Path) {
-    let preset = match persistence::load_track_preset(path) {
-        Ok(preset) => preset,
-        Err(error) => {
-            enter_error(a, error.to_string());
-            return;
-        }
+fn load_preset_entry(a: &mut App, audio: &mut Audio, track: usize, entry: &PresetBrowserEntry) {
+    let (preset, label) = match entry {
+        PresetBrowserEntry::BuiltIn { id, name, .. } => match presets::find(id) {
+            Some(item) => (item.preset(), format!("built-in {name}")),
+            None => {
+                enter_error(a, "Built-in preset is unavailable");
+                return;
+            }
+        },
+        PresetBrowserEntry::User(path) => match persistence::load_track_preset(path) {
+            Ok(preset) => (preset, path.display().to_string()),
+            Err(error) => {
+                enter_error(a, error.to_string());
+                return;
+            }
+        },
     };
-    if preset.track.kind != a.editor.project.tracks[track].kind {
+    if preset.kind != a.editor.project.tracks[track].kind {
         enter_error(
             a,
             format!(
-                "Preset {} is incompatible with {}",
-                path.display(),
+                "Preset {label} is incompatible with {}",
                 a.editor.project.tracks[track].name
             ),
         );
@@ -653,13 +679,14 @@ fn load_preset(a: &mut App, audio: &mut Audio, track: usize, path: &Path) {
         return;
     }
     match a.editor.edit(None, |project, _| {
-        project.tracks[track] = preset.track;
-        Ok(())
+        preset
+            .apply_to_track(&mut project.tracks[track])
+            .map_err(|_| crate::reducer::EditError::InvalidParameter)
     }) {
         Ok(true) if sync_project(a, audio) => {
             a.scope = Scope::Base;
             a.mode = Mode::Navigation;
-            a.status = format!("Loaded preset {}", path.display());
+            a.status = format!("Loaded preset {label}");
         }
         Ok(false) => {
             a.scope = Scope::Base;
@@ -796,7 +823,11 @@ pub(super) fn apply_default_presets_in(project: &mut Project, directory: &Path) 
             Ok(true) => {}
         }
         match persistence::load_track_preset(&path) {
-            Ok(preset) if preset.track.kind == kind => project.tracks[index] = preset.track,
+            Ok(preset) if preset.kind == kind => {
+                if preset.apply_to_track(&mut project.tracks[index]).is_err() {
+                    ignored += 1;
+                }
+            }
             Ok(_) | Err(_) => ignored += 1,
         }
     }

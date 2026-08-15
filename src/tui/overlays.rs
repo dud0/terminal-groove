@@ -1370,17 +1370,127 @@ pub(super) fn render_project_browser(
 pub(super) fn render_preset_browser(
     f: &mut ratatui::Frame,
     area: Rect,
-    entries: &[PathBuf],
+    entries: &[super::state::PresetBrowserEntry],
     selected: usize,
 ) {
-    render_file_browser(
-        f,
-        area,
-        entries,
-        selected,
-        "Load track preset",
-        "No presets for this track kind",
+    use super::state::PresetBrowserEntry;
+    let popup_area = compact_popup_rect(area, 68, 24);
+    f.render_widget(Clear, popup_area);
+    let block = Block::bordered()
+        .title("Load track preset")
+        .title_bottom("[↑/↓] select  [Home/End] jump  [Enter] load  [Esc] close");
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+    if entries.is_empty() {
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::styled(
+                    "User",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Line::styled(
+                    "  No user presets for this track kind",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]),
+            inner,
+        );
+        return;
+    }
+    let mut lines = Vec::new();
+    let mut selected_line = 0;
+    let mut built = false;
+    let mut user = false;
+    for (index, entry) in entries.iter().enumerate() {
+        match entry {
+            PresetBrowserEntry::BuiltIn { name, .. } => {
+                if !built {
+                    lines.push(Line::styled(
+                        "Built-in",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    built = true;
+                }
+                if index == selected {
+                    selected_line = lines.len();
+                }
+                lines.push(Line::styled(
+                    format!("{} {name}", if index == selected { "▶" } else { " " }),
+                    if index == selected {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    },
+                ));
+            }
+            PresetBrowserEntry::User(path) => {
+                if !user {
+                    lines.push(Line::styled(
+                        "User",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    user = true;
+                }
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                if index == selected {
+                    selected_line = lines.len();
+                }
+                lines.push(Line::styled(
+                    format!("{} {name}", if index == selected { "▶" } else { " " }),
+                    if index == selected {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    },
+                ));
+            }
+        }
+    }
+    if !user {
+        lines.push(Line::styled(
+            "User",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.push(Line::styled(
+            "  No user presets",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    let description = match entries.get(selected) {
+        Some(PresetBrowserEntry::BuiltIn { description, .. }) => Some(description.as_str()),
+        _ => None,
+    };
+    let description_rows = u16::from(description.is_some()) * 2;
+    let list_height = inner.height.saturating_sub(description_rows).max(1);
+    let start = selected_line
+        .saturating_sub(usize::from(list_height) / 2)
+        .min(lines.len().saturating_sub(usize::from(list_height)));
+    f.render_widget(
+        Paragraph::new(lines).scroll((start as u16, 0)),
+        Rect {
+            height: list_height,
+            ..inner
+        },
     );
+    if let Some(description) = description {
+        f.render_widget(
+            Paragraph::new(Line::styled(description, Style::default().fg(Color::Gray)))
+                .wrap(Wrap { trim: true }),
+            Rect {
+                y: inner.y.saturating_add(list_height),
+                height: description_rows,
+                ..inner
+            },
+        );
+    }
 }
 
 pub(super) fn render_preset_dialog(

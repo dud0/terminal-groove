@@ -1,6 +1,10 @@
-use crate::model::{Project, Track};
-use serde::{Deserialize, Serialize};
+use crate::model::{Instrument, LfoAssignments, Percent, Project, Track, TrackEffects, TrackKind};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{Error as _, IgnoredAny, MapAccess, Visitor},
+};
 use std::{
+    fmt,
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
@@ -34,22 +38,172 @@ pub enum ProjectIoError {
     },
 }
 
-pub const PRESET_FORMAT_VERSION: u32 = 1;
+pub const PRESET_FORMAT_VERSION: u32 = 2;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TrackPreset {
     pub format_version: u32,
-    pub track: Track,
+    pub kind: TrackKind,
+    pub level: Percent,
+    pub pan: Percent,
+    pub delay_send: Percent,
+    pub reverb_send: Percent,
+    pub instrument: Instrument,
+    pub effects: TrackEffects,
+    pub lfos: LfoAssignments,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrackPresetWire {
+    format_version: u32,
+    kind: TrackKind,
+    level: Percent,
+    pan: Percent,
+    delay_send: Percent,
+    reverb_send: Percent,
+    instrument: Box<serde_json::value::RawValue>,
+    effects: TrackEffects,
+    lfos: LfoAssignments,
+}
+
+impl<'de> Deserialize<'de> for TrackPreset {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = TrackPresetWire::deserialize(deserializer)?;
+        let json = wire.instrument.get();
+        let instrument = match wire.kind {
+            TrackKind::Kick => {
+                Instrument::Kick(serde_json::from_str(json).map_err(D::Error::custom)?)
+            }
+            TrackKind::Snare => {
+                Instrument::Snare(serde_json::from_str(json).map_err(D::Error::custom)?)
+            }
+            TrackKind::Hat => {
+                Instrument::Hat(serde_json::from_str(json).map_err(D::Error::custom)?)
+            }
+            TrackKind::Tom => {
+                Instrument::Tom(serde_json::from_str(json).map_err(D::Error::custom)?)
+            }
+            TrackKind::Cymbal => {
+                Instrument::Cymbal(serde_json::from_str(json).map_err(D::Error::custom)?)
+            }
+            TrackKind::Rimshot => {
+                Instrument::Rimshot(serde_json::from_str(json).map_err(D::Error::custom)?)
+            }
+            TrackKind::Bass => {
+                Instrument::Bass(serde_json::from_str(json).map_err(D::Error::custom)?)
+            }
+            TrackKind::Chord => {
+                Instrument::Chord(serde_json::from_str(json).map_err(D::Error::custom)?)
+            }
+            TrackKind::Lead => {
+                Instrument::Lead(serde_json::from_str(json).map_err(D::Error::custom)?)
+            }
+            TrackKind::Fm => Instrument::Fm(serde_json::from_str(json).map_err(D::Error::custom)?),
+        };
+        Ok(Self {
+            format_version: wire.format_version,
+            kind: wire.kind,
+            level: wire.level,
+            pan: wire.pan,
+            delay_send: wire.delay_send,
+            reverb_send: wire.reverb_send,
+            instrument,
+            effects: wire.effects,
+            lfos: wire.lfos,
+        })
+    }
 }
 
 impl TrackPreset {
     pub fn from_track(track: Track) -> Self {
         Self {
             format_version: PRESET_FORMAT_VERSION,
-            track,
+            kind: track.kind,
+            level: track.level,
+            pan: track.pan,
+            delay_send: track.delay_send,
+            reverb_send: track.reverb_send,
+            instrument: track.instrument,
+            effects: track.effects,
+            lfos: track.lfos,
         }
     }
+
+    pub fn apply_to_track(&self, track: &mut Track) -> Result<(), String> {
+        if self.kind != track.kind || !instrument_matches(self.kind, self.instrument) {
+            return Err("preset kind or instrument is incompatible with track".into());
+        }
+        track.level = self.level;
+        track.pan = self.pan;
+        track.delay_send = self.delay_send;
+        track.reverb_send = self.reverb_send;
+        track.instrument = self.instrument;
+        track.effects = self.effects;
+        track.lfos = self.lfos;
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        validate_preset(self)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyTrackPreset {
+    #[serde(rename = "format_version")]
+    _format_version: u32,
+    track: Track,
+}
+
+struct PresetVersion(u32);
+
+impl<'de> Deserialize<'de> for PresetVersion {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct PresetVersionVisitor;
+        impl<'de> Visitor<'de> for PresetVersionVisitor {
+            type Value = PresetVersion;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a preset object containing format_version")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut version = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "format_version" {
+                        if version.is_some() {
+                            return Err(A::Error::duplicate_field("format_version"));
+                        }
+                        version = Some(map.next_value()?);
+                    } else {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+                version
+                    .map(PresetVersion)
+                    .ok_or_else(|| A::Error::missing_field("format_version"))
+            }
+        }
+        deserializer.deserialize_map(PresetVersionVisitor)
+    }
+}
+
+fn instrument_matches(kind: TrackKind, instrument: Instrument) -> bool {
+    matches!(
+        (kind, instrument),
+        (TrackKind::Kick, Instrument::Kick(_))
+            | (TrackKind::Snare, Instrument::Snare(_))
+            | (TrackKind::Hat, Instrument::Hat(_))
+            | (TrackKind::Tom, Instrument::Tom(_))
+            | (TrackKind::Cymbal, Instrument::Cymbal(_))
+            | (TrackKind::Rimshot, Instrument::Rimshot(_))
+            | (TrackKind::Bass, Instrument::Bass(_))
+            | (TrackKind::Chord, Instrument::Chord(_))
+            | (TrackKind::Lead, Instrument::Lead(_))
+            | (TrackKind::Fm, Instrument::Fm(_))
+    )
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -214,9 +368,9 @@ fn validate_preset(preset: &TrackPreset) -> Result<(), String> {
     let index = project
         .tracks
         .iter()
-        .position(|track| track.kind == preset.track.kind)
-        .ok_or_else(|| format!("unsupported track kind {:?}", preset.track.kind))?;
-    project.tracks[index] = preset.track.clone();
+        .position(|track| track.kind == preset.kind)
+        .ok_or_else(|| format!("unsupported track kind {:?}", preset.kind))?;
+    preset.apply_to_track(&mut project.tracks[index])?;
     project.validate().map_err(|error| error.to_string())
 }
 
@@ -225,11 +379,31 @@ pub fn load_track_preset(path: &Path) -> Result<TrackPreset, PresetIoError> {
         path: path.into(),
         source,
     })?;
-    let preset: TrackPreset =
+    let PresetVersion(version) =
         serde_json::from_slice(&bytes).map_err(|source| PresetIoError::Json {
             path: path.into(),
             source,
         })?;
+    let preset = match version {
+        1 => {
+            let legacy: LegacyTrackPreset =
+                serde_json::from_slice(&bytes).map_err(|source| PresetIoError::Json {
+                    path: path.into(),
+                    source,
+                })?;
+            TrackPreset::from_track(legacy.track)
+        }
+        2 => serde_json::from_slice(&bytes).map_err(|source| PresetIoError::Json {
+            path: path.into(),
+            source,
+        })?,
+        _ => {
+            return Err(PresetIoError::Validation {
+                path: path.into(),
+                message: format!("unsupported preset format version {version}"),
+            });
+        }
+    };
     validate_preset(&preset).map_err(|message| PresetIoError::Validation {
         path: path.into(),
         message,
@@ -307,6 +481,104 @@ mod tests {
 
         assert_eq!(load_track_preset(&path).unwrap(), preset);
         assert!(fs::read(&path).unwrap().ends_with(b"\n"));
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["format_version"], 2);
+        for excluded in [
+            "track",
+            "name",
+            "muted",
+            "swing",
+            "probability",
+            "input_degree",
+            "input_octave",
+            "input_accent",
+            "input_chord_shape",
+            "input_chord_arpeggio",
+            "patterns",
+            "steps",
+            "locks",
+        ] {
+            assert!(
+                value.get(excluded).is_none(),
+                "unexpected preset field {excluded}"
+            );
+        }
+    }
+
+    #[test]
+    fn rimshot_v2_preset_round_trips_as_rimshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rimshot.preset.json");
+        let preset = TrackPreset::from_track(
+            Project::new().tracks[crate::model::RIMSHOT_TRACK_INDEX].clone(),
+        );
+        save_track_preset_atomic(&path, &preset).unwrap();
+        let loaded = load_track_preset(&path).unwrap();
+        assert_eq!(loaded, preset);
+        assert!(matches!(loaded.instrument, Instrument::Rimshot(_)));
+    }
+
+    #[test]
+    fn preset_loading_rejects_duplicate_top_level_and_instrument_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("duplicate.preset.json");
+        let preset =
+            TrackPreset::from_track(Project::new().tracks[crate::model::CHORD_TRACK_INDEX].clone());
+        let json = serde_json::to_string(&preset).unwrap();
+        let level = format!("\"level\":{}", preset.level.get());
+        fs::write(
+            &path,
+            json.replacen(&level, &format!("{level},\"level\":1"), 1),
+        )
+        .unwrap();
+        assert!(matches!(
+            load_track_preset(&path),
+            Err(PresetIoError::Json { .. })
+        ));
+
+        let cutoff = match preset.instrument {
+            Instrument::Chord(parameters) => parameters.cutoff.get(),
+            _ => unreachable!(),
+        };
+        let cutoff = format!("\"cutoff\":{cutoff}");
+        fs::write(
+            &path,
+            json.replacen(&cutoff, &format!("{cutoff},\"cutoff\":1"), 1),
+        )
+        .unwrap();
+        assert!(matches!(
+            load_track_preset(&path),
+            Err(PresetIoError::Json { .. })
+        ));
+    }
+
+    #[test]
+    fn legacy_v1_normalizes_to_sound_only_and_preserves_non_sound_state_on_apply() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy.preset.json");
+        let mut source = Project::new().tracks[crate::model::CHORD_TRACK_INDEX].clone();
+        source.level = Percent::new(37).unwrap();
+        source.muted = true;
+        source.swing = Percent::new(41).unwrap();
+        source.input_degree = Some(7);
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({"format_version":1,"track":source})).unwrap(),
+        )
+        .unwrap();
+        let preset = load_track_preset(&path).unwrap();
+        assert_eq!(preset.format_version, 2);
+        let mut target = Project::new().tracks[crate::model::CHORD_TRACK_INDEX].clone();
+        target.muted = false;
+        target.swing = Percent::new(23).unwrap();
+        target.probability = Percent::new(61).unwrap();
+        target.input_degree = Some(3);
+        preset.apply_to_track(&mut target).unwrap();
+        assert_eq!(target.level, Percent::new(37).unwrap());
+        assert!(!target.muted);
+        assert_eq!(target.swing, Percent::new(23).unwrap());
+        assert_eq!(target.probability, Percent::new(61).unwrap());
+        assert_eq!(target.input_degree, Some(3));
     }
 
     #[test]
@@ -315,7 +587,7 @@ mod tests {
         let path = directory.path().join("invalid.preset.json");
         let preset = TrackPreset::from_track(Project::new().tracks[0].clone());
         let mut value = serde_json::to_value(&preset).unwrap();
-        value["format_version"] = 2.into();
+        value["format_version"] = 3.into();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
             load_track_preset(&path),
@@ -323,11 +595,11 @@ mod tests {
         ));
 
         let mut value = serde_json::to_value(&preset).unwrap();
-        value["track"]["name"] = "Not Kick".into();
+        value["kind"] = "lead".into();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
             load_track_preset(&path),
-            Err(PresetIoError::Validation { .. })
+            Err(PresetIoError::Json { .. })
         ));
     }
 
@@ -1008,14 +1280,14 @@ mod tests {
     }
 
     #[test]
-    fn fm_track_presets_keep_version_one_and_round_trip() {
+    fn fm_track_presets_write_version_two_and_round_trip() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("keys.preset.json");
         let project = Project::new();
         let preset = TrackPreset::from_track(project.tracks[crate::model::FM_TRACK_INDEX].clone());
         save_track_preset_atomic(&path, &preset).unwrap();
         assert_eq!(load_track_preset(&path).unwrap(), preset);
-        assert_eq!(preset.format_version, 1);
+        assert_eq!(preset.format_version, 2);
     }
 
     #[test]

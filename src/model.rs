@@ -1945,7 +1945,7 @@ struct TrackWire {
     swing: Percent,
     #[serde(default = "default_probability")]
     probability: Percent,
-    instrument: serde_json::Value,
+    instrument: Box<serde_json::value::RawValue>,
     #[serde(default)]
     effects: TrackEffects,
     lfos: LfoAssignments,
@@ -1966,34 +1966,34 @@ impl<'de> Deserialize<'de> for Track {
         let wire = TrackWire::deserialize(deserializer)?;
         let instrument = match wire.kind {
             TrackKind::Kick => Instrument::Kick(
-                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+                serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
             TrackKind::Snare => Instrument::Snare(
-                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+                serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
             TrackKind::Hat => Instrument::Hat(
-                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+                serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
             TrackKind::Tom => Instrument::Tom(
-                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+                serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
             TrackKind::Cymbal => Instrument::Cymbal(
-                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+                serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
             TrackKind::Rimshot => Instrument::Rimshot(
-                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+                serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
             TrackKind::Bass => Instrument::Bass(
-                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+                serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
             TrackKind::Chord => Instrument::Chord(
-                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+                serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
             TrackKind::Lead => Instrument::Lead(
-                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+                serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
             TrackKind::Fm => Instrument::Fm(
-                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+                serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
         };
         Ok(Self {

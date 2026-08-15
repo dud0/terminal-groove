@@ -4,6 +4,7 @@ mod engine;
 mod generator;
 pub mod model;
 pub mod persistence;
+pub mod presets;
 mod reducer;
 mod storage;
 pub mod tui;

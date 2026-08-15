@@ -18,7 +18,7 @@ hound = "3.5"
 ratatui = { version = "0.30", features = ["crossterm"] }
 rtrb = "0.3"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
 unicode-width = "0.2"
 

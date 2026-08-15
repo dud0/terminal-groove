@@ -46,7 +46,7 @@ pub(crate) enum Mode {
     },
     PresetBrowser {
         track: usize,
-        entries: Vec<PathBuf>,
+        entries: Vec<PresetBrowserEntry>,
         selected: usize,
     },
     PresetDialog {
@@ -77,6 +77,16 @@ pub(crate) enum Mode {
     Error(String),
     Help,
     QuitConfirm,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PresetBrowserEntry {
+    BuiltIn {
+        id: String,
+        name: String,
+        description: String,
+    },
+    User(PathBuf),
 }
 
 #[repr(u8)]
