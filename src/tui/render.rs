@@ -2239,7 +2239,15 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             };
             cells.push(ratatui::widgets::Cell::from(format!("{lane_marker} ")));
             cells.push(if line_index == 0 {
-                track_label(track).into()
+                let style = if a.row == ti + 1 {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ratatui::widgets::Cell::from(track_label(track)).style(style)
             } else {
                 "↳".into()
             });

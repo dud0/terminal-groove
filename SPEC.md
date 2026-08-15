@@ -511,7 +511,7 @@ Step cells use these textual forms:
 
 Bass and Lead notes with slide are underlined.
 
-The selected cell and currently playing cell have independent styling. The selected step is also marked with `▾` in the step header; active lanes are marked with `▶`, while mute, event type, and lock state remain text-visible. If selection and playback refer to the same cell, the combined style must still communicate both states. The grid emphasizes the first header of each four-step group, with the existing divider separating 16-step banks.
+The selected track's first-line title cell is highlighted with the same cyan background, black text, and bold styling as the selected step. The selected cell and currently playing cell have independent styling. The selected step is also marked with `▾` in the step header; active lanes are marked with `▶`, while mute, event type, and lock state remain text-visible. If selection and playback refer to the same cell, the combined style must still communicate both states. The grid emphasizes the first header of each four-step group, with the existing divider separating 16-step banks.
 
 Each pitched row includes its current input octave in the track label (for example, `Bass O3`).
 

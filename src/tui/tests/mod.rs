@@ -2560,6 +2560,41 @@ fn sixty_four_step_track_renders_as_two_compact_rows_without_shortcut_hints() {
 }
 
 #[test]
+fn selected_track_title_uses_the_selected_step_highlight() {
+    let mut app = App::new(Project::new(), None);
+    app.row = 1;
+
+    let backend = TestBackend::new(120, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+    let kick_title = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .expect("Kick track row should be visible");
+    assert!(kick_title[3..7].iter().all(|cell| cell.fg == Color::Black
+        && cell.bg == Color::Cyan
+        && cell.modifier.contains(Modifier::BOLD)));
+
+    app.row = 2;
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+    let kick_title = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .expect("Kick track row should be visible");
+    assert!(kick_title[3..7].iter().all(|cell| cell.bg != Color::Cyan));
+}
+
+#[test]
 fn main_layout_hides_non_parameter_shortcut_hints() {
     let mut app = App::new(Project::new(), None);
     app.row = 1;
