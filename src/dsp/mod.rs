@@ -1010,6 +1010,10 @@ impl TrackEffectChain {
             || self.flanger_active
     }
 
+    pub(crate) fn needs_processing(&self) -> bool {
+        self.processing
+    }
+
     fn read_delay(buffer: &[f32], write: usize, delay: f32) -> f32 {
         let mut position = write as f32 - delay;
         if position < 0.0 {
@@ -1989,6 +1993,7 @@ pub struct StereoChorus {
     fade_length: u32,
     active: bool,
     tail_remaining: usize,
+    bypassed: bool,
 }
 
 impl StereoChorus {
@@ -2005,11 +2010,15 @@ impl StereoChorus {
             fade_length: (sample_rate as f32 * 0.005).round().max(1.0) as u32,
             active: false,
             tail_remaining: 0,
+            bypassed: true,
         }
     }
 
     pub fn configure(&mut self, mode: u8) {
         let mode = mode.min(2);
+        if mode != 0 {
+            self.bypassed = false;
+        }
         if mode != self.mode {
             self.old_mode = self.mode;
             self.old_phase = self.phase;
@@ -2054,8 +2063,9 @@ impl StereoChorus {
 
     pub fn process_stereo(&mut self, left_input: f32, right_input: f32) -> (f32, f32) {
         if self.mode == 0 && self.fade_remaining == 0 {
-            self.active = false;
-            self.tail_remaining = 0;
+            if !self.bypassed {
+                self.clear();
+            }
             return (left_input, right_input);
         }
         let input_peak = safety(left_input).abs().max(safety(right_input).abs());
@@ -2102,6 +2112,7 @@ impl StereoChorus {
         self.fade_remaining = 0;
         self.active = false;
         self.tail_remaining = 0;
+        self.bypassed = self.mode == 0;
     }
 
     pub fn is_active(&self) -> bool {

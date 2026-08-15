@@ -1470,6 +1470,23 @@ mod tests {
     }
 
     #[test]
+    fn silent_voicing_groups_finish_pending_effect_smoothing() {
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&Project::new()), 8_000, status);
+        let mut enabled = TrackEffects::default();
+        enabled.distortion.mix = Percent::new(100).unwrap();
+        renderer.chord_effects[0].configure(enabled, ParameterLocks::default(), 0);
+        renderer.chord_effects[0].configure(TrackEffects::default(), ParameterLocks::default(), 8);
+
+        assert!(!renderer.chord_effects[0].is_active());
+        assert!(renderer.chord_effects[0].needs_processing());
+        for _ in 0..8 {
+            renderer.next();
+        }
+        assert!(!renderer.chord_effects[0].needs_processing());
+    }
+
+    #[test]
     fn active_drum_tail_still_advances_while_paused() {
         let status = Arc::new(AudioStatus::default());
         let mut renderer =

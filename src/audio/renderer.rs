@@ -69,7 +69,7 @@ fn render_voicing_groups(
         if all_idle {
             pool.group_voice_counts[group] = 0;
         }
-        if voice_count == 0 && !effect.is_active() {
+        if voice_count == 0 && !effect.needs_processing() {
             continue;
         }
         let control_voice = &mut pool.voices[start];

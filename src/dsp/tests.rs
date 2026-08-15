@@ -212,6 +212,24 @@ mod tests {
         assert_eq!(chorus.phase, 0.0);
         assert!(!chorus.is_active());
     }
+
+    #[test]
+    fn chorus_bypass_clears_buffer_before_reenable() {
+        let mut chorus = StereoChorus::new(1_000);
+        chorus.configure(1);
+        chorus.process(1.0);
+        assert!(chorus.buffer.iter().any(|sample| *sample != 0.0));
+
+        chorus.configure(0);
+        for _ in 0..=chorus.fade_length {
+            chorus.process(0.0);
+        }
+        assert!(chorus.buffer.iter().all(|sample| *sample == 0.0));
+
+        chorus.configure(1);
+        assert_eq!(chorus.process(0.0), (0.0, 0.0));
+    }
+
     #[test]
     fn nonfinite_safe() {
         assert_eq!(safety(f32::NAN), 0.0);
