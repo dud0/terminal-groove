@@ -115,7 +115,7 @@ PARAMETERS  v level · n pan · y delay send · b reverb send
            Tom recipes/Cymbal/Rimshot: u tune · t tone · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
            Chord/Lead: w mix · P pulse · u sub · O noise · c cutoff · R resonance · f filter · i pitch · ADSR
-           Chord: h chorus · e spread · FM: q algorithm · O operators · c brightness · i pitch · ADSR
+           Chord: h chorus · FM: q algorithm · O operators · c brightness · i pitch · ADSR
            FM operator: ←/→ select · Tab field · ↑/↓ edit · [/] algorithm
            Shift+L LFO · [`/-/1–9/0] percent · ↑/↓ adjust · ←/→ switch parameter
            Enter/Esc finish · Backspace/Delete remove lock/LFO
@@ -666,7 +666,7 @@ const BASS_PARAMETERS: [ParameterDescriptor; 9] = [
     },
 ];
 
-const CHORD_PARAMETERS: [ParameterDescriptor; 18] = [
+const CHORD_PARAMETERS: [ParameterDescriptor; 17] = [
     LEVEL_PARAMETER,
     DELAY_SEND_PARAMETER,
     REVERB_SEND_PARAMETER,
@@ -699,12 +699,6 @@ const CHORD_PARAMETERS: [ParameterDescriptor; 18] = [
         id: ParameterId::Chorus,
         label: "Chorus",
         shortcut: "h",
-        group: ParameterGroup::Instrument,
-    },
-    ParameterDescriptor {
-        id: ParameterId::Spread,
-        label: "Spread",
-        shortcut: "e",
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
@@ -1142,7 +1136,6 @@ pub(super) fn physical_parameter_readout(
         ParameterValue::Chorus(ChorusMode::Off) => "Off".into(),
         ParameterValue::Chorus(ChorusMode::I) => "Mode I".into(),
         ParameterValue::Chorus(ChorusMode::Ii) => "Mode II".into(),
-        ParameterValue::Spread(value) => value.to_string(),
         ParameterValue::LeadSubMode(value) => format!("{value:?}"),
         ParameterValue::FmAlgorithm(value) => format!("{value} · {}", value.diagram()),
         ParameterValue::FmRatio(value) => format!("{value}:1"),
@@ -1881,11 +1874,6 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             ParameterValue::Chorus(ChorusMode::Off) => "OFF".into(),
             ParameterValue::Chorus(ChorusMode::I) => "I".into(),
             ParameterValue::Chorus(ChorusMode::Ii) => "II".into(),
-            ParameterValue::Spread(value) => match value {
-                crate::model::ChordSpread::Off => "OFF".into(),
-                crate::model::ChordSpread::Narrow => "NAR".into(),
-                crate::model::ChordSpread::Wide => "WIDE".into(),
-            },
             ParameterValue::LeadSubMode(value) => format!("{value:?}"),
             ParameterValue::FmAlgorithm(value) => value.to_string(),
             ParameterValue::FmRatio(value) => format!("{value}:1"),
@@ -1964,14 +1952,6 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                         ChorusMode::Off => segment_count - 1,
                         ChorusMode::I => segment_count / 2,
                         ChorusMode::Ii => 0,
-                    };
-                    if segment == selected { "●" } else { "│" }
-                }
-                ParameterValue::Spread(mode) => {
-                    let selected = match mode {
-                        crate::model::ChordSpread::Off => segment_count - 1,
-                        crate::model::ChordSpread::Narrow => segment_count / 2,
-                        crate::model::ChordSpread::Wide => 0,
                     };
                     if segment == selected { "●" } else { "│" }
                 }

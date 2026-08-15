@@ -3,7 +3,7 @@ mod tests {
     use super::voices::{SynthTrigger, SynthVoiceKind};
     use super::*;
     use crate::model::{
-        ArpeggioRate, ArpeggioType, ChordShape, ChordSpread, DistortionParameters,
+        ArpeggioRate, ArpeggioType, ChordShape, DistortionParameters,
         FlangerParameters, LEAD_TRACK_INDEX, FM_TRACK_INDEX, FmAlgorithm, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
         ParameterValue, PhaserParameters, RIMSHOT_TRACK_INDEX, TrackEffects,
         Microtiming,
@@ -2586,12 +2586,7 @@ mod tests {
         }
     }
 
-        let mut project = Project::new();
-        let Instrument::Chord(parameters) = &mut project.tracks[CHORD_TRACK_INDEX].instrument
-        else {
-            panic!("expected Chord instrument");
-        };
-        parameters.spread = ChordSpread::Wide;
+        let project = Project::new();
         let project = AudioProject::from_project(&project);
         let mut pool = ChordVoicePool::new(48_000);
 
@@ -2675,6 +2670,100 @@ mod tests {
             assert_eq!(voice.kind, SynthVoiceKind::Fm);
             let expected = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
             assert!((voice.freq.next_value() - expected).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn fixed_voicing_spread_survives_ties_refreshes_previews_and_release_tails() {
+        fn pans(pool: &mut ChordVoicePool) -> [f32; 4] {
+            let start = pool.group * CHORD_GROUP_SIZE;
+            std::array::from_fn(|index| pool.voices[start + index].pan.value())
+        }
+
+        fn assert_pans(actual: [f32; 4], expected: [f32; 4]) {
+            for (actual, expected) in actual.into_iter().zip(expected) {
+                assert!((actual - expected).abs() < 0.001, "{actual} != {expected}");
+            }
+        }
+
+        for track in [CHORD_TRACK_INDEX, FM_TRACK_INDEX] {
+            let mut project = Project::new();
+            project.patterns[0].tracks[track].steps[0] = Some(StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                chord_shape: Some(ChordShape::SeventhRoot),
+                arpeggio: Default::default(),
+                condition: Default::default(),
+                retrigger_count: 1,
+                microtiming: Microtiming::ZERO,
+                locks: Default::default(),
+            });
+            project.patterns[0].tracks[track].steps[1] = Some(StepEvent::Tie {
+                locks: Default::default(),
+            });
+            let status = Arc::new(AudioStatus::default());
+            let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+            renderer.process_track_action(track, 0, false, true);
+            renderer.audition_once(track, 0);
+
+            let initial = [0.0, 33.3333, 66.6667, 100.0];
+            if track == CHORD_TRACK_INDEX {
+                assert_pans(pans(&mut renderer.chord), initial);
+                assert_pans(pans(&mut renderer.preview_chord), initial);
+            } else {
+                assert_pans(pans(&mut renderer.fm_chord), initial);
+                assert_pans(pans(&mut renderer.preview_fm_chord), initial);
+            }
+
+            renderer.process_track_action(track, 1, false, true);
+            let smoothing = ParameterSmoothing::Default.samples(renderer.sr);
+            {
+                let (live, preview) = if track == CHORD_TRACK_INDEX {
+                    (&mut renderer.chord, &mut renderer.preview_chord)
+                } else {
+                    (&mut renderer.fm_chord, &mut renderer.preview_fm_chord)
+                };
+                for _ in 0..smoothing {
+                    for pool in [&mut *live, &mut *preview] {
+                        let start = pool.group * CHORD_GROUP_SIZE;
+                        for voice in &mut pool.voices[start..start + 4] {
+                            voice.pan.next_value();
+                        }
+                    }
+                }
+                assert_pans(pans(live), initial);
+            }
+
+            renderer.project.tracks[track].pan = Percent::new(70).unwrap();
+            renderer.refresh_active_parameters(0);
+            let shifted = [20.0, 53.3333, 86.6667, 100.0];
+            {
+                let (live, preview) = if track == CHORD_TRACK_INDEX {
+                    (&mut renderer.chord, &mut renderer.preview_chord)
+                } else {
+                    (&mut renderer.fm_chord, &mut renderer.preview_fm_chord)
+                };
+                assert_pans(pans(live), shifted);
+                assert_pans(pans(preview), shifted);
+                for pool in [live, preview] {
+                    let start = pool.group * CHORD_GROUP_SIZE;
+                    for voice in &mut pool.voices[start..start + 4] {
+                        voice.gate_off();
+                        voice.active = false;
+                    }
+                }
+            }
+            renderer.project.tracks[track].pan = Percent::new(40).unwrap();
+            renderer.refresh_active_parameters(0);
+            let released = [0.0, 23.3333, 56.6667, 90.0];
+            if track == CHORD_TRACK_INDEX {
+                assert_pans(pans(&mut renderer.chord), released);
+                assert_pans(pans(&mut renderer.preview_chord), released);
+            } else {
+                assert_pans(pans(&mut renderer.fm_chord), released);
+                assert_pans(pans(&mut renderer.preview_fm_chord), released);
+            }
         }
     }
 

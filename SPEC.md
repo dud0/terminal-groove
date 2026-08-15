@@ -126,7 +126,7 @@ Pressing a degree key replaces any existing event on the selected step with that
 Every track has base parameter values. A step may contain a sparse set of parameter locks that overlay those values for that step only.
 
 - Locks are permitted only on a drum trigger, synth note, or synth tie.
-- Instrument parameters, waveform, pan, level, delay send, reverb send, distortion, and phaser parameters are lockable. Chord spread is also lockable on Chord steps. Effects are not LFO destinations.
+- Instrument parameters, waveform, pan, level, delay send, reverb send, distortion, and phaser parameters are lockable. Effects are not LFO destinations.
 - Mute is never lockable.
 - At each boundary, the engine resolves the referenced Hi-hat or Tom recipe, then overlays the current step's locks.
 - A track LFO then applies its bipolar offset around that effective base-or-lock value and clamps the result to 0–100%.
@@ -162,7 +162,7 @@ All continuous DSP parameters use short smoothing ramps. A default ramp of appro
 
 ### 3.2 Per-parameter LFOs
 
-Each track may attach one independent LFO to each eligible continuous instrument parameter, track level, and pan. Chord, Lead, and FM additionally support the LFO-only `pitch` destination. Waveform, FM algorithm and operator ratios, mute, delay send, reverb send, accent, slide, Chord spread, Chord/Lead Noise, Lead Keyboard Tracking, and global parameters are not eligible. FM operator levels and feedback amounts are eligible.
+Each track may attach one independent LFO to each eligible continuous instrument parameter, track level, and pan. Chord, Lead, and FM additionally support the LFO-only `pitch` destination. Waveform, FM algorithm and operator ratios, mute, delay send, reverb send, accent, slide, Chord/Lead Noise, Lead Keyboard Tracking, and global parameters are not eligible. FM operator levels and feedback amounts are eligible.
 
 Each assignment stores enabled state, waveform, trigger-reset state, starting phase, rate, and depth. Starting phase is a 0–100% cycle position; 0% and 100% are equivalent. Waveforms are sine, triangle, square, rising saw, and deterministic sample-and-hold. At 0%, sine and triangle begin at the center and rise, square begins high, saw begins at -1 and rises, and sample-and-hold selects one deterministic pseudorandom bipolar value per cycle.
 
@@ -258,7 +258,8 @@ The Bass, Chord, and Lead filters apply resonance within their feedback loops wi
 - `attack`, `decay`, `sustain`, and `release`; Chord uses approximately 1 ms–3 s attack and 2 ms–12 s decay/release, while Lead uses 1.5 ms–4 s and 2 ms–10 s respectively.
 
 Chord additionally has a stereo `chorus` selector with Off, I, and II modes. Mode I uses approximately 15 ms base delay, 1.5 ms modulation depth, and 0.5 Hz; mode II uses 12 ms, 2.5 ms, and 0.8 Hz. Mode changes crossfade over approximately 5 ms. Overlapping Chord groups keep independent chorus state while following the current shared Chord controls. Chorus precedes post-fader stereo sends.
-Chord also has a `spread` selector: Off keeps every voice at the track pan, Narrow uses half stereo width, and Wide uses full width. One voice stays centered, two voices are placed left/right, three voices left/center/right, and four voices left/inner-left/inner-right/right in stored voice order; positions are centered around track pan and clamped at the boundaries. Spread is captured for each chord voice group so release tails retain their layout, is lockable per step, and is not LFO-modulatable. Chorus preserves stereo voice input while remaining centered when spread is Off.
+
+Chord and FM use the same fixed full-width stereo placement around effective track pan. One voice stays centered; two voices use offsets `-50/+50`; three use `-50/0/+50`; and four use `-50/-16.6667/+16.6667/+50` percentage points in stored voice order. Final positions clamp to 0–100. Each pooled voice retains its offset through ties, parameter refreshes, preview, arpeggio changes, and release tails; base Pan, Pan locks, and Pan LFO modulation move the resulting layout without collapsing it. Spread is not a parameter or lock.
 
 The Chord and FM arpeggiators can be enabled with Up, Down, Up-Down, Down-Up, or Random ordering at `1/32`, `1/16T`, `1/16`, `1/8T`, `1/8`, `1/4T`, or `1/4`. Up-Down and Down-Up omit repeated endpoints, including for two-note shapes. A single-note shape retriggers that note at every arpeggio interval. Random uses deterministic shuffled no-repeat cycles, and each arpeggiated tone retains its original voice-position stereo placement.
 
@@ -280,7 +281,7 @@ The ordered algorithms are: A1 `4→3→2→1`, output 1; A2 `4→3`, then `3→
 
 Each voice renders all operators at 4x oversampling, averages the four subsamples, passes the sum through a fixed-Q low-pass whose Brightness maps exponentially from 200 Hz to the lower of 20 kHz or 45% of sample rate, applies bounded soft saturation, and then applies the shared Generic ADSR. Operator frequencies, phase, feedback history, and non-finite state are bounded or sanitized. New notes retrigger every tone click-safely; ties preserve every operator phase and gate while accepting inherited or new locks; empty or rejected notes release the complete voicing. FM supports accents, ties, conditions, retriggers, microtiming, probability, voicing shapes, and arpeggiation, but never slide.
 
-FM chord tones always use the full-width placement around track pan: one tone is centered; two are left/right; three are left/center/right; and four use outer-left/inner-left/inner-right/outer-right positions. Placement clamps at the stereo boundaries and is not exposed as a parameter or lock.
+FM chord tones use the shared fixed placement described above.
 
 The main controls are Algorithm (`q`), four operator summaries/editor (`O`), Brightness (`c`), Pitch LFO (`i`), and ADSR (`a/d/s/r`). Algorithm and every operator Ratio are lockable selectors. Operator Level and Feedback, Brightness, and ADSR are lockable LFO destinations; Pitch is LFO-only. Defaults are A1; OP1 ratio 1/Level 100%/Feedback 0%; OP2 ratio 2/Level 35%/Feedback 8%; OP3 and OP4 ratio 1/Level 0%/Feedback 0%; Brightness 72%; ADSR 0/55/55/40%; input octave 3; level 80%; center pan; and 20% reverb send.
 
@@ -436,7 +437,6 @@ The application uses ordinary portable terminal press events. It must not requir
 | Parameter mode Chord/Lead | `c` / `R` / `f` | Edit cutoff, resonance, or filter-envelope amount |
 | Parameter mode Chord/Lead | `a` / `d` / `s` / `r` | Edit ADSR |
 | Parameter mode Chord | `h` | Edit chorus Off/I/II mode |
-| Parameter mode Chord | `e` | Edit spread Off/Narrow/Wide |
 | Parameter mode Chord/Lead | `i` | Select the LFO-only pitch card |
 | Parameter mode FM | `q/O/c` | Edit the algorithm, open the four-operator editor, or edit Brightness |
 | Parameter mode FM | `i/a/d/s/r` | Select Pitch LFO or edit the shared ADSR |
@@ -457,7 +457,7 @@ Track parameter shortcuts are resolved only in Parameter mode, while step, event
 ### 5.3 Track presets
 
 - User presets live outside project files in `Terminal Groove/Presets/<track-kind>/` below the OS Music folder and use the `.preset.json` extension. They are versioned strict JSON files and are not part of a saved project.
-- Preset format v2 contains only sound data: `format_version`, `kind`, `level`, `pan`, `delay_send`, `reverb_send`, `instrument`, `effects`, and `lfos`. It excludes the track name, mute, swing, probability, note-input defaults, voicing input shape/arpeggio, patterns, steps, and parameter locks. Format-v1 `{ format_version, track }` presets remain loadable; only their sound fields are extracted in memory. New named and default presets are always written as strict v2 JSON.
+- Preset format v3 contains only sound data: `format_version`, `kind`, `level`, `pan`, `delay_send`, `reverb_send`, `instrument`, `effects`, and `lfos`. It excludes the track name, mute, swing, probability, note-input defaults, voicing input shape/arpeggio, patterns, steps, and parameter locks. Format-v1 `{ format_version, track }` and v2 presets remain loadable; their legacy Chord spread value is discarded and only their sound fields are extracted in memory. New named and default presets are always written as strict v3 JSON.
 - `Ctrl+L` is available only in Sequencer or Parameter mode with a selected track. It opens a keyboard-driven preset dialog with `Save named`, `Save as default`, `Load preset`, and `Clear default` actions. Up/Down selects an available action, Enter continues, and Esc closes; `Clear default` remains visibly unavailable when that track kind has no default. On the global row, `Ctrl+L` reports that a track must be selected.
 - `Save named` opens a name editor for the selected track; existing preset names require an overwrite confirmation. Saving a preset does not alter the project or its dirty state.
 - `Load preset` opens a same-kind preset browser. Chord, Lead, and FM browsers contain immutable compiled-in `Built-in` entries in catalog order followed by case-insensitively sorted `User` entries; the section labels are not selectable and keep colliding names visibly distinct. The selected built-in shows a short description. Other track kinds show the User section only. Reserved `default.preset.json` files remain hidden. Loading replaces only the selected track's sound data, preserving track identity, mute, swing, probability, note-input defaults, and every pattern, step, and lock. It is one undoable dirty project edit, synchronizes audio, and returns to Sequencer mode in `BASE` scope. Invalid, unsupported, or wrong-kind presets are rejected without changing the project. Built-ins do not audition while browsing and cannot be overwritten or deleted.
@@ -577,7 +577,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`. TUI Save As appends this extension to bare names and does not duplicate it when already present; explicit CLI project paths are used literally.
-- Version 23 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs/recipes, invalid tie graphs, and song references outside the dynamic pattern list. Canonical nine-track v21 files are upgraded by appending the built-in FM track and one empty 16-step FM sequence to every pattern; v21 and v22 then migrate to v23. Saves emit v23 only; version 20 and earlier, missing versions, malformed v21 layouts, and unknown future versions are rejected.
+- Version 24 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs/recipes, invalid tie graphs, and song references outside the dynamic pattern list. Canonical nine-track v21 files are upgraded by appending the built-in FM track and one empty 16-step FM sequence to every pattern; v22 adds contextual Chord/FM shape defaults; and v21–v23 discard the removed Chord spread base value and step locks. Saves emit v24 only; version 20 and earlier, missing versions, malformed v21 layouts, and unknown future versions are rejected.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -587,7 +587,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 23,
+  "format_version": 24,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -642,7 +642,7 @@ The top-level object is:
 
 Top-level tracks contain shared configuration only. Sequence data is stored under `patterns[].tracks[].steps`; each pattern track contains 1 through 64 steps, and its array length is the track length.
 
-Hi-hat stores recipe-1 `tune` and `decay` plus a required `open` object with the same fields. Tom stores recipe-1 `tune`, `tone`, and `decay` plus required `medium` and `high` objects with the same fields. Cymbal and Rimshot each store `tune`, `tone`, and `decay`. Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `noise`, `chorus`, `spread`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. `spread` accepts `off`, `narrow`, or `wide`. Lead stores `oscillator_mix`, `pulse_width`, `sub_oscillator`, `noise`, `sub_mode`, `keyboard_tracking`, `portamento_time`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`; `sub_mode` accepts `one_octave_square`, `two_octave_square`, or `two_octave_narrow_pulse`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`. FM stores `algorithm`, an exact four-element `operators` array, `brightness`, `attack`, `decay`, `sustain`, and `release`. Algorithms are `cascade`, `split_stack`, `converge`, `pairs`, `fan_in`, `fan_out`, `mixed`, and `additive`. Every operator stores `ratio`, `level`, and `feedback`; ratios are `0.5`, `1`, `1.5`, `2`, `3`, `4`, `5`, `6`, or `8` and percentage fields are 0–100.
+Hi-hat stores recipe-1 `tune` and `decay` plus a required `open` object with the same fields. Tom stores recipe-1 `tune`, `tone`, and `decay` plus required `medium` and `high` objects with the same fields. Cymbal and Rimshot each store `tune`, `tone`, and `decay`. Chord instruments store `oscillator_mix`, `pulse_width`, `sub_oscillator`, `noise`, `chorus`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`. Lead stores `oscillator_mix`, `pulse_width`, `sub_oscillator`, `noise`, `sub_mode`, `keyboard_tracking`, `portamento_time`, `cutoff`, `resonance`, `filter_envelope`, `attack`, `decay`, `sustain`, and `release`; `sub_mode` accepts `one_octave_square`, `two_octave_square`, or `two_octave_narrow_pulse`. Bass retains `waveform`, `cutoff`, `resonance`, `filter_envelope`, and `decay`. FM stores `algorithm`, an exact four-element `operators` array, `brightness`, `attack`, `decay`, `sustain`, and `release`. Algorithms are `cascade`, `split_stack`, `converge`, `pairs`, `fan_in`, `fan_out`, `mixed`, and `additive`. Every operator stores `ratio`, `level`, and `feedback`; ratios are `0.5`, `1`, `1.5`, `2`, `3`, `4`, `5`, `6`, or `8` and percentage fields are 0–100.
 
 An empty step is JSON `null`. Populated steps use tagged `trigger`, `bass_note`, `note`, `lead_note`, or `tie` objects with a required `locks` object. `accent` is required and Boolean on triggers and notes; `slide` is additionally required on `bass_note` and `lead_note`; both are invalid on ties. Hi-hat triggers accept recipe 1–2 and Tom triggers 1–3; recipe 1 is omitted, while recipes are invalid on other tracks.
 
@@ -650,7 +650,7 @@ Chord and FM notes may include an optional `chord_shape` string and arpeggio. An
 
 For example, a Chord note may contain `degree`, `octave`, `accent`, `chord_shape`, `arpeggio`, and `locks`; a tie contains only `locks`.
 
-The `locks` object is always present on populated steps and contains only overridden values. FM adds `fm_algorithm` and `fm_op1_ratio`/`fm_op1_level`/`fm_op1_feedback` through the corresponding `fm_op4_*` keys; `brightness`, shared ADSR, mixer, and effect locks also apply. `pitch` is not a lock key. Voicing articulation, `mute`, `accent`, and `slide` are invalid in a lock object.
+The `locks` object is always present on populated steps and contains only overridden values. FM adds `fm_algorithm` and `fm_op1_ratio`/`fm_op1_level`/`fm_op1_feedback` through the corresponding `fm_op4_*` keys; `brightness`, shared ADSR, mixer, and effect locks also apply. `pitch` and `spread` are not lock keys. Voicing articulation, `mute`, `accent`, and `slide` are invalid in a lock object.
 
 An empty LFO collection is `{}`. Assignment keys are compatible continuous instrument parameters plus `level`; Chord, Lead, and FM may additionally use the LFO-only `pitch` key. FM operator Level and Feedback keys, Brightness, and ADSR are eligible, while Algorithm and operator Ratio are not. Incompatible assignments are rejected. A synchronized assignment is:
 
@@ -798,7 +798,7 @@ Cover musical degree/frequency mapping, input limits, tie creation/resolution/cl
 
 ### 12.2 Persistence tests
 
-Round-trip default and populated version-23 projects, including Chord/FM voicings, four-operator FM algorithms/operators, drum recipes, Rimshot, sidechain, track probability, microtiming at both bounds and zero, every event, lock, LFO, effect, flanger setting, and articulation variant. Migrate canonical released version-21 projects by adding the default four-operator FM track, and migrate v22 with contextual Chord/FM shape defaults. Reject the unreleased two-operator version-22 FM shape, version 20 and other unsupported versions, incompatible recipes, Noise and Keyboard Tracking LFO assignments, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences. Preserve the active project on load failure and verify atomic-save failure behavior, dirty-state updates, history reset on load, and exact same-kind step clipboard behavior.
+Round-trip default and populated version-24 projects, including Chord/FM voicings, four-operator FM algorithms/operators, drum recipes, Rimshot, sidechain, track probability, microtiming at both bounds and zero, every event, lock, LFO, effect, flanger setting, and articulation variant. Migrate canonical released version-21 projects by adding the default four-operator FM track, migrate v22 with contextual Chord/FM shape defaults, and discard legacy Chord spread values and locks from v21–v23 projects and v1/v2 presets. Reject the unreleased two-operator version-22 FM shape, version 20 and other unsupported versions, incompatible recipes, Noise and Keyboard Tracking LFO assignments, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences. Preserve the active project on load failure and verify atomic-save failure behavior, dirty-state updates, history reset on load, and exact same-kind step clipboard behavior.
 
 ### 12.3 TUI tests
 

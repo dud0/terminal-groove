@@ -906,40 +906,6 @@ impl TrackKind {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ChordSpread {
-    #[default]
-    Off,
-    Narrow,
-    Wide,
-}
-
-impl ChordSpread {
-    pub const ALL: [Self; 3] = [Self::Off, Self::Narrow, Self::Wide];
-    pub const fn percent(self) -> Percent {
-        match self {
-            Self::Off => Percent::ZERO,
-            Self::Narrow => Percent(50),
-            Self::Wide => Percent(100),
-        }
-    }
-}
-
-impl fmt::Display for ChordSpread {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::Off => "Off",
-                Self::Narrow => "Narrow",
-                Self::Wide => "Wide",
-            }
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ChordShape {
     Single,
     DyadThird,
@@ -1207,8 +1173,6 @@ pub struct ChordParameters {
     pub sub_oscillator: Percent,
     pub noise: Percent,
     pub chorus: ChorusMode,
-    #[serde(default)]
-    pub spread: ChordSpread,
     pub cutoff: Percent,
     pub resonance: Percent,
     pub filter_envelope: Percent,
@@ -1464,13 +1428,6 @@ impl ParameterLocks {
         }
     }
 
-    pub fn spread(&self) -> Option<ChordSpread> {
-        match self.get(ParameterId::Spread) {
-            Some(ParameterValue::Spread(value)) => Some(value),
-            _ => None,
-        }
-    }
-
     pub fn lead_sub_mode(&self) -> Option<LeadSubMode> {
         match self.get(ParameterId::LeadSubMode) {
             Some(ParameterValue::LeadSubMode(value)) => Some(value),
@@ -1536,9 +1493,6 @@ impl Serialize for ParameterLocks {
                     ParameterValue::Chorus(value) => {
                         map.serialize_entry(parameter.name(), &value)?
                     }
-                    ParameterValue::Spread(value) => {
-                        map.serialize_entry(parameter.name(), &value)?
-                    }
                     ParameterValue::LeadSubMode(value) => {
                         map.serialize_entry(parameter.name(), &value)?
                     }
@@ -1585,9 +1539,6 @@ impl<'de> Visitor<'de> for ParameterLocksVisitor {
                 ParameterValueKind::Chorus => map
                     .next_value::<Option<ChorusMode>>()?
                     .map(ParameterValue::Chorus),
-                ParameterValueKind::Spread => map
-                    .next_value::<Option<ChordSpread>>()?
-                    .map(ParameterValue::Spread),
                 ParameterValueKind::LeadSubMode => map
                     .next_value::<Option<LeadSubMode>>()?
                     .map(ParameterValue::LeadSubMode),
@@ -2128,7 +2079,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 23,
+            format_version: 24,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -2218,7 +2169,6 @@ impl Project {
                         sub_oscillator: p(0),
                         noise: p(0),
                         chorus: ChorusMode::I,
-                        spread: ChordSpread::Off,
                         cutoff: p(55),
                         resonance: p(15),
                         filter_envelope: p(25),
@@ -2305,7 +2255,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 23 {
+        if self.format_version != 24 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -2629,7 +2579,6 @@ pub enum ParameterId {
     KeyboardTracking,
     PortamentoTime,
     Chorus,
-    Spread,
     Cutoff,
     Resonance,
     FilterEnvelope,
@@ -2666,7 +2615,6 @@ pub enum ParameterValue {
     Percent(Percent),
     Waveform(Waveform),
     Chorus(ChorusMode),
-    Spread(ChordSpread),
     LeadSubMode(LeadSubMode),
     FmAlgorithm(FmAlgorithm),
     FmRatio(FmRatio),
@@ -2677,14 +2625,13 @@ pub enum ParameterValueKind {
     Percent,
     Waveform,
     Chorus,
-    Spread,
     LeadSubMode,
     FmAlgorithm,
     FmRatio,
 }
 
 impl ParameterId {
-    pub const COUNT: usize = 54;
+    pub const COUNT: usize = 53;
     pub const ALL: [Self; Self::COUNT] = [
         Self::Level,
         Self::Pan,
@@ -2710,7 +2657,6 @@ impl ParameterId {
         Self::KeyboardTracking,
         Self::PortamentoTime,
         Self::Chorus,
-        Self::Spread,
         Self::Cutoff,
         Self::Resonance,
         Self::FilterEnvelope,
@@ -2752,7 +2698,6 @@ impl ParameterId {
         match self {
             Self::Waveform => ParameterValueKind::Waveform,
             Self::Chorus => ParameterValueKind::Chorus,
-            Self::Spread => ParameterValueKind::Spread,
             Self::LeadSubMode => ParameterValueKind::LeadSubMode,
             Self::FmAlgorithm => ParameterValueKind::FmAlgorithm,
             Self::FmOp1Ratio | Self::FmOp2Ratio | Self::FmOp3Ratio | Self::FmOp4Ratio => {
@@ -2856,7 +2801,6 @@ impl ParameterId {
             }
             (ParameterValueKind::Waveform, ParameterValue::Waveform(_))
             | (ParameterValueKind::Chorus, ParameterValue::Chorus(_))
-            | (ParameterValueKind::Spread, ParameterValue::Spread(_))
             | (ParameterValueKind::LeadSubMode, ParameterValue::LeadSubMode(_)) => true,
             (ParameterValueKind::FmAlgorithm, ParameterValue::FmAlgorithm(_))
             | (ParameterValueKind::FmRatio, ParameterValue::FmRatio(_)) => true,
@@ -2923,7 +2867,6 @@ impl ParameterId {
                 matches!(kind, TrackKind::Lead)
             }
             Self::Chorus => matches!(kind, TrackKind::Chord),
-            Self::Spread => matches!(kind, TrackKind::Chord),
             Self::Cutoff | Self::Resonance | Self::FilterEnvelope => {
                 matches!(kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead)
             }
@@ -2985,7 +2928,6 @@ impl ParameterId {
                         | Self::KeyboardTracking
                         | Self::PortamentoTime
                         | Self::Chorus
-                        | Self::Spread
                         | Self::FmAlgorithm
                         | Self::FmOp1Ratio
                         | Self::FmOp2Ratio
@@ -3020,7 +2962,6 @@ impl ParameterId {
             Self::KeyboardTracking => "keyboard_tracking",
             Self::PortamentoTime => "portamento_time",
             Self::Chorus => "chorus",
-            Self::Spread => "spread",
             Self::Cutoff => "cutoff",
             Self::Resonance => "resonance",
             Self::FilterEnvelope => "filter_envelope",
@@ -3285,10 +3226,6 @@ impl Track {
                 Instrument::Chord(p) => ParameterValue::Chorus(p.chorus),
                 _ => return None,
             },
-            ParameterId::Spread => match self.instrument {
-                Instrument::Chord(p) => ParameterValue::Spread(p.spread),
-                _ => return None,
-            },
             ParameterId::Cutoff => match self.instrument {
                 Instrument::Bass(p) => ParameterValue::Percent(p.cutoff),
                 Instrument::Chord(p) => ParameterValue::Percent(p.cutoff),
@@ -3524,10 +3461,6 @@ impl Track {
             },
             (ParameterId::Chorus, ParameterValue::Chorus(v)) => match &mut self.instrument {
                 Instrument::Chord(p) => p.chorus = v,
-                _ => return false,
-            },
-            (ParameterId::Spread, ParameterValue::Spread(v)) => match &mut self.instrument {
-                Instrument::Chord(p) => p.spread = v,
                 _ => return false,
             },
             (ParameterId::Cutoff, ParameterValue::Percent(v)) => match &mut self.instrument {
@@ -3839,7 +3772,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 23);
+        assert_eq!(project.format_version, 24);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
@@ -4043,8 +3976,6 @@ mod tests {
                 ParameterValue::Waveform(Waveform::Square)
             } else if parameter.is_chorus() {
                 ParameterValue::Chorus(ChorusMode::Ii)
-            } else if parameter == ParameterId::Spread {
-                ParameterValue::Spread(ChordSpread::Wide)
             } else if parameter == ParameterId::LeadSubMode {
                 ParameterValue::LeadSubMode(LeadSubMode::TwoOctaveSquare)
             } else if parameter == ParameterId::FmAlgorithm {
@@ -4246,10 +4177,6 @@ mod tests {
                 ParameterValue::Waveform(Waveform::Saw),
             ),
             (ParameterId::Chorus, ParameterValue::Chorus(ChorusMode::Ii)),
-            (
-                ParameterId::Spread,
-                ParameterValue::Spread(ChordSpread::Wide),
-            ),
             (
                 ParameterId::LeadSubMode,
                 ParameterValue::LeadSubMode(LeadSubMode::TwoOctaveSquare),

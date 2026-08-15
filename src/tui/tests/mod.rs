@@ -98,7 +98,7 @@ fn parameter_banks_are_contextual_and_model_compatible() {
         (TrackKind::Cymbal, 7),
         (TrackKind::Rimshot, 7),
         (TrackKind::Bass, 9),
-        (TrackKind::Chord, 18),
+        (TrackKind::Chord, 17),
         (TrackKind::Lead, 19),
         (TrackKind::Fm, 15),
     ];
@@ -129,6 +129,11 @@ fn parameter_banks_are_contextual_and_model_compatible() {
             "{kind:?}",
         );
     }
+    assert!(
+        parameter_descriptors(TrackKind::Chord)
+            .iter()
+            .all(|descriptor| descriptor.label != "Spread" && descriptor.shortcut != "e")
+    );
 
     let effects = effect_descriptors();
     assert_eq!(effects.len(), 15);
@@ -813,7 +818,6 @@ fn direct_percentage_entry_excludes_discrete_parameters() {
     assert!(parameter_supports_direct_percentage(ParameterId::Level));
     assert!(!parameter_supports_direct_percentage(ParameterId::Waveform));
     assert!(!parameter_supports_direct_percentage(ParameterId::Chorus));
-    assert!(!parameter_supports_direct_percentage(ParameterId::Spread));
     assert!(!parameter_supports_direct_percentage(
         ParameterId::LeadSubMode
     ));
@@ -1243,11 +1247,6 @@ fn parameter_editor_hints_match_scope_and_parameter_capabilities() {
 
     app.row = CHORD_TRACK_INDEX + 1;
     app.scope = Scope::Base;
-    app.mode = Mode::ParameterEdit(ParameterId::Spread);
-    let spread = rendered(&app, 220, 34);
-    assert!(!spread.contains(DIRECT_PERCENTAGE_HINT));
-    assert!(!spread.contains("[Shift+L] LFO"));
-
     app.mode = Mode::ParameterEdit(ParameterId::Noise);
     let noise = rendered(&app, 220, 34);
     assert!(!noise.contains("[Shift+L] LFO"));

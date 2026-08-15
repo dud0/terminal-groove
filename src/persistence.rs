@@ -38,7 +38,7 @@ pub enum ProjectIoError {
     },
 }
 
-pub const PRESET_FORMAT_VERSION: u32 = 2;
+pub const PRESET_FORMAT_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TrackPreset {
@@ -284,6 +284,64 @@ fn migrate_v21(
     Ok(value)
 }
 
+fn migrate_fixed_voicing_spread(
+    mut value: serde_json::Value,
+) -> Result<serde_json::Value, crate::model::ValidationError> {
+    let tracks = value
+        .get_mut("tracks")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or(crate::model::ValidationError::TrackCount)?;
+    for track in tracks {
+        if track.get("kind").and_then(serde_json::Value::as_str) == Some("chord") {
+            if let Some(instrument) = track
+                .get_mut("instrument")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                instrument.remove("spread");
+            }
+        }
+    }
+    let patterns = value
+        .get_mut("patterns")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or(crate::model::ValidationError::TrackCount)?;
+    for pattern in patterns {
+        let sequences = pattern
+            .get_mut("tracks")
+            .and_then(serde_json::Value::as_array_mut)
+            .ok_or(crate::model::ValidationError::TrackCount)?;
+        for sequence in sequences {
+            let steps = sequence
+                .get_mut("steps")
+                .and_then(serde_json::Value::as_array_mut)
+                .ok_or(crate::model::ValidationError::TrackCount)?;
+            for step in steps {
+                if let Some(locks) = step
+                    .get_mut("locks")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    locks.remove("spread");
+                }
+            }
+        }
+    }
+    value["format_version"] = 24.into();
+    Ok(value)
+}
+
+fn migrate_preset_fixed_voicing_spread(mut value: serde_json::Value) -> serde_json::Value {
+    if value.get("kind").and_then(serde_json::Value::as_str) == Some("chord") {
+        if let Some(instrument) = value
+            .get_mut("instrument")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            instrument.remove("spread");
+        }
+    }
+    value["format_version"] = PRESET_FORMAT_VERSION.into();
+    value
+}
+
 pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
     let bytes = fs::read(path).map_err(|source| ProjectIoError::Read {
         path: path.into(),
@@ -295,7 +353,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if !matches!(version, Some(21..=23)) {
+    if !matches!(version, Some(21..=24)) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
@@ -308,6 +366,13 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
         })?;
     } else if version == Some(22) {
         value["format_version"] = 23.into();
+    }
+    if version != Some(24) {
+        value =
+            migrate_fixed_voicing_spread(value).map_err(|source| ProjectIoError::Validation {
+                path: path.into(),
+                source,
+            })?;
     }
     let project: Project =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
@@ -388,14 +453,45 @@ pub fn load_track_preset(path: &Path) -> Result<TrackPreset, PresetIoError> {
         })?;
     let preset = match version {
         1 => {
-            let legacy: LegacyTrackPreset =
+            let mut value: serde_json::Value =
                 serde_json::from_slice(&bytes).map_err(|source| PresetIoError::Json {
+                    path: path.into(),
+                    source,
+                })?;
+            if value["track"]
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("chord")
+            {
+                if let Some(instrument) = value
+                    .get_mut("track")
+                    .and_then(|track| track.get_mut("instrument"))
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    instrument.remove("spread");
+                }
+            }
+            let legacy: LegacyTrackPreset =
+                serde_json::from_value(value).map_err(|source| PresetIoError::Json {
                     path: path.into(),
                     source,
                 })?;
             TrackPreset::from_track(legacy.track)
         }
-        2 => serde_json::from_slice(&bytes).map_err(|source| PresetIoError::Json {
+        2 => {
+            let value: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|source| PresetIoError::Json {
+                    path: path.into(),
+                    source,
+                })?;
+            serde_json::from_value(migrate_preset_fixed_voicing_spread(value)).map_err(
+                |source| PresetIoError::Json {
+                    path: path.into(),
+                    source,
+                },
+            )?
+        }
+        3 => serde_json::from_slice(&bytes).map_err(|source| PresetIoError::Json {
             path: path.into(),
             source,
         })?,
@@ -484,7 +580,7 @@ mod tests {
         assert_eq!(load_track_preset(&path).unwrap(), preset);
         assert!(fs::read(&path).unwrap().ends_with(b"\n"));
         let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(value["format_version"], 2);
+        assert_eq!(value["format_version"], 3);
         for excluded in [
             "track",
             "name",
@@ -508,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn rimshot_v2_preset_round_trips_as_rimshot() {
+    fn rimshot_v3_preset_round_trips_as_rimshot() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("rimshot.preset.json");
         let preset = TrackPreset::from_track(
@@ -563,13 +659,11 @@ mod tests {
         source.muted = true;
         source.swing = Percent::new(41).unwrap();
         source.input_degree = Some(7);
-        fs::write(
-            &path,
-            serde_json::to_vec(&serde_json::json!({"format_version":1,"track":source})).unwrap(),
-        )
-        .unwrap();
+        let mut value = serde_json::json!({"format_version":1,"track":source});
+        value["track"]["instrument"]["spread"] = "narrow".into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let preset = load_track_preset(&path).unwrap();
-        assert_eq!(preset.format_version, 2);
+        assert_eq!(preset.format_version, 3);
         let mut target = Project::new().tracks[crate::model::CHORD_TRACK_INDEX].clone();
         target.muted = false;
         target.swing = Percent::new(23).unwrap();
@@ -589,7 +683,7 @@ mod tests {
         let path = directory.path().join("invalid.preset.json");
         let preset = TrackPreset::from_track(Project::new().tracks[0].clone());
         let mut value = serde_json::to_value(&preset).unwrap();
-        value["format_version"] = 3.into();
+        value["format_version"] = 4.into();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
             load_track_preset(&path),
@@ -733,7 +827,7 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 23);
+        assert_eq!(value["format_version"], 24);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -1069,7 +1163,7 @@ mod tests {
         value["format_version"] = 22.into();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 23);
+        assert_eq!(loaded.format_version, 24);
         assert_eq!(
             loaded.tracks[crate::model::CHORD_TRACK_INDEX].input_voicing_shape(),
             Some(crate::model::ChordShape::TriadRoot)
@@ -1078,6 +1172,67 @@ mod tests {
             loaded.tracks[crate::model::FM_TRACK_INDEX].input_voicing_shape(),
             Some(crate::model::ChordShape::Single)
         );
+    }
+
+    #[test]
+    fn v23_discards_chord_spread_parameter_and_locks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("spread-migration.groove.json");
+        let mut project = Project::new();
+        project.patterns[0].tracks[crate::model::CHORD_TRACK_INDEX].steps[0] =
+            Some(crate::model::StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                chord_shape: Some(crate::model::ChordShape::TriadRoot),
+                arpeggio: Default::default(),
+                condition: Default::default(),
+                retrigger_count: 1,
+                microtiming: Default::default(),
+                locks: Default::default(),
+            });
+        let mut value = serde_json::to_value(project).unwrap();
+        value["format_version"] = 23.into();
+        value["tracks"][crate::model::CHORD_TRACK_INDEX]["instrument"]["spread"] = "narrow".into();
+        value["patterns"][0]["tracks"][crate::model::CHORD_TRACK_INDEX]["steps"][0]["locks"] =
+            serde_json::json!({ "spread": "off" });
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let migrated = load(&path).unwrap();
+        assert_eq!(migrated.format_version, 24);
+        assert!(
+            migrated.patterns[0].tracks[crate::model::CHORD_TRACK_INDEX].steps[0]
+                .unwrap()
+                .locks()
+                .is_empty()
+        );
+        let migrated_json = serde_json::to_string(&migrated).unwrap();
+        assert!(!migrated_json.contains("spread"));
+
+        value["format_version"] = 24.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+    }
+
+    #[test]
+    fn v2_chord_presets_discard_spread_and_v3_rejects_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("spread-migration.preset.json");
+        let expected =
+            TrackPreset::from_track(Project::new().tracks[crate::model::CHORD_TRACK_INDEX].clone());
+        let mut value = serde_json::to_value(&expected).unwrap();
+        value["format_version"] = 2.into();
+        value["instrument"]["spread"] = "wide".into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        assert_eq!(load_track_preset(&path).unwrap(), expected);
+
+        value["format_version"] = 3.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            load_track_preset(&path),
+            Err(PresetIoError::Json { .. })
+        ));
     }
 
     #[test]
@@ -1143,7 +1298,7 @@ mod tests {
             .remove("bit_crusher");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 23);
+        assert_eq!(loaded.format_version, 24);
         assert_eq!(
             loaded.tracks[0].effects.flanger,
             crate::model::FlangerParameters::default()
@@ -1296,7 +1451,7 @@ mod tests {
     }
 
     #[test]
-    fn v21_projects_migrate_every_pattern_to_v23_fm() {
+    fn v21_projects_migrate_every_pattern_to_v24_fm() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("legacy.groove.json");
         let mut project = Project::new();
@@ -1311,7 +1466,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
 
         let migrated = load(&path).unwrap();
-        assert_eq!(migrated.format_version, 23);
+        assert_eq!(migrated.format_version, 24);
         assert_eq!(migrated.tracks.len(), 10);
         assert_eq!(migrated.patterns.len(), 2);
         assert!(migrated.patterns.iter().all(|pattern| pattern.tracks[crate::model::FM_TRACK_INDEX].steps == vec![None; 16]));
@@ -1322,14 +1477,14 @@ mod tests {
     }
 
     #[test]
-    fn fm_track_presets_write_version_two_and_round_trip() {
+    fn fm_track_presets_write_version_three_and_round_trip() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("keys.preset.json");
         let project = Project::new();
         let preset = TrackPreset::from_track(project.tracks[crate::model::FM_TRACK_INDEX].clone());
         save_track_preset_atomic(&path, &preset).unwrap();
         assert_eq!(load_track_preset(&path).unwrap(), preset);
-        assert_eq!(preset.format_version, 2);
+        assert_eq!(preset.format_version, 3);
     }
 
     #[test]

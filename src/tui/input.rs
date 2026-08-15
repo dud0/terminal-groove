@@ -1307,32 +1307,6 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
                     );
                     return Ok(true);
                 }
-                Ok(ParameterValue::Spread(mode)) => {
-                    let next = match (mode, k.code) {
-                        (crate::model::ChordSpread::Off, KeyCode::Up) => {
-                            crate::model::ChordSpread::Narrow
-                        }
-                        (crate::model::ChordSpread::Narrow, KeyCode::Up) => {
-                            crate::model::ChordSpread::Wide
-                        }
-                        (crate::model::ChordSpread::Wide, KeyCode::Down) => {
-                            crate::model::ChordSpread::Narrow
-                        }
-                        (crate::model::ChordSpread::Narrow, KeyCode::Down) => {
-                            crate::model::ChordSpread::Off
-                        }
-                        _ => mode,
-                    };
-                    set_parameter(
-                        a,
-                        audio,
-                        parameter,
-                        ParameterValue::Spread(next),
-                        true,
-                        false,
-                    );
-                    return Ok(true);
-                }
                 Ok(ParameterValue::LeadSubMode(mode)) => {
                     use crate::model::LeadSubMode;
                     let next = match (mode, k.code) {
@@ -2564,7 +2538,6 @@ pub(super) fn set_parameter(
             ParameterValue::Percent(value) => Some(value),
             ParameterValue::Waveform(_) => None,
             ParameterValue::Chorus(_) => None,
-            ParameterValue::Spread(_) => None,
             ParameterValue::LeadSubMode(_) => None,
             ParameterValue::FmAlgorithm(_) | ParameterValue::FmRatio(_) => None,
         });

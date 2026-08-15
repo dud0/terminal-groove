@@ -66,6 +66,7 @@ pub(super) struct SynthVoice {
     pub(super) delay_send: Smoother,
     pub(super) reverb_send: Smoother,
     pub(super) pan: Smoother,
+    pub(super) voicing_pan_offset: f32,
     pan_cache: f32,
     pan_left: f32,
     pan_right: f32,
@@ -569,6 +570,7 @@ impl SynthVoice {
             delay_send: Smoother::new(0.0),
             reverb_send: Smoother::new(0.0),
             pan: Smoother::new(50.0),
+            voicing_pan_offset: 0.0,
             pan_cache: f32::NAN,
             pan_left: std::f32::consts::FRAC_1_SQRT_2,
             pan_right: std::f32::consts::FRAC_1_SQRT_2,
@@ -636,6 +638,7 @@ impl SynthVoice {
         self.fm_filter.clear_state();
         self.fm_phases = [0.0; 4];
         self.fm_previous = [0.0; 4];
+        self.voicing_pan_offset = 0.0;
     }
 
     pub(super) fn gate_off(&mut self) {

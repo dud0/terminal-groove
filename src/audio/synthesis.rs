@@ -23,6 +23,33 @@ struct TrackActionSchedule {
 }
 
 impl Renderer {
+    fn voicing_pan_offset(voice_count: usize, voice: usize) -> f32 {
+        match (voice_count, voice) {
+            (2, 0) | (3 | 4, 0) => -50.0,
+            (2, 1) | (3, 2) | (4, 3) => 50.0,
+            (4, 1) => -16.6667,
+            (4, 2) => 16.6667,
+            _ => 0.0,
+        }
+    }
+
+    fn apply_synth_pan(
+        track: AudioTrack,
+        locks: ParameterLocks,
+        voice: &mut SynthVoice,
+        smoothing: u32,
+    ) {
+        let center = locks.percent(ParameterId::Pan).unwrap_or(track.pan).get() as f32;
+        let offset = if matches!(voice.kind, SynthVoiceKind::Chord | SynthVoiceKind::Fm) {
+            voice.voicing_pan_offset
+        } else {
+            0.0
+        };
+        voice
+            .pan
+            .set((center + offset).clamp(0.0, 100.0), smoothing);
+    }
+
     pub(super) fn drum_controls(
         track: AudioTrack,
         recipe: DrumRecipeSlot,
@@ -415,10 +442,7 @@ impl Renderer {
                     .normalized(),
                 smoothing,
             );
-            voice.pan.set(
-                locks.percent(ParameterId::Pan).unwrap_or(t.pan).get() as f32,
-                smoothing,
-            );
+            Self::apply_synth_pan(t, locks, voice, smoothing);
             voice.locks = locks;
             return;
         }
@@ -589,12 +613,7 @@ impl Renderer {
                 .normalized(),
             smoothing,
         );
-        if !(voice.kind == SynthVoiceKind::Chord && voice.active) {
-            voice.pan.set(
-                locks.percent(ParameterId::Pan).unwrap_or(t.pan).get() as f32,
-                smoothing,
-            );
-        }
+        Self::apply_synth_pan(t, locks, voice, smoothing);
         voice.locks = locks;
     }
 
@@ -794,39 +813,21 @@ impl Renderer {
         for voice in &mut pool.voices[start + voice_count..start + CHORD_GROUP_SIZE] {
             voice.reset_to_idle();
         }
-        for (voice, midi) in pool.voices
+        for (index, (voice, midi)) in pool.voices
             [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + voice_count]
             .iter_mut()
             .zip(midis.into_iter().take(voice_count))
+            .enumerate()
         {
+            voice.voicing_pan_offset = Self::voicing_pan_offset(voice_count, index);
             let frequency = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
             Self::configure_synth_voice_frequency(
                 project, sr, track, frequency, trigger, locks, voice,
             );
+            Self::apply_synth_pan(project.tracks[track], locks, voice, 0);
         }
         pool.voice_count = voice_count;
         pool.group_voice_counts[pool.group] = voice_count;
-        let spread = match project.tracks[track].instrument {
-            Instrument::Chord(p) => locks.spread().unwrap_or(p.spread),
-            Instrument::Fm(_) => crate::model::ChordSpread::Wide,
-            _ => crate::model::ChordSpread::Off,
-        };
-        let offsets = match voice_count {
-            2 => [-50.0, 50.0, 0.0, 0.0],
-            3 => [-50.0, 0.0, 50.0, 0.0],
-            4 => [-50.0, -16.6667, 16.6667, 50.0],
-            _ => [0.0; 4],
-        };
-        for (index, offset) in offsets.into_iter().take(voice_count).enumerate() {
-            let target = locks
-                .percent(ParameterId::Pan)
-                .unwrap_or(project.tracks[track].pan)
-                .get() as f32
-                + offset * spread.percent().normalized();
-            pool.voices[pool.group * CHORD_GROUP_SIZE + index]
-                .pan
-                .set(target.clamp(0.0, 100.0), 0);
-        }
         for chorus in &mut pool.choruses {
             Self::configure_chorus(chorus, project.tracks[track], locks);
         }
@@ -848,6 +849,7 @@ impl Renderer {
         );
         let voice = &mut pool.voices[pool.group * CHORD_GROUP_SIZE];
         voice.remaining = 0;
+        voice.voicing_pan_offset = Self::voicing_pan_offset(count, index.min(count - 1));
         let frequency = 440.0 * 2.0_f32.powf((midis[index.min(count - 1)] as f32 - 69.0) / 12.0);
         Self::configure_synth_voice_frequency(
             project,
@@ -858,27 +860,7 @@ impl Renderer {
             pool.arpeggio_locks,
             voice,
         );
-        let spread = match project.tracks[track].instrument {
-            Instrument::Chord(p) => pool.arpeggio_locks.spread().unwrap_or(p.spread),
-            Instrument::Fm(_) => crate::model::ChordSpread::Wide,
-            _ => crate::model::ChordSpread::Off,
-        };
-        let offsets = match count {
-            2 => [-50.0, 50.0, 0.0, 0.0],
-            3 => [-50.0, 0.0, 50.0, 0.0],
-            4 => [-50.0, -16.6667, 16.6667, 50.0],
-            _ => [0.0; 4],
-        };
-        voice.pan.set(
-            (pool
-                .arpeggio_locks
-                .percent(ParameterId::Pan)
-                .unwrap_or(project.tracks[track].pan)
-                .get() as f32
-                + offsets[index.min(3)] * spread.percent().normalized())
-            .clamp(0.0, 100.0),
-            0,
-        );
+        Self::apply_synth_pan(project.tracks[track], pool.arpeggio_locks, voice, 0);
     }
 
     pub(super) fn release_chord(pool: &mut ChordVoicePool) {

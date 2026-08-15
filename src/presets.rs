@@ -2,9 +2,9 @@
 
 use crate::{
     model::{
-        ChordParameters, ChordSpread, ChorusMode, DistortionParameters, FmAlgorithm, FmOperator,
-        FmParameters, FmRatio, Instrument, LeadParameters, LeadSubMode, LfoConfig, LfoDivision,
-        LfoRate, LfoWaveform, ParameterId, Percent, PhaserParameters, Project, TrackKind,
+        ChordParameters, ChorusMode, DistortionParameters, FmAlgorithm, FmOperator, FmParameters,
+        FmRatio, Instrument, LeadParameters, LeadSubMode, LfoConfig, LfoDivision, LfoRate,
+        LfoWaveform, ParameterId, Percent, PhaserParameters, Project, TrackKind,
     },
     persistence::TrackPreset,
 };
@@ -42,7 +42,7 @@ fn base(kind: TrackKind, level: u8, delay: u8, reverb: u8, instrument: Instrumen
     TrackPreset::from_track(track)
 }
 
-fn chord(values: [u8; 11], chorus: ChorusMode, spread: ChordSpread, sends: [u8; 3]) -> TrackPreset {
+fn chord(values: [u8; 11], chorus: ChorusMode, sends: [u8; 3]) -> TrackPreset {
     base(
         TrackKind::Chord,
         sends[0],
@@ -54,7 +54,6 @@ fn chord(values: [u8; 11], chorus: ChorusMode, spread: ChordSpread, sends: [u8; 
             sub_oscillator: p(values[2]),
             noise: p(values[3]),
             chorus,
-            spread,
             cutoff: p(values[4]),
             resonance: p(values[5]),
             filter_envelope: p(values[6]),
@@ -123,7 +122,6 @@ fn warm_poly() -> TrackPreset {
     chord(
         [65, 50, 8, 0, 58, 16, 28, 18, 42, 74, 48],
         ChorusMode::I,
-        ChordSpread::Narrow,
         [76, 0, 18],
     )
 }
@@ -131,7 +129,6 @@ fn velvet_pad() -> TrackPreset {
     chord(
         [82, 55, 12, 2, 40, 18, 20, 72, 68, 84, 80],
         ChorusMode::Ii,
-        ChordSpread::Wide,
         [68, 0, 38],
     )
 }
@@ -139,7 +136,6 @@ fn glass_keys() -> TrackPreset {
     chord(
         [90, 48, 0, 3, 72, 12, 58, 0, 38, 28, 34],
         ChorusMode::I,
-        ChordSpread::Narrow,
         [74, 12, 24],
     )
 }
@@ -147,7 +143,6 @@ fn pulse_stab() -> TrackPreset {
     let mut x = chord(
         [12, 32, 18, 0, 44, 48, 72, 0, 26, 14, 16],
         ChorusMode::Off,
-        ChordSpread::Narrow,
         [76, 8, 10],
     );
     x.effects.distortion = DistortionParameters {
@@ -161,7 +156,6 @@ fn house_organ() -> TrackPreset {
     let mut x = chord(
         [42, 50, 30, 0, 68, 8, 6, 0, 28, 92, 22],
         ChorusMode::Ii,
-        ChordSpread::Wide,
         [72, 0, 18],
     );
     x.effects.phaser = PhaserParameters {
@@ -176,7 +170,6 @@ fn dream_motion() -> TrackPreset {
     let mut x = chord(
         [68, 42, 6, 5, 46, 28, 34, 62, 58, 70, 72],
         ChorusMode::Ii,
-        ChordSpread::Wide,
         [66, 10, 35],
     );
     x.effects.phaser = PhaserParameters {

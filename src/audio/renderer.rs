@@ -245,6 +245,7 @@ impl Renderer {
         // envelope is idle there is no signal to render, so avoid running
         // oscillators and filters for those voices on every callback sample.
         if v.is_idle() {
+            v.voicing_pan_offset = 0.0;
             match v.kind {
                 SynthVoiceKind::Bass => {
                     v.bass_filter.reset();
