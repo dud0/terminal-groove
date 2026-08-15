@@ -9,33 +9,10 @@ the JSON schema, and acceptance criteria. `docs/ARCHITECTURE.md` is authoritativ
 for implementation boundaries and real-time ownership; `docs/AUDIO_PERFORMANCE.md`
 contains the callback benchmark method and evidence.
 
-- `src/model.rs`: persisted project types, bounds, defaults, compatibility, and validation
-- `src/reducer.rs`: project edits, clipboards, undo/redo, dirty revisions, and audio edit impacts
-- `src/persistence.rs`: strict versioned project and preset JSON, migrations, and atomic saves
-- `src/storage.rs`: platform directories for projects, presets, recordings, and logs
-- `src/presets.rs`: source-controlled built-in sound preset catalog
-- `src/generator.rs`: deterministic, fill-only pattern idea generation
-- `src/engine.rs`: transport-independent timing and gate decisions
-- `src/dsp/mod.rs`: allocation-free oscillators, envelopes, filters, effects, LFOs, and safety utilities
-- `src/audio.rs`: CPAL integration, mirrored audio snapshots, command handling, and status
-- `src/audio/`: scheduling, synthesis, voices, effects, rendering, queues, and WAV recording
-- `src/tui/mod.rs`: terminal lifecycle and application loop
-- `src/tui/render.rs`: main-screen rendering, parameter descriptors, and readouts
-- `src/tui/controls.rs`: global-control catalog, labels, groups, and shortcuts
-- `src/tui/overlays.rs`: popup rendering and safe popup geometry
-- `src/tui/input.rs`: keyboard dispatch and mode-specific editing
-- `src/tui/state.rs`: modes, cursor state, dialog fields, and UI-only state
-- `src/tui/controller.rs`: project/audio synchronization, storage operations, and file flows
-- `src/tui/tests/mod.rs`: Ratatui `TestBackend` rendering and input tests
-
 Build output belongs in `target/` and must not be committed. Legacy working-
 directory storage is ignored and must not be reintroduced or imported.
 
 ## Build and Verification
-
-Install Rust 1.85 or newer. Linux builds also need `libasound2-dev` on
-Debian/Ubuntu or `alsa-lib-devel` on Fedora. macOS uses CoreAudio and needs no
-separate audio development package.
 
 - `cargo test`: run unit, persistence, audio, TUI, and documentation tests
 - `cargo fmt --all -- --check`: verify standard Rust formatting
@@ -101,8 +78,9 @@ affect new untitled projects only.
 
 ## TUI Controls and Dialogs
 
-Keep TUI responsibilities in their designated modules above. Keep Ratatui types
-out of `model.rs` and `reducer.rs`. For a new control, complete the full path:
+Keep TUI responsibilities separated by module as described in
+`docs/ARCHITECTURE.md`. Keep Ratatui types out of `model.rs` and `reducer.rs`.
+For a new control, complete the full path:
 
 1. Define its bounded model value, enum ordering, default, compatibility, and validation in `model.rs`.
 2. Add `ParameterId`/`GlobalParameterId` policy in the model as appropriate, then add presentation metadata to `render.rs` or `controls.rs`.
@@ -110,26 +88,16 @@ out of `model.rs` and `reducer.rs`. For a new control, complete the full path:
 4. Apply project edits through reducer APIs, check queue capacity before committing, synchronize the audio snapshot, and leave UI/audio state unchanged when synchronization fails.
 5. Render from the model, not a second UI-only value, and add focused boundary, rejection, input, or rendering tests as appropriate.
 
-Use the existing visual language without reintroducing removed concepts such as
-Chord spread:
-
-- Use the established fader helpers for continuous values, with exact values and physical units or derived readouts where applicable.
-- Use `render_lfo_switch` only for two-position switch-style controls and `render_lfo_selector` for ordered selector controls where those renderers fit the surrounding card or popup.
-- Preserve the established vertical parameter-card geometry for Bass waveform, Lead sub mode, Chorus, FM algorithms, ratios, and other discrete parameter cards.
-- Parameter cards must show their group, shortcut, active state, BASE/LOCK origin, and LFO marker where applicable. Disabled fields remain visible and communicate their state without relying on color alone.
-- Pitch LFO is LFO-only and must not display a BASE or LOCK value. Chord/FM voicing and arpeggio settings are not BASE/LOCK parameters.
-- Lock mode must show effective values and distinguish lock overrides from inherited BASE values.
-
 For dialogs and overlays:
 
 - Add a `Mode` variant and field state in `state.rs`, dispatch the mode before general navigation in `input.rs`, and add the matching render branch.
-- Clear the popup rectangle, use a bordered block, keep geometry in `overlays.rs`, and use saturating or capped rectangles that are safe on small terminals.
+- Keep popup geometry safe on small terminals and preserve the documented small-terminal fallback.
 - Use fixed field-order arrays or enums for multi-field editors. Left/right selects fields; Up/down changes values unless the specification says otherwise.
-- Display current values, units, derived values, origins, inactive state, and local key hints. Hints must match the actual handler.
+- Local key hints must match the actual handler.
 - Dirty-project confirmations use `Save [S]`, `Discard [D]`, and `Cancel [Esc]`. Overwrite confirmations use `Overwrite [Enter/O]` and `Cancel [Esc]`; preset-default confirmations use their documented Set/Clear keys.
 - Define whether edits are immediate or committed on confirmation. Immediate arrow edits retain their changes on Esc where specified; destructive actions require confirmation; failed reducer, storage, or audio operations leave the project unchanged.
-- Preserve literal text input, show the resolved destination before confirmation, reject invalid names visibly, and define Backspace behavior.
-- Keep the main screen's documented `120x34` layout and the small-terminal fallback working. Add or update `TestBackend` coverage for both.
+- Preserve literal text input, reject invalid names visibly, and define Backspace behavior.
+- Add or update `TestBackend` coverage for the documented `120x34` layout and smaller terminals.
 
 Update `SPEC.md` for new modes, controls, shortcuts, sizing, persistence, or
 commit semantics rather than letting this file become a second product spec.
@@ -143,11 +111,3 @@ behavior, effect tails, recording conversion, and callback allocation/deallocati
 safety. TUI changes should use `TestBackend` at `120x34`, larger sizes, and a
 smaller terminal where relevant. Name tests after observable behavior, such as
 `wrapped_tie` or `fractional_clock_has_no_drift`.
-
-## Commits and Pull Requests
-
-Keep commits scoped to one coherent change with concise imperative summaries.
-Pull requests should describe user-visible behavior, affected `SPEC.md` or
-architecture sections, verification commands, and any device-specific manual
-testing. Include terminal screenshots when they materially clarify a layout
-change.
