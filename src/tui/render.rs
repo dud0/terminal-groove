@@ -1013,7 +1013,11 @@ pub(super) fn displayed_parameter_for_recipe(
 }
 
 pub(super) fn fader_segments(value: u8) -> usize {
-    ((value as usize * 10 + 50) / 100).min(10)
+    fader_segments_for(value, 10)
+}
+
+pub(super) fn fader_segments_for(value: u8, segment_count: u16) -> usize {
+    ((usize::from(value) * usize::from(segment_count) + 50) / 100).min(usize::from(segment_count))
 }
 
 pub(super) fn physical_parameter_readout(
@@ -1499,7 +1503,10 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
 
 pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usize) {
     let t = &a.editor.project.tracks[track];
-    let lock_editing = a.scope == Scope::Lock && matches!(a.mode, Mode::ParameterEdit(_));
+    let parameter_editing = matches!(a.mode, Mode::ParameterEdit(_));
+    let lock_editing = a.scope == Scope::Lock && parameter_editing;
+    let compact = !parameter_editing;
+    let segment_count = if compact { 5 } else { 10 };
     let descriptors = visible_parameter_descriptors(a.parameter_bank, t.kind);
     let chord_shape = a
         .editor
@@ -1508,41 +1515,48 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         .or_else(|| selected_chord_shape(a, track))
         .map(|shape| format!(" · Chord trigger {shape}"))
         .unwrap_or_default();
-    let bank_title = match a.parameter_bank {
-        ParameterBank::Params => "PARAMS",
-        ParameterBank::Effects => "EFFECTS",
-    };
-    let title = if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
+    let context = if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
         format!(
-            "{} · {} · Step {} · {}{} · {} · Mute {}{}",
+            "{} · Step {} · {}{} · {} · Mute {}",
             track_label(t),
-            bank_title,
             a.step + 1,
             articulation_title(a, track),
             chord_shape,
             scope_name(a.scope),
-            if t.muted { "on" } else { "off" },
-            if lock_editing {
-                " · !! LOCK PARAMETER EDITING !!"
-            } else {
-                ""
-            }
+            if t.muted { "on" } else { "off" }
         )
     } else {
         format!(
-            "{} · {} · Step {} · {} · {} · Mute {}{}",
+            "{} · Step {} · {} · {} · Mute {}",
             t.name,
-            bank_title,
             a.step + 1,
             articulation_title(a, track),
             scope_name(a.scope),
-            if t.muted { "on" } else { "off" },
-            if lock_editing {
-                " · !! LOCK PARAMETER EDITING !!"
-            } else {
-                ""
-            }
+            if t.muted { "on" } else { "off" }
         )
+    };
+    let selected_tab_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::REVERSED);
+    let inactive_tab_style = Style::default().fg(Color::DarkGray);
+    let editing_badge = if lock_editing {
+        Span::styled(
+            " LOCK PARAMETER EDITING ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightYellow)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if parameter_editing {
+        Span::styled(
+            " PARAMETER EDITING ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(" TRACK DETAIL ", Style::default().fg(Color::DarkGray))
     };
     let panel = Block::bordered()
         .border_style(if lock_editing {
@@ -1552,14 +1566,36 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         } else {
             Style::default()
         })
-        .title(Line::from(title).style(if lock_editing {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::LightYellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        }))
+        .title(Line::from(vec![
+            Span::styled(
+                if a.parameter_bank == ParameterBank::Params {
+                    "[PARAMS]"
+                } else {
+                    " PARAMS "
+                },
+                if a.parameter_bank == ParameterBank::Params {
+                    selected_tab_style
+                } else {
+                    inactive_tab_style
+                },
+            ),
+            Span::raw(" "),
+            Span::styled(
+                if a.parameter_bank == ParameterBank::Effects {
+                    "[EFFECTS]"
+                } else {
+                    " EFFECTS "
+                },
+                if a.parameter_bank == ParameterBank::Effects {
+                    selected_tab_style
+                } else {
+                    inactive_tab_style
+                },
+            ),
+            Span::raw(" · "),
+            editing_badge,
+            Span::raw(format!(" · {context}")),
+        ]))
         .title_bottom(
             "LOCK values show effective output · LOCK = step override · BASE = inherited/base",
         );
@@ -1681,7 +1717,17 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 .add_modifier(Modifier::BOLD)
         };
         if descriptor.id == ParameterId::Pitch {
-            render_pitch_lfo_card(f, content, t, descriptor, active, group_color, style);
+            render_pitch_lfo_card(
+                f,
+                content,
+                t,
+                descriptor,
+                active,
+                group_color,
+                style,
+                segment_count,
+                !compact,
+            );
             continue;
         }
         let Some((value, origin)) =
@@ -1703,8 +1749,42 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             },
             ParameterValue::LeadSubMode(value) => format!("{value:?}"),
         };
-        render_centered(f, &value_label, content, style);
-        for segment in 0..10 {
+        let has_lfo = t.lfos.get(descriptor.id).is_some();
+        let compact_origin = match origin {
+            ValueOrigin::Base => "B",
+            ValueOrigin::Lock => "L",
+        };
+        if compact {
+            let origin_style = if origin == ValueOrigin::Lock {
+                Style::default()
+                    .fg(Color::LightMagenta)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                style
+            };
+            f.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(value_label.clone(), style),
+                    Span::styled(compact_origin, origin_style),
+                    Span::styled(
+                        if has_lfo { "~" } else { "" },
+                        Style::default()
+                            .fg(Color::LightCyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]))
+                .alignment(Alignment::Center),
+                Rect {
+                    x: content.x,
+                    y: content.y,
+                    width: content.width,
+                    height: 1,
+                },
+            );
+        } else {
+            render_centered(f, &value_label, content, style);
+        }
+        for segment in 0..segment_count {
             let segment_area = Rect {
                 x: content.x,
                 y: content.y + 1 + segment,
@@ -1713,8 +1793,8 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             };
             let symbol = match value {
                 ParameterValue::Percent(value) => {
-                    let filled = fader_segments(value.get());
-                    if usize::from(segment) >= 10 - filled {
+                    let filled = fader_segments_for(value.get(), segment_count);
+                    if usize::from(segment) >= usize::from(segment_count) - filled {
                         "███"
                     } else {
                         "···"
@@ -1723,7 +1803,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 ParameterValue::Waveform(Waveform::Saw) => {
                     if segment == 0 {
                         "●"
-                    } else if segment == 9 {
+                    } else if segment == segment_count - 1 {
                         "○"
                     } else {
                         "│"
@@ -1732,7 +1812,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 ParameterValue::Waveform(Waveform::Square) => {
                     if segment == 0 {
                         "○"
-                    } else if segment == 9 {
+                    } else if segment == segment_count - 1 {
                         "●"
                     } else {
                         "│"
@@ -1740,24 +1820,24 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 }
                 ParameterValue::Chorus(mode) => {
                     let selected = match mode {
-                        ChorusMode::Off => 9,
-                        ChorusMode::I => 5,
+                        ChorusMode::Off => segment_count - 1,
+                        ChorusMode::I => segment_count / 2,
                         ChorusMode::Ii => 0,
                     };
                     if segment == selected { "●" } else { "│" }
                 }
                 ParameterValue::Spread(mode) => {
                     let selected = match mode {
-                        crate::model::ChordSpread::Off => 9,
-                        crate::model::ChordSpread::Narrow => 5,
+                        crate::model::ChordSpread::Off => segment_count - 1,
+                        crate::model::ChordSpread::Narrow => segment_count / 2,
                         crate::model::ChordSpread::Wide => 0,
                     };
                     if segment == selected { "●" } else { "│" }
                 }
                 ParameterValue::LeadSubMode(mode) => {
                     let selected = match mode {
-                        crate::model::LeadSubMode::OneOctaveSquare => 9,
-                        crate::model::LeadSubMode::TwoOctaveSquare => 5,
+                        crate::model::LeadSubMode::OneOctaveSquare => segment_count - 1,
+                        crate::model::LeadSubMode::TwoOctaveSquare => segment_count / 2,
                         crate::model::LeadSubMode::TwoOctaveNarrowPulse => 0,
                     };
                     if segment == selected { "●" } else { "│" }
@@ -1779,11 +1859,14 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         }
         let label_area = Rect {
             x: content.x,
-            y: content.y + 11,
+            y: content.y + 1 + segment_count,
             width: content.width,
             height: 1,
         };
         render_centered(f, descriptor.label, label_area, style);
+        if compact {
+            continue;
+        }
         let full_origin_label = match origin {
             ValueOrigin::Base => "BASE",
             ValueOrigin::Lock => "LOCK",
@@ -1795,7 +1878,6 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             height: 1,
         };
         let shortcut_label = format!("[{}]", descriptor.shortcut);
-        let has_lfo = t.lfos.get(descriptor.id).is_some();
         let full_label_width =
             shortcut_label.len() + full_origin_label.len() + usize::from(has_lfo);
         let origin_label = if full_label_width <= usize::from(shortcut_area.width) {
@@ -1853,6 +1935,8 @@ pub(super) fn render_pitch_lfo_card(
     active: bool,
     group_color: Color,
     style: Style,
+    segment_count: u16,
+    show_shortcut: bool,
 ) {
     let config = track.lfos.get(ParameterId::Pitch);
     let value_label = config
@@ -1864,8 +1948,13 @@ pub(super) fn render_pitch_lfo_card(
             )
         })
         .unwrap_or_else(|| "—".into());
+    let value_label = if show_shortcut || config.is_none() {
+        value_label
+    } else {
+        format!("{value_label}~")
+    };
     render_centered(f, &value_label, content, style);
-    for segment in 0..10 {
+    for segment in 0..segment_count {
         let segment_area = Rect {
             x: content.x,
             y: content.y + 1 + segment,
@@ -1873,7 +1962,10 @@ pub(super) fn render_pitch_lfo_card(
             height: 1,
         };
         let symbol = config.map_or("···", |config| {
-            if usize::from(segment) >= 10 - fader_segments(config.depth.get()) {
+            if usize::from(segment)
+                >= usize::from(segment_count)
+                    - fader_segments_for(config.depth.get(), segment_count)
+            {
                 "███"
             } else {
                 "···"
@@ -1898,12 +1990,15 @@ pub(super) fn render_pitch_lfo_card(
         descriptor.label,
         Rect {
             x: content.x,
-            y: content.y + 11,
+            y: content.y + 1 + segment_count,
             width: content.width,
             height: 1,
         },
         style,
     );
+    if !show_shortcut {
+        return;
+    }
     let shortcut_style = if active {
         Style::default()
             .fg(group_color)
@@ -1928,7 +2023,7 @@ pub(super) fn render_pitch_lfo_card(
         .alignment(Alignment::Center),
         Rect {
             x: content.x,
-            y: content.y + 12,
+            y: content.y + 2 + segment_count,
             width: content.width,
             height: 1,
         },
@@ -1973,7 +2068,12 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         );
         return;
     }
-    let details_height = 16;
+    let details_height =
+        if a.row > 0 && !matches!(a.mode, Mode::ParameterEdit(_) | Mode::ChordEdit { .. }) {
+            10
+        } else {
+            16
+        };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

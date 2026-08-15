@@ -808,9 +808,13 @@ fn pitch_lfo_card_is_visible_for_chord_and_lead_only() {
     app.row = CHORD_TRACK_INDEX + 1;
     let chord = rendered(&app, 220, 34);
     assert!(chord.contains("Pitch"));
-    assert!(chord.contains("[i]"));
+    assert!(!chord.contains("[i]"));
     assert!(chord.contains("100%"));
     assert!(chord.contains("±2st"));
+
+    app.mode = Mode::ParameterEdit(ParameterId::Pitch);
+    let chord = rendered(&app, 220, 34);
+    assert!(chord.contains("[i]"));
 
     app.row = TRACK_COUNT;
     let lead = rendered(&app, 220, 34);
@@ -933,6 +937,17 @@ fn fader_segments_round_to_nearest_ten_percent() {
 }
 
 #[test]
+fn compact_fader_segments_round_to_nearest_twenty_percent() {
+    assert_eq!(fader_segments_for(0, 5), 0);
+    assert_eq!(fader_segments_for(9, 5), 0);
+    assert_eq!(fader_segments_for(10, 5), 1);
+    assert_eq!(fader_segments_for(50, 5), 3);
+    assert_eq!(fader_segments_for(89, 5), 4);
+    assert_eq!(fader_segments_for(90, 5), 5);
+    assert_eq!(fader_segments_for(100, 5), 5);
+}
+
+#[test]
 fn global_faders_normalize_to_their_model_bounds() {
     let mut globals = Project::new().globals;
     globals.reverb_time_seconds = 0.2;
@@ -968,8 +983,7 @@ fn global_faders_normalize_to_their_model_bounds() {
 }
 
 #[test]
-fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
-    let backend = TestBackend::new(120, 34);
+fn track_detail_compacts_outside_parameter_editing_and_expands_for_editing() {
     let mut project = Project::new();
     project.tracks[SYNTH_TRACK_START].input_octave = Some(4);
     project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::Note {
@@ -997,30 +1011,44 @@ fn screen_renders_fader_bank_and_local_shortcuts_at_minimum_size() {
             ParameterValue::Percent(Percent::new(50).unwrap()),
         )]),
     });
-    let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(project, None);
     app.row = SYNTH_TRACK_START + 1;
-    terminal
-        .draw(|frame| draw_with_device(frame, &app, "null"))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let rendered = buffer
-        .content
-        .iter()
-        .map(|cell| cell.symbol())
-        .collect::<String>();
+    let lines = rendered_lines(&app, 120, 34);
+    let rendered = lines.concat();
     assert!(rendered.contains("Level"));
     assert!(rendered.contains("Filt Env"));
     assert!(rendered.contains("MIXER"));
     assert!(rendered.contains("INSTRUMENT"));
     assert!(rendered.contains("FILTER"));
     assert!(rendered.contains("ENVELOPE"));
-    assert!(rendered.contains("[v]BASE"));
-    assert!(rendered.contains("[R]BASE"));
+    assert!(lines[22].contains("[PARAMS]"));
+    assert!(lines[22].contains("EFFECTS"));
+    assert!(!rendered.contains("[v]BASE"));
+    assert!(!rendered.contains("[R]BASE"));
     assert!(!rendered.contains("L80Y0B0"));
     assert!(rendered.contains("Bass O4"));
     assert!(rendered.contains("1³ "));
     assert!(rendered.contains("2⁴*"));
+
+    app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
+    let lines = rendered_lines(&app, 120, 34);
+    let rendered = lines.concat();
+    assert!(lines[16].contains("[PARAMS]"));
+    assert!(rendered.contains("PARAMETER EDITING"));
+    assert!(rendered.contains("[v]BASE"));
+    assert!(rendered.contains("[R]BASE"));
+}
+
+#[test]
+fn effects_tab_is_textually_selected_in_compact_track_detail() {
+    let mut app = App::new(Project::new(), None);
+    app.row = SYNTH_TRACK_START + 1;
+    app.parameter_bank = ParameterBank::Effects;
+
+    let lines = rendered_lines(&app, 120, 34);
+    assert!(lines[22].contains("PARAMS"));
+    assert!(lines[22].contains("[EFFECTS]"));
+    assert!(!lines.concat().contains("[d]BASE"));
 }
 
 #[test]
@@ -2251,7 +2279,7 @@ fn main_layout_hides_non_parameter_shortcut_hints() {
     app.row = 1;
     let screen = rendered(&app, 120, 34);
 
-    assert!(screen.contains("[v]"));
+    assert!(!screen.contains("[v]"));
     for hint in [
         "[←→] select",
         "[Enter] edit",

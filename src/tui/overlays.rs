@@ -774,7 +774,7 @@ pub(super) fn render_lfo_popup(
 ) {
     let popup_area = lfo_popup_rect(area);
     f.render_widget(Clear, popup_area);
-    let panel = Block::bordered().title(format!("Track LFO · {}", parameter.display_name()));
+    let panel = Block::bordered().title(format!("Track LFO · {} · ~", parameter.display_name()));
     let inner = panel.inner(popup_area);
     f.render_widget(panel, popup_area);
 
