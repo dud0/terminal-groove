@@ -2192,6 +2192,20 @@ mod tests {
             editor.project.tracks[0].effects.bit_crusher.mix,
             Percent::new(55).unwrap()
         );
+        editor
+            .set_parameter(
+                0,
+                0,
+                Scope::Base,
+                ParameterId::Chorus,
+                ParameterValue::Chorus(crate::model::ChorusMode::I),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            editor.project.tracks[0].effects.chorus,
+            crate::model::ChorusMode::I
+        );
         editor.toggle_event(0, 0).unwrap();
         editor
             .set_parameter(
@@ -2203,6 +2217,24 @@ mod tests {
                 None,
             )
             .unwrap();
+        editor
+            .set_parameter(
+                0,
+                0,
+                Scope::Lock,
+                ParameterId::Chorus,
+                ParameterValue::Chorus(crate::model::ChorusMode::Ii),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            editor.active_steps(0).unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .locks()
+                .chorus(),
+            Some(crate::model::ChorusMode::Ii)
+        );
         assert_eq!(
             editor.active_steps(0).unwrap()[0]
                 .as_ref()
@@ -2210,6 +2242,15 @@ mod tests {
                 .locks()
                 .percent(ParameterId::FlangerFeedback),
             Percent::new(60)
+        );
+        assert!(editor.undo());
+        assert!(
+            editor.active_steps(0).unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .locks()
+                .chorus()
+                .is_none()
         );
         assert!(editor.undo());
         assert!(

@@ -1,7 +1,8 @@
 use std::f32::consts::PI;
 
 use crate::model::{
-    LfoConfig, LfoWaveform, ParameterId, ParameterLocks, SidechainParameters, TrackEffects,
+    ChorusMode, LfoConfig, LfoWaveform, ParameterId, ParameterLocks, SidechainParameters,
+    TrackEffects,
 };
 
 pub fn exp_map(percent: u8, min: f32, max: f32) -> f32 {
@@ -336,6 +337,7 @@ struct FlangerControls {
 #[derive(Debug)]
 pub struct TrackEffectChain {
     processing: bool,
+    chorus: StereoChorus,
     distortion_active: bool,
     bit_crusher_active: bool,
     phaser_active: bool,
@@ -412,6 +414,7 @@ impl TrackEffectChain {
         let initial_phaser_coefficient = Self::phaser_coefficient(0.0, 0.0, sample_rate_f32);
         Self {
             processing: false,
+            chorus: StereoChorus::new(sample_rate),
             distortion_active: false,
             bit_crusher_active: false,
             phaser_active: false,
@@ -478,7 +481,14 @@ impl TrackEffectChain {
     }
 
     pub fn configure(&mut self, effects: TrackEffects, locks: ParameterLocks, samples: u32) {
+        let chorus_mode = locks.chorus().unwrap_or(effects.chorus);
+        self.chorus.configure(match chorus_mode {
+            ChorusMode::Off => 0,
+            ChorusMode::I => 1,
+            ChorusMode::Ii => 2,
+        });
         let was_processing = self.processing
+            || self.chorus.is_active()
             || self.distortion_mix.current > 0.0
             || self.bit_crusher_mix.current > 0.0
             || self.phaser_mix.current > 0.0
@@ -589,6 +599,7 @@ impl TrackEffectChain {
             samples,
         );
         self.processing = was_processing
+            || chorus_mode != ChorusMode::Off
             || self.distortion_mix.target > 0.0
             || self.bit_crusher_mix.target > 0.0
             || self.phaser_mix.target > 0.0
@@ -603,6 +614,7 @@ impl TrackEffectChain {
         if !self.processing {
             return (input_l, input_r);
         }
+        let (input_l, input_r) = self.chorus.process_stereo(input_l, input_r);
         let distortion_mix = self.distortion_mix.next_value() / 100.0;
         let bit_crusher_mix = self.bit_crusher_mix.next_value() / 100.0;
         let phaser_mix = self.phaser_mix.next_value() / 100.0;
@@ -929,7 +941,9 @@ impl TrackEffectChain {
     }
 
     fn has_pending_parameters(&self) -> bool {
-        self.distortion_mix.is_smoothing()
+        self.chorus.mode != 0
+            || self.chorus.is_active()
+            || self.distortion_mix.is_smoothing()
             || self.bit_crusher_mix.is_smoothing()
             || self.phaser_mix.is_smoothing()
             || self.flanger_mix.is_smoothing()
@@ -988,7 +1002,8 @@ impl TrackEffectChain {
     }
 
     pub fn is_active(&self) -> bool {
-        self.distortion_active
+        self.chorus.is_active()
+            || self.distortion_active
             || self.bit_crusher_active
             || self.phaser_active
             || self.flanger_active
@@ -1042,6 +1057,7 @@ impl TrackEffectChain {
     }
 
     pub fn clear(&mut self) {
+        self.chorus.clear();
         self.clear_distortion();
         self.clear_bit_crusher();
         self.clear_phaser();
@@ -1957,8 +1973,9 @@ impl Default for Biquad {
     }
 }
 
-/// A short, modulated stereo delay implementing the fixed Chord chorus modes.
+/// A short, modulated stereo delay implementing the fixed track chorus modes.
 /// Storage is allocated when the renderer is built, never in the audio callback.
+#[derive(Debug)]
 pub struct StereoChorus {
     buffer: Vec<f32>,
     pos: usize,
@@ -2039,7 +2056,7 @@ impl StereoChorus {
         if !self.active && self.fade_remaining == 0 && input_peak <= SILENCE_THRESHOLD {
             return (left_input, right_input);
         }
-        if input_peak > SILENCE_THRESHOLD {
+        if input_peak > SILENCE_THRESHOLD && (self.mode != 0 || self.fade_remaining != 0) {
             self.active = true;
             self.tail_remaining = self.buffer.len();
         }

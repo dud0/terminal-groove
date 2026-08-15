@@ -92,16 +92,6 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
             renderer.preview_chord.arpeggio = ArpeggioState::default();
             renderer.fm_chord.arpeggio = ArpeggioState::default();
             renderer.preview_fm_chord.arpeggio = ArpeggioState::default();
-            for chorus in renderer
-                .chord
-                .choruses
-                .iter_mut()
-                .chain(renderer.preview_chord.choruses.iter_mut())
-                .chain(renderer.fm_chord.choruses.iter_mut())
-                .chain(renderer.preview_fm_chord.choruses.iter_mut())
-            {
-                chorus.clear();
-            }
             renderer.delay.clear();
             renderer.reverb.clear();
             renderer.sidechain.reset();

@@ -517,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn chord_chorus_modes_are_deterministic_finite_and_stereo() {
+    fn track_chorus_modes_are_deterministic_finite_and_stereo() {
         let render = || {
             let mut chorus = StereoChorus::new(48_000);
             chorus.configure(2);
@@ -541,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn chord_chorus_handles_float_wrap_at_44100_hz() {
+    fn track_chorus_handles_float_wrap_at_44100_hz() {
         for mode in 1..=2 {
             let mut chorus = StereoChorus::new(44_100);
             chorus.configure(mode);
@@ -553,12 +553,34 @@ mod tests {
     }
 
     #[test]
-    fn chord_chorus_tap_handles_a_near_zero_negative_read() {
+    fn track_chorus_tap_handles_a_near_zero_negative_read() {
         let mut chorus = StereoChorus::new(44_100);
         chorus.pos = 0;
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| chorus.tap(0.00001))).is_ok()
         );
+    }
+
+    #[test]
+    fn shared_effect_chain_applies_base_and_locked_chorus_modes() {
+        let mut chain = TrackEffectChain::new(48_000);
+        let effects = TrackEffects {
+            chorus: crate::model::ChorusMode::I,
+            ..Default::default()
+        };
+        chain.configure(effects, ParameterLocks::default(), 0);
+        assert_eq!(chain.chorus.mode, 1);
+
+        let locks = ParameterLocks::from_pairs([(
+            crate::model::ParameterId::Chorus,
+            crate::model::ParameterValue::Chorus(crate::model::ChorusMode::Ii),
+        )]);
+        chain.configure(effects, locks, 0);
+        assert_eq!(chain.chorus.mode, 2);
+        for sample in 0..2_000 {
+            let (left, right) = chain.process(if sample == 0 { 1.0 } else { 0.0 });
+            assert!(left.is_finite() && right.is_finite());
+        }
     }
 
     #[test]
@@ -571,6 +593,7 @@ mod tests {
         assert_eq!(chain.process_stereo(0.25, -0.75), (0.25, -0.75));
 
         let effects = TrackEffects {
+            chorus: Default::default(),
             distortion: crate::model::DistortionParameters {
                 drive: crate::model::Percent::new(100).unwrap(),
                 tone: crate::model::Percent::new(100).unwrap(),
@@ -878,6 +901,7 @@ mod tests {
     #[test]
     fn track_effect_chain_is_deterministic() {
         let effects = TrackEffects {
+            chorus: Default::default(),
             distortion: crate::model::DistortionParameters {
                 drive: crate::model::Percent::new(60).unwrap(),
                 tone: crate::model::Percent::new(30).unwrap(),

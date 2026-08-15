@@ -7,10 +7,10 @@ use super::{
     AudioProject, AudioTrack, ParameterSmoothing, PreviewAction, Renderer, ScheduledTrackAction,
     SynthVoice, TRACK_COUNT,
 };
-use crate::dsp::{EnvelopeProfile, StereoChorus};
+use crate::dsp::EnvelopeProfile;
 use crate::engine::{GateAction, synth_action};
 use crate::model::{
-    ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT, DrumRecipeSlot,
+    ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, DrumRecipeSlot,
     FM_TRACK_INDEX, FmOperatorField, Instrument, LEAD_TRACK_INDEX, ParameterId, ParameterLocks,
     Percent, SYNTH_TRACK_START, StepEvent,
 };
@@ -617,21 +617,6 @@ impl Renderer {
         voice.locks = locks;
     }
 
-    pub(super) fn configure_chorus(
-        chorus: &mut StereoChorus,
-        track: AudioTrack,
-        locks: ParameterLocks,
-    ) {
-        let Instrument::Chord(parameters) = track.instrument else {
-            return;
-        };
-        let mode = locks.chorus().unwrap_or(parameters.chorus);
-        chorus.configure(match mode {
-            ChorusMode::Off => 0,
-            ChorusMode::I => 1,
-            ChorusMode::Ii => 2,
-        });
-    }
     pub(super) fn configure_synth_voice(
         project: &AudioProject,
         sr: f32,
@@ -791,9 +776,6 @@ impl Renderer {
             pool.voice_count = 1;
             pool.group_voice_counts[pool.group] = 1;
             Self::trigger_arpeggio_tone(project, sr, track, pool);
-            for chorus in &mut pool.choruses {
-                Self::configure_chorus(chorus, project.tracks[track], locks);
-            }
             pool.active = true;
             return;
         }
@@ -828,9 +810,6 @@ impl Renderer {
         }
         pool.voice_count = voice_count;
         pool.group_voice_counts[pool.group] = voice_count;
-        for chorus in &mut pool.choruses {
-            Self::configure_chorus(chorus, project.tracks[track], locks);
-        }
         pool.active = true;
     }
 
@@ -882,7 +861,6 @@ impl Renderer {
     fn apply_voicing_tie(
         project: &AudioProject,
         track: usize,
-        track_params: AudioTrack,
         locks: ParameterLocks,
         pool: &mut ChordVoicePool,
         smoothing: u32,
@@ -891,9 +869,6 @@ impl Renderer {
             [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
         {
             Self::apply_synth_params_core(project, track, locks, voice, smoothing);
-        }
-        for chorus in &mut pool.choruses {
-            Self::configure_chorus(chorus, track_params, locks);
         }
     }
     pub(super) fn refresh_active_parameters(&mut self, smoothing: u32) {
@@ -967,7 +942,6 @@ impl Renderer {
             }
         }
         if self.chord.active {
-            let chorus_locks = self.chord.voices[self.chord.group * CHORD_GROUP_SIZE].locks;
             for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
                 ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
             {
@@ -980,17 +954,8 @@ impl Renderer {
                     smoothing,
                 );
             }
-            for chorus in &mut self.chord.choruses {
-                Self::configure_chorus(
-                    chorus,
-                    self.project.tracks[CHORD_TRACK_INDEX],
-                    chorus_locks,
-                );
-            }
         }
         if self.preview_chord.active {
-            let chorus_locks =
-                self.preview_chord.voices[self.preview_chord.group * CHORD_GROUP_SIZE].locks;
             for voice in &mut self.preview_chord.voices[self.preview_chord.group * CHORD_GROUP_SIZE
                 ..self.preview_chord.group * CHORD_GROUP_SIZE + self.preview_chord.voice_count]
             {
@@ -1001,13 +966,6 @@ impl Renderer {
                     locks,
                     voice,
                     smoothing,
-                );
-            }
-            for chorus in &mut self.preview_chord.choruses {
-                Self::configure_chorus(
-                    chorus,
-                    self.project.tracks[CHORD_TRACK_INDEX],
-                    chorus_locks,
                 );
             }
         }
@@ -1412,7 +1370,6 @@ impl Renderer {
         retrigger: bool,
         trigger_allowed: bool,
     ) {
-        let t = self.project.tracks[track];
         let sequence = self.project.patterns[self.active_pattern].tracks[track];
         let locks = self.locks_at(track, step);
         if !retrigger {
@@ -1514,7 +1471,6 @@ impl Renderer {
                         Self::apply_voicing_tie(
                             &self.project,
                             track,
-                            t,
                             locks,
                             &mut self.chord,
                             ParameterSmoothing::Default.samples(self.sr),
@@ -1523,7 +1479,6 @@ impl Renderer {
                         Self::apply_voicing_tie(
                             &self.project,
                             track,
-                            t,
                             locks,
                             &mut self.fm_chord,
                             ParameterSmoothing::Default.samples(self.sr),
@@ -1551,9 +1506,6 @@ impl Renderer {
                     // release.  Keep its latched mixer and voice controls;
                     // only the shared track effect controls return to base.
                     Self::release_chord(&mut self.chord);
-                    for chorus in &mut self.chord.choruses {
-                        Self::configure_chorus(chorus, t, ParameterLocks::default());
-                    }
                 } else if track == FM_TRACK_INDEX {
                     Self::release_chord(&mut self.fm_chord);
                 } else {

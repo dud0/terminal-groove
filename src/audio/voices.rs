@@ -1,7 +1,6 @@
 use crate::dsp::{
     Adsr, BassAccentEnvelope, BassFilter, BassFilterEnvelope, BassVcaEnvelope, Biquad, ChordFilter,
-    LeadFilter, NoiseSource, PolyBlepOsc, Smoother, StereoChorus, SubOscillatorMode,
-    additive_source_gains,
+    LeadFilter, NoiseSource, PolyBlepOsc, Smoother, SubOscillatorMode, additive_source_gains,
 };
 use crate::model::{
     ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, FmAlgorithm, ParameterLocks, Waveform,
@@ -221,9 +220,6 @@ pub(super) struct ChordVoicePool {
     pub(super) voice_count: usize,
     pub(super) group_voice_counts: [usize; 2],
     pub(super) active: bool,
-    /// Each physical voice group owns its delay state so an overlapping
-    /// release cannot borrow modulation history from a newly-triggered chord.
-    pub(super) choruses: [StereoChorus; 2],
     pub(super) arpeggiated: bool,
     pub(super) arpeggio: ArpeggioState,
     pub(super) arpeggio_trigger: SynthTrigger,
@@ -244,7 +240,6 @@ impl ChordVoicePool {
             voice_count: 0,
             group_voice_counts: [0; 2],
             active: false,
-            choruses: std::array::from_fn(|_| StereoChorus::new(sample_rate)),
             arpeggiated: false,
             arpeggio: ArpeggioState::default(),
             arpeggio_trigger: SynthTrigger {

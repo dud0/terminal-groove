@@ -22,6 +22,7 @@ mod tests {
     fn performance_project() -> Project {
         let mut project = Project::new();
         let saturated_effects = TrackEffects {
+            chorus: Default::default(),
             distortion: DistortionParameters {
                 drive: Percent::new(85).unwrap(),
                 tone: Percent::new(65).unwrap(),

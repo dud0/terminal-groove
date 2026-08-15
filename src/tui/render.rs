@@ -109,13 +109,13 @@ PARAMETERS  v level · n pan · y delay send · b reverb send
            p BASE/LOCK · PageUp/Down step · Shift+PageUp/Down step bank
            EFFECTS: d/t/x distortion drive/tone/mix · b/s/m crusher bits/rate/mix
            EFFECTS: r/e/f/M phaser rate/depth/feedback/mix
-           EFFECTS: R rate · q delay · E depth · F feedback · N flanger mix
+           EFFECTS: R rate · q delay · E depth · F feedback · N flanger mix · h chorus
            Kick: u tune · d decay · a attack
            Snare: u tune · t tone · s snappy · Hat recipes: u tune · d decay
            Tom recipes/Cymbal/Rimshot: u tune · t tone · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
            Chord/Lead: w mix · P pulse · u sub · O noise · c cutoff · R resonance · f filter · i pitch · ADSR
-           Chord: h chorus · FM: q algorithm · O operators · c brightness · i pitch · ADSR
+           FM: q algorithm · O operators · c brightness · i pitch · ADSR
            FM operator: ←/→ select · Tab field · ↑/↓ edit · [/] algorithm
            Shift+L LFO · [`/-/1–9/0] percent · ↑/↓ adjust · ←/→ switch parameter
            Enter/Esc finish · Backspace/Delete remove lock/LFO
@@ -331,6 +331,7 @@ pub(super) enum ParameterGroup {
     BitCrusher,
     Phaser,
     Flanger,
+    Chorus,
 }
 
 impl ParameterGroup {
@@ -344,6 +345,7 @@ impl ParameterGroup {
             Self::BitCrusher => "BIT CRUSHER",
             Self::Phaser => "PHASER",
             Self::Flanger => "FLANGER",
+            Self::Chorus => "CHORUS",
         }
     }
 
@@ -357,6 +359,7 @@ impl ParameterGroup {
             Self::BitCrusher => Color::LightMagenta,
             Self::Phaser => Color::Blue,
             Self::Flanger => Color::LightBlue,
+            Self::Chorus => Color::LightGreen,
         }
     }
 }
@@ -666,7 +669,7 @@ const BASS_PARAMETERS: [ParameterDescriptor; 9] = [
     },
 ];
 
-const CHORD_PARAMETERS: [ParameterDescriptor; 17] = [
+const CHORD_PARAMETERS: [ParameterDescriptor; 16] = [
     LEVEL_PARAMETER,
     DELAY_SEND_PARAMETER,
     REVERB_SEND_PARAMETER,
@@ -693,12 +696,6 @@ const CHORD_PARAMETERS: [ParameterDescriptor; 17] = [
         id: ParameterId::Noise,
         label: "Noise",
         shortcut: "O",
-        group: ParameterGroup::Instrument,
-    },
-    ParameterDescriptor {
-        id: ParameterId::Chorus,
-        label: "Chorus",
-        shortcut: "h",
         group: ParameterGroup::Instrument,
     },
     ParameterDescriptor {
@@ -851,7 +848,7 @@ pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescr
     }
 }
 
-const EFFECT_PARAMETERS: [ParameterDescriptor; 15] = [
+const EFFECT_PARAMETERS: [ParameterDescriptor; 16] = [
     ParameterDescriptor {
         id: ParameterId::DistortionDrive,
         label: "Drive",
@@ -941,6 +938,12 @@ const EFFECT_PARAMETERS: [ParameterDescriptor; 15] = [
         label: "Mix",
         shortcut: "N",
         group: ParameterGroup::Flanger,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Chorus,
+        label: "Chorus",
+        shortcut: "h",
+        group: ParameterGroup::Chorus,
     },
 ];
 

@@ -43,7 +43,7 @@ fn base(kind: TrackKind, level: u8, delay: u8, reverb: u8, instrument: Instrumen
 }
 
 fn chord(values: [u8; 11], chorus: ChorusMode, sends: [u8; 3]) -> TrackPreset {
-    base(
+    let mut preset = base(
         TrackKind::Chord,
         sends[0],
         sends[1],
@@ -53,7 +53,6 @@ fn chord(values: [u8; 11], chorus: ChorusMode, sends: [u8; 3]) -> TrackPreset {
             pulse_width: p(values[1]),
             sub_oscillator: p(values[2]),
             noise: p(values[3]),
-            chorus,
             cutoff: p(values[4]),
             resonance: p(values[5]),
             filter_envelope: p(values[6]),
@@ -62,7 +61,9 @@ fn chord(values: [u8; 11], chorus: ChorusMode, sends: [u8; 3]) -> TrackPreset {
             sustain: p(values[9]),
             release: p(values[10]),
         }),
-    )
+    );
+    preset.effects.chorus = chorus;
+    preset
 }
 fn lead(values: [u8; 13], sub_mode: LeadSubMode, sends: [u8; 3]) -> TrackPreset {
     base(
@@ -580,6 +581,19 @@ mod tests {
             assert_eq!(preset.pan, p(50));
         }
         let dream = find("dream-motion").unwrap().preset();
+        assert_eq!(
+            for_kind(TrackKind::Chord)
+                .map(|item| item.preset().effects.chorus)
+                .collect::<Vec<_>>(),
+            vec![
+                ChorusMode::I,
+                ChorusMode::Ii,
+                ChorusMode::I,
+                ChorusMode::Off,
+                ChorusMode::Ii,
+                ChorusMode::Ii,
+            ]
+        );
         assert_eq!(
             dream.effects.phaser,
             PhaserParameters {

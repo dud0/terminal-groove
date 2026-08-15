@@ -1172,7 +1172,6 @@ pub struct ChordParameters {
     pub pulse_width: Percent,
     pub sub_oscillator: Percent,
     pub noise: Percent,
-    pub chorus: ChorusMode,
     pub cutoff: Percent,
     pub resonance: Percent,
     pub filter_envelope: Percent,
@@ -1325,6 +1324,8 @@ impl Default for BitCrusherParameters {
 #[serde(deny_unknown_fields)]
 pub struct TrackEffects {
     #[serde(default)]
+    pub chorus: ChorusMode,
+    #[serde(default)]
     pub distortion: DistortionParameters,
     #[serde(default)]
     pub phaser: PhaserParameters,
@@ -1334,9 +1335,10 @@ pub struct TrackEffects {
     pub bit_crusher: BitCrusherParameters,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChorusMode {
+    #[default]
     Off,
     I,
     Ii,
@@ -2079,7 +2081,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 24,
+            format_version: 25,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -2168,7 +2170,6 @@ impl Project {
                         pulse_width: p(50),
                         sub_oscillator: p(0),
                         noise: p(0),
-                        chorus: ChorusMode::I,
                         cutoff: p(55),
                         resonance: p(15),
                         filter_envelope: p(25),
@@ -2255,7 +2256,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 24 {
+        if self.format_version != 25 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -2866,7 +2867,7 @@ impl ParameterId {
             Self::LeadSubMode | Self::KeyboardTracking | Self::PortamentoTime => {
                 matches!(kind, TrackKind::Lead)
             }
-            Self::Chorus => matches!(kind, TrackKind::Chord),
+            Self::Chorus => true,
             Self::Cutoff | Self::Resonance | Self::FilterEnvelope => {
                 matches!(kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead)
             }
@@ -3222,10 +3223,7 @@ impl Track {
                 Instrument::Lead(p) => ParameterValue::Percent(p.portamento_time),
                 _ => return None,
             },
-            ParameterId::Chorus => match self.instrument {
-                Instrument::Chord(p) => ParameterValue::Chorus(p.chorus),
-                _ => return None,
-            },
+            ParameterId::Chorus => ParameterValue::Chorus(self.effects.chorus),
             ParameterId::Cutoff => match self.instrument {
                 Instrument::Bass(p) => ParameterValue::Percent(p.cutoff),
                 Instrument::Chord(p) => ParameterValue::Percent(p.cutoff),
@@ -3459,10 +3457,7 @@ impl Track {
                 Instrument::Lead(p) => p.portamento_time = v,
                 _ => return false,
             },
-            (ParameterId::Chorus, ParameterValue::Chorus(v)) => match &mut self.instrument {
-                Instrument::Chord(p) => p.chorus = v,
-                _ => return false,
-            },
+            (ParameterId::Chorus, ParameterValue::Chorus(v)) => self.effects.chorus = v,
             (ParameterId::Cutoff, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Bass(p) => p.cutoff = v,
                 Instrument::Chord(p) => p.cutoff = v,
@@ -3772,7 +3767,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 24);
+        assert_eq!(project.format_version, 25);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
@@ -3784,6 +3779,14 @@ mod tests {
         assert_eq!(project.tracks[0].effects.bit_crusher.bits, p(50));
         assert_eq!(project.tracks[0].effects.bit_crusher.rate, p(50));
         assert_eq!(project.tracks[0].effects.bit_crusher.mix, Percent::ZERO);
+        assert!(
+            project
+                .tracks
+                .iter()
+                .all(|track| track.effects.chorus == ChorusMode::Off)
+        );
+        assert!(ParameterId::Chorus.is_valid_for(TrackKind::Kick));
+        assert!(!ParameterId::Chorus.supports_lfo(TrackKind::Kick));
         assert!(ParameterId::PhaserMix.is_valid_for(TrackKind::Kick));
         assert!(!ParameterId::PhaserMix.supports_lfo(TrackKind::Kick));
         assert!(ParameterId::FlangerMix.is_valid_for(TrackKind::Kick));
@@ -3805,10 +3808,17 @@ mod tests {
         assert_eq!(locks.percent(ParameterId::FlangerFeedback), Some(p(90)));
         assert!(locks.set(ParameterId::BitCrusherBits, ParameterValue::Percent(p(75))));
         assert_eq!(locks.percent(ParameterId::BitCrusherBits), Some(p(75)));
+        assert!(locks.set(ParameterId::Chorus, ParameterValue::Chorus(ChorusMode::Ii)));
+        assert_eq!(locks.chorus(), Some(ChorusMode::Ii));
         assert!(!locks.set(ParameterId::FlangerFeedback, ParameterValue::Percent(p(91))));
         assert_eq!(locks.percent(ParameterId::FlangerFeedback), Some(p(90)));
 
         let mut track = project.tracks[0].clone();
+        assert!(track.set_parameter(ParameterId::Chorus, ParameterValue::Chorus(ChorusMode::I)));
+        assert_eq!(
+            track.parameter(ParameterId::Chorus),
+            Some(ParameterValue::Chorus(ChorusMode::I))
+        );
         assert!(track.set_parameter(ParameterId::PhaserFeedback, ParameterValue::Percent(p(90))));
         assert!(!track.set_parameter(ParameterId::PhaserFeedback, ParameterValue::Percent(p(91))));
         assert_eq!(track.effects.phaser.feedback, p(90));

@@ -98,7 +98,7 @@ fn parameter_banks_are_contextual_and_model_compatible() {
         (TrackKind::Cymbal, 7),
         (TrackKind::Rimshot, 7),
         (TrackKind::Bass, 9),
-        (TrackKind::Chord, 17),
+        (TrackKind::Chord, 16),
         (TrackKind::Lead, 19),
         (TrackKind::Fm, 15),
     ];
@@ -136,7 +136,7 @@ fn parameter_banks_are_contextual_and_model_compatible() {
     );
 
     let effects = effect_descriptors();
-    assert_eq!(effects.len(), 15);
+    assert_eq!(effects.len(), 16);
     assert!(effects.iter().all(|descriptor| {
         descriptor.id.is_valid_for(TrackKind::Kick) && !descriptor.id.supports_lfo(TrackKind::Kick)
     }));
@@ -270,6 +270,10 @@ fn effects_bank_does_not_claim_pitched_note_keys() {
         active_parameter_shortcut(&app, 'm'),
         Some(ParameterId::BitCrusherMix)
     );
+    assert_eq!(
+        active_parameter_shortcut(&app, 'h'),
+        Some(ParameterId::Chorus)
+    );
 }
 
 #[test]
@@ -300,6 +304,11 @@ fn effects_bank_renders_bit_crusher_at_minimum_size() {
     assert!(screen.contains("BIT CRUSHER"));
     assert!(screen.contains("9-bit quantization · BASE"));
     assert!(screen.contains("[b]B"));
+
+    app.mode = Mode::ParameterEdit(ParameterId::Chorus);
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("CHORUS"));
+    assert!(screen.contains("[h]B"));
 }
 
 #[test]

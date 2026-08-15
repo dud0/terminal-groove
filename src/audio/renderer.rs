@@ -42,7 +42,6 @@ fn render_voicing_groups(
     sample_rate: f32,
     lfo_offsets: &[f32; ParameterId::ALL.len()],
     output_gain: f32,
-    use_chorus: bool,
     mix: &mut MixBus,
 ) {
     for (group, effect) in effects.iter_mut().enumerate() {
@@ -67,11 +66,6 @@ fn render_voicing_groups(
         ) / 100.0;
         let delay_send = control_voice.delay_send.next_value();
         let reverb_send = control_voice.reverb_send.next_value();
-        let (left, right) = if use_chorus {
-            pool.choruses[group].process_stereo(left, right)
-        } else {
-            (left, right)
-        };
         let (effect_l, effect_r) = effect.process_stereo(left, right);
         let gain = output_gain * level.powi(2);
         mix.add(effect_l, effect_r, delay_send, reverb_send, gain);
@@ -108,7 +102,6 @@ impl Renderer {
                     .voices
                     .iter()
                     .any(|voice| voice.env.stage != EnvStage::Idle)
-                || pool.choruses.iter().any(|chorus| chorus.is_active())
                 || effects.iter().any(TrackEffectChain::is_active)
         } else {
             !self.preview[track - super::SYNTH_TRACK_START].is_idle()
@@ -825,7 +818,6 @@ impl Renderer {
             self.sr,
             &self.lfo_offsets[chord_track],
             chord_mute * duck_gain,
-            true,
             &mut mix,
         );
 
@@ -836,7 +828,6 @@ impl Renderer {
                 self.sr,
                 &self.preview_lfo_offsets[chord_track],
                 1.0,
-                true,
                 &mut mix,
             );
         }
@@ -849,7 +840,6 @@ impl Renderer {
             self.sr,
             &self.lfo_offsets[fm_track],
             fm_mute * duck_gain,
-            false,
             &mut mix,
         );
         if self.preview_activity[fm_track] {
@@ -859,7 +849,6 @@ impl Renderer {
                 self.sr,
                 &self.preview_lfo_offsets[fm_track],
                 1.0,
-                false,
                 &mut mix,
             );
         }
