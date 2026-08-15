@@ -79,6 +79,14 @@ fn parameter_shortcuts_follow_track_context() {
         parameter_shortcut(TrackKind::Fm, 'm'),
         Some(ParameterId::FmAmount)
     );
+    assert_eq!(
+        parameter_shortcut(TrackKind::Fm, 'b'),
+        Some(ParameterId::ReverbSend)
+    );
+    assert_eq!(
+        parameter_shortcut(TrackKind::Fm, 'c'),
+        Some(ParameterId::Brightness)
+    );
 }
 #[test]
 fn parameter_banks_are_contextual_and_model_compatible() {
@@ -1120,6 +1128,7 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
     assert!(screen.contains("o audition selected step"));
     assert!(screen.contains("[`/1–9/0] percent"));
     assert!(screen.contains("Backspace/Delete remove lock/LFO"));
+    assert!(screen.contains("FM: w/q/m/f/c + i + ADSR"));
     assert!(screen.contains("Esc close help"));
 
     let minimum_screen = rendered(&app, 120, 34);
@@ -1679,7 +1688,7 @@ fn rimshot_readouts_show_reference_modes_and_longest_decay() {
 
 #[test]
 fn fm_readouts_show_synthesis_units() {
-    let app = App::new(Project::new(), None);
+    let mut app = App::new(Project::new(), None);
     assert!(
         physical_parameter_readout(&app, FM_TRACK_INDEX, 0, ParameterId::FmAmount)
             .contains("index 1.47 rad")
@@ -1692,6 +1701,12 @@ fn fm_readouts_show_synthesis_units() {
         physical_parameter_readout(&app, FM_TRACK_INDEX, 0, ParameterId::Brightness)
             .contains("Hz · BASE")
     );
+
+    app.row = FM_TRACK_INDEX + 1;
+    app.mode = Mode::ParameterEdit(ParameterId::Brightness);
+    let screen = rendered(&app, 220, 34);
+    assert!(screen.contains("Bright"));
+    assert!(screen.contains("[c]"));
 }
 
 #[test]

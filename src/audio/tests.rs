@@ -1165,6 +1165,89 @@ mod tests {
     }
 
     #[test]
+    fn stop_releases_bass_vcas_and_resets_fm_state() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            slide: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::ZERO,
+            locks: Default::default(),
+        });
+        project.patterns[0].tracks[FM_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            chord_shape: None,
+            arpeggio: Default::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::ZERO,
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.boundary(0);
+        renderer.audition_once(SYNTH_TRACK_START, 0);
+        renderer.audition_once(FM_TRACK_INDEX, 0);
+        let fm = FM_TRACK_INDEX - SYNTH_TRACK_START;
+        for _ in 0..64 {
+            Renderer::render_synth(
+                &mut renderer.synth[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+            Renderer::render_synth(
+                &mut renderer.preview[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+            Renderer::render_synth(
+                &mut renderer.synth[fm],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+            Renderer::render_synth(
+                &mut renderer.preview[fm],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+        }
+        assert!(renderer.synth[0].bass_vca.value() > 0.0);
+        assert!(renderer.preview[0].bass_vca.value() > 0.0);
+        assert_ne!(renderer.synth[fm].fm_carrier_phase, 0.0);
+        assert_ne!(renderer.preview[fm].fm_carrier_phase, 0.0);
+
+        renderer.command(AudioCommand::Stop);
+
+        assert!(!renderer.synth[0].is_idle());
+        assert!(!renderer.preview[0].is_idle());
+        for voice in [&mut renderer.synth[fm], &mut renderer.preview[fm]] {
+            assert_eq!(voice.fm_carrier_phase, 0.0);
+            assert_eq!(voice.fm_modulator_phase, 0.0);
+            assert_eq!(voice.fm_previous_modulator, 0.0);
+            assert_eq!(voice.fm_filter.process(0.0), 0.0);
+        }
+        for _ in 0..1_000 {
+            Renderer::render_synth(
+                &mut renderer.synth[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+            Renderer::render_synth(
+                &mut renderer.preview[0],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+        }
+        assert!(renderer.synth[0].is_idle());
+        assert!(renderer.preview[0].is_idle());
+    }
+
+    #[test]
     fn active_drum_tail_still_advances_while_paused() {
         let status = Arc::new(AudioStatus::default());
         let mut renderer =
@@ -3089,6 +3172,187 @@ mod tests {
 
         assert_eq!(renderer.active_song, 0);
         assert_eq!(renderer.song_bar, 0);
+    }
+
+    fn project_with_fm_note() -> Project {
+        let mut project = Project::new();
+        project.patterns[0].tracks[FM_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            chord_shape: None,
+            arpeggio: Default::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::ZERO,
+            locks: Default::default(),
+        });
+        project
+    }
+
+    fn edit_fm_parameters(project: &mut Project) {
+        let track = &mut project.tracks[FM_TRACK_INDEX];
+        track.level = Percent::new(31).unwrap();
+        track.delay_send = Percent::new(32).unwrap();
+        track.reverb_send = Percent::new(33).unwrap();
+        track.pan = Percent::new(34).unwrap();
+        let Instrument::Fm(parameters) = &mut track.instrument else {
+            unreachable!()
+        };
+        parameters.waveform = FmWaveform::Triangle;
+        parameters.ratio = crate::model::FmRatio::Four;
+        parameters.amount = Percent::new(81).unwrap();
+        parameters.feedback = Percent::new(67).unwrap();
+        parameters.brightness = Percent::new(23).unwrap();
+        parameters.attack = Percent::new(12).unwrap();
+        parameters.decay = Percent::new(34).unwrap();
+        parameters.sustain = Percent::new(56).unwrap();
+        parameters.release = Percent::new(78).unwrap();
+    }
+
+    fn assert_edited_fm_parameters(voice: &SynthVoice) {
+        assert_eq!(voice.fm_waveform, FmWaveform::Triangle);
+        assert_eq!(voice.fm_ratio, crate::model::FmRatio::Four);
+        assert_eq!(voice.fm_amount.value(), 81.0);
+        assert_eq!(voice.fm_feedback.value(), 67.0);
+        assert_eq!(voice.fm_brightness.value(), 23.0);
+        assert_eq!(voice.env.parameter_values(), (12.0, 34.0, 56.0, 78.0));
+        assert_eq!(voice.level.value(), 31.0);
+        assert_eq!(voice.delay_send.value(), 0.32);
+        assert_eq!(voice.reverb_send.value(), 0.33);
+        assert_eq!(voice.pan.value(), 34.0);
+    }
+
+    #[test]
+    fn live_fm_parameter_edits_refresh_sustaining_live_and_preview_voices() {
+        let mut project = project_with_fm_note();
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        let index = FM_TRACK_INDEX - SYNTH_TRACK_START;
+        renderer.boundary(0);
+        renderer.audition_once(FM_TRACK_INDEX, 0);
+        assert!(renderer.synth[index].active);
+        assert!(renderer.preview[index].active);
+
+        edit_fm_parameters(&mut project);
+        renderer.command(Audio::snapshot_with_smoothing(
+            &project,
+            ParameterSmoothing::Fader,
+        ));
+        assert_eq!(renderer.synth[index].fm_waveform, FmWaveform::Triangle);
+        assert_eq!(renderer.preview[index].fm_ratio, crate::model::FmRatio::Four);
+        for _ in 0..ParameterSmoothing::Fader.samples(renderer.sr) {
+            Renderer::render_synth(
+                &mut renderer.synth[index],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+            renderer.synth[index].level.next_value();
+            renderer.synth[index].pan.next_value();
+            Renderer::render_synth(
+                &mut renderer.preview[index],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+            renderer.preview[index].level.next_value();
+            renderer.preview[index].pan.next_value();
+        }
+        assert_edited_fm_parameters(&renderer.synth[index]);
+        assert_edited_fm_parameters(&renderer.preview[index]);
+
+        let mut locks = ParameterLocks::default();
+        assert!(locks.set(
+            ParameterId::FmWaveform,
+            ParameterValue::FmWaveform(FmWaveform::Saw),
+        ));
+        assert!(locks.set(
+            ParameterId::FmAmount,
+            ParameterValue::Percent(Percent::new(17).unwrap()),
+        ));
+        for voice in [&mut renderer.synth[index], &mut renderer.preview[index]] {
+            Renderer::configure_synth_voice(
+                &renderer.project,
+                renderer.sr,
+                FM_TRACK_INDEX,
+                SynthTrigger {
+                    degree: 1,
+                    octave: 3,
+                    accent: false,
+                    slide: false,
+                    chord_shape: None,
+                    arpeggio: Default::default(),
+                },
+                locks,
+                voice,
+            );
+        }
+        let mut lock_edit = project.clone();
+        let Instrument::Fm(parameters) = &mut lock_edit.tracks[FM_TRACK_INDEX].instrument else {
+            unreachable!()
+        };
+        parameters.waveform = FmWaveform::Sine;
+        parameters.amount = Percent::new(99).unwrap();
+        renderer.command(Audio::snapshot(&lock_edit));
+        assert_eq!(renderer.synth[index].fm_waveform, FmWaveform::Saw);
+        assert_eq!(renderer.preview[index].fm_waveform, FmWaveform::Saw);
+        for _ in 0..ParameterSmoothing::Default.samples(renderer.sr) {
+            renderer.synth[index].fm_amount.next_value();
+            renderer.preview[index].fm_amount.next_value();
+        }
+        assert_eq!(renderer.synth[index].fm_amount.value(), 17.0);
+        assert_eq!(renderer.preview[index].fm_amount.value(), 17.0);
+    }
+
+    #[test]
+    fn live_fm_parameter_edits_refresh_live_and_preview_release_tails() {
+        let mut project = project_with_fm_note();
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        let index = FM_TRACK_INDEX - SYNTH_TRACK_START;
+        renderer.boundary(0);
+        renderer.audition_once(FM_TRACK_INDEX, 0);
+        for _ in 0..64 {
+            Renderer::render_synth(
+                &mut renderer.synth[index],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+            Renderer::render_synth(
+                &mut renderer.preview[index],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+        }
+        for voice in [&mut renderer.synth[index], &mut renderer.preview[index]] {
+            voice.gate_off();
+            voice.active = false;
+            assert_eq!(voice.env.stage, crate::dsp::EnvStage::Release);
+            assert!(!voice.is_idle());
+        }
+
+        edit_fm_parameters(&mut project);
+        renderer.command(Audio::snapshot_with_smoothing(
+            &project,
+            ParameterSmoothing::Fader,
+        ));
+        for _ in 0..ParameterSmoothing::Fader.samples(renderer.sr) {
+            Renderer::render_synth(
+                &mut renderer.synth[index],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+            renderer.synth[index].level.next_value();
+            renderer.synth[index].pan.next_value();
+            Renderer::render_synth(
+                &mut renderer.preview[index],
+                renderer.sr,
+                &[0.0; ParameterId::ALL.len()],
+            );
+            renderer.preview[index].level.next_value();
+            renderer.preview[index].pan.next_value();
+        }
+        assert_edited_fm_parameters(&renderer.synth[index]);
+        assert_edited_fm_parameters(&renderer.preview[index]);
     }
 
     #[test]

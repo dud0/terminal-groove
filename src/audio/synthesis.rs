@@ -903,9 +903,10 @@ impl Renderer {
             let locks = self.preview_drums[track].locks;
             Self::apply_drum_mix(&mut self.preview_drums[track], params, locks, smoothing);
         }
-        for track in [SYNTH_TRACK_START, LEAD_TRACK_INDEX] {
+        for track in [SYNTH_TRACK_START, LEAD_TRACK_INDEX, FM_TRACK_INDEX] {
             let index = track - SYNTH_TRACK_START;
-            if self.synth[index].active {
+            if self.synth[index].active || (track == FM_TRACK_INDEX && !self.synth[index].is_idle())
+            {
                 // Keep the effective lock chain latched until the next boundary.
                 let locks = self.synth[index].locks;
                 Self::apply_synth_params_core(
@@ -916,7 +917,9 @@ impl Renderer {
                     smoothing,
                 );
             }
-            if self.preview[index].active {
+            if self.preview[index].active
+                || (track == FM_TRACK_INDEX && !self.preview[index].is_idle())
+            {
                 let locks = self.preview[index].locks;
                 Self::apply_synth_params_core(
                     &self.project,

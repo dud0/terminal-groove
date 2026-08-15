@@ -1278,6 +1278,15 @@ impl Adsr {
         self.stage = EnvStage::Idle;
         self.value = 0.0;
     }
+    #[cfg(test)]
+    pub(crate) fn parameter_values(&self) -> (f32, f32, f32, f32) {
+        (
+            self.attack_percent.value(),
+            self.decay_percent.value(),
+            self.sustain_percent.value(),
+            self.release_percent.value(),
+        )
+    }
     pub fn next_sample_modulated(
         &mut self,
         attack_offset: f32,

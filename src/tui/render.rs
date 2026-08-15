@@ -111,7 +111,7 @@ PARAMETERS  v level · n pan · y delay send · b reverb send
            Tom recipes/Cymbal/Rimshot: u tune · t tone · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
            Chord/Lead: w osc mix · P pulse · u sub · O noise · i pitch LFO
-           Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR · FM: w/q/m/f/b + i + ADSR
+           Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR · FM: w/q/m/f/c + i + ADSR
            Chord: h chorus · e spread
            Shift+L LFO · [`/1–9/0] percent · ↑/↓ adjust · ←/→ switch parameter
            Enter/Esc finish · Backspace/Delete remove lock/LFO
@@ -818,7 +818,7 @@ const FM_PARAMETERS: [ParameterDescriptor; 14] = [
     ParameterDescriptor {
         id: ParameterId::Brightness,
         label: "Bright",
-        shortcut: "b",
+        shortcut: "c",
         group: ParameterGroup::Filter,
     },
     PITCH_PARAMETER,

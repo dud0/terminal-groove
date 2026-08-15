@@ -278,7 +278,7 @@ FM is a two-operator monophonic phase-modulation synth. The sine modulator runs 
 
 The carrier selector provides Sine, Triangle, and Saw. The voice renders at 4x oversampling, averages the four subsamples, applies bounded soft saturation, and then a fixed-Q low-pass whose Brightness maps exponentially from 200 Hz to the lower of 20 kHz or 45% of sample rate. Operator frequencies and non-finite state are bounded or sanitized. FM uses the Generic ADSR range. New notes retrigger the envelope click-safely; ties preserve phase and gate while accepting inherited or new locks; empty or rejected notes release it. FM supports ordinary notes, accents, ties, conditions, retriggers, microtiming, and probability, but never Chord articulation or slide.
 
-FM controls are waveform (`w`), ratio (`q`), Amount (`m`), Feedback (`f`), Brightness (`b`), Pitch LFO (`i`), and ADSR (`a/d/s/r`). Waveform and ratio are lockable selectors. Amount, Feedback, Brightness, and ADSR are lockable LFO destinations; Pitch is LFO-only. Defaults are Sine, ratio 2, Amount 35%, Feedback 8%, Brightness 72%, ADSR 0/55/55/40%, input octave 3, level 80%, center pan, and 20% reverb send.
+FM controls are waveform (`w`), ratio (`q`), Amount (`m`), Feedback (`f`), Brightness (`c`), Pitch LFO (`i`), and ADSR (`a/d/s/r`). Waveform and ratio are lockable selectors. Amount, Feedback, Brightness, and ADSR are lockable LFO destinations; Pitch is LFO-only. Defaults are Sine, ratio 2, Amount 35%, Feedback 8%, Brightness 72%, ADSR 0/55/55/40%, input octave 3, level 80%, center pan, and 20% reverb send.
 
 ### 3.11 Mixer and effects
 
@@ -434,7 +434,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Parameter mode Chord | `h` | Edit chorus Off/I/II mode |
 | Parameter mode Chord | `e` | Edit spread Off/Narrow/Wide |
 | Parameter mode Chord/Lead | `i` | Select the LFO-only pitch card |
-| Parameter mode FM | `w/q/m/f/b` | Edit carrier waveform, ratio, Amount, Feedback, or Brightness |
+| Parameter mode FM | `w/q/m/f/c` | Edit carrier waveform, ratio, Amount, Feedback, or Brightness |
 | Parameter mode FM | `i/a/d/s/r` | Select Pitch LFO or edit ADSR |
 | Sequencer or Parameter mode Chord | `C` | Edit the selected Chord note's shape, or the Chord input shape on an empty step |
 | Global | `t` | Edit tempo |
