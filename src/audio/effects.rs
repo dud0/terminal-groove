@@ -128,13 +128,58 @@ pub(super) fn render<T: Copy, F: Fn(f32) -> T>(
     convert: F,
 ) {
     let started = Instant::now();
+    let had_pending = renderer.pending.is_some();
     if renderer.apply_pending() {
-        while let Ok(c) = commands.pop() {
-            let is_replace = matches!(c, AudioCommand::ReplaceProject { .. });
-            renderer.command(c);
-            if is_replace && renderer.pending.is_some() {
+        let mut accumulated = None;
+        let command_budget = super::MAX_COMMANDS_PER_CALLBACK - usize::from(had_pending);
+        for _ in 0..command_budget {
+            if accumulated.is_some() && renderer.retire.slots() == 0 {
                 break;
             }
+            let Ok(command) = commands.pop() else {
+                break;
+            };
+            let coalescible = matches!(
+                &command,
+                AudioCommand::ReplaceProject {
+                    pattern_map,
+                    song_map,
+                    ..
+                } if pattern_map.is_identity() && song_map.is_identity()
+            );
+            let accumulated_is_coalescible = matches!(
+                &accumulated,
+                Some(AudioCommand::ReplaceProject {
+                    pattern_map,
+                    song_map,
+                    ..
+                }) if pattern_map.is_identity() && song_map.is_identity()
+            );
+            if coalescible && accumulated_is_coalescible && renderer.retire.slots() >= 2 {
+                let Some(AudioCommand::ReplaceProject { project, .. }) = accumulated.take() else {
+                    unreachable!()
+                };
+                renderer
+                    .retire
+                    .push(project)
+                    .unwrap_or_else(|_| unreachable!());
+                accumulated = Some(command);
+                continue;
+            }
+            if let Some(previous) = accumulated.take() {
+                renderer.command(previous);
+            }
+            if coalescible {
+                accumulated = Some(command);
+            } else {
+                renderer.command(command);
+            }
+            if renderer.pending.is_some() {
+                break;
+            }
+        }
+        if let Some(command) = accumulated {
+            renderer.command(command);
         }
     }
     for frame in out.chunks_mut(channels) {

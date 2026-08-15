@@ -69,6 +69,8 @@ impl std::fmt::Display for EditError {
 #[derive(Clone)]
 struct Revision {
     delta: ProjectDelta,
+    before_state_id: u64,
+    after_state_id: u64,
     pattern: usize,
     coalesce: Option<CoalesceKey>,
     at: Instant,
@@ -76,6 +78,63 @@ struct Revision {
     inverse_pattern_map: PatternIndexMap,
     song_map: SongIndexMap,
     inverse_song_map: SongIndexMap,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct EditImpact {
+    pub(crate) globals: bool,
+    pub(crate) tracks: u16,
+    pub(crate) sequences: Vec<(usize, usize)>,
+    pub(crate) patterns_structural: bool,
+    pub(crate) song: bool,
+}
+
+impl EditImpact {
+    fn full() -> Self {
+        Self {
+            globals: true,
+            tracks: (1_u16 << crate::model::TRACK_COUNT) - 1,
+            sequences: Vec::new(),
+            patterns_structural: true,
+            song: true,
+        }
+    }
+    fn from_delta(delta: &ProjectDelta) -> Self {
+        Self {
+            globals: delta.globals.is_some(),
+            tracks: delta
+                .tracks
+                .iter()
+                .fold(0, |mask, (track, _)| mask | (1_u16 << track)),
+            sequences: delta
+                .sequences
+                .iter()
+                .map(|(pattern, track, _)| (*pattern, *track))
+                .collect(),
+            patterns_structural: delta.patterns.is_some(),
+            song: delta.song.is_some(),
+        }
+    }
+
+    fn merge(&mut self, newer: Self) {
+        self.globals |= newer.globals;
+        self.tracks |= newer.tracks;
+        self.patterns_structural |= newer.patterns_structural;
+        self.song |= newer.song;
+        if self.patterns_structural {
+            self.sequences.clear();
+        } else {
+            for sequence in newer.sequences {
+                if !self.sequences.contains(&sequence) {
+                    self.sequences.push(sequence);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn track_changed(&self, track: usize) -> bool {
+        self.tracks & (1_u16 << track) != 0
+    }
 }
 
 #[derive(Clone, Default)]
@@ -147,6 +206,37 @@ impl ProjectDelta {
         }
     }
 
+    fn prune_unchanged(&mut self, project: &Project) {
+        if self
+            .globals
+            .is_some_and(|globals| globals == project.globals)
+        {
+            self.globals = None;
+        }
+        self.tracks
+            .retain(|(index, track)| *track != project.tracks[*index]);
+        if let Some(patterns) = &self.patterns {
+            if *patterns == project.patterns {
+                self.patterns = None;
+            }
+        } else {
+            self.sequences.retain(|(pattern, track, steps)| {
+                *steps != project.patterns[*pattern].tracks[*track].steps
+            });
+        }
+        if self.song.as_ref().is_some_and(|song| *song == project.song) {
+            self.song = None;
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.globals.is_none()
+            && self.tracks.is_empty()
+            && self.sequences.is_empty()
+            && self.patterns.is_none()
+            && self.song.is_none()
+    }
+
     /// Extend a coalesced revision with regions touched by a newer edit while
     /// retaining the oldest value for regions already represented.
     fn merge_earliest(&mut self, newer: Self) {
@@ -193,7 +283,9 @@ pub struct CoalesceKey(pub usize, pub usize, pub u8);
 pub struct Editor {
     pub(crate) project: Project,
     pattern: usize,
-    saved: Project,
+    state_id: u64,
+    saved_state_id: u64,
+    next_state_id: u64,
     undo: VecDeque<Revision>,
     redo: Vec<Revision>,
     pattern_clipboard: Option<Pattern>,
@@ -201,6 +293,7 @@ pub struct Editor {
     step_clipboard: Option<StepClipboard>,
     pending_pattern_map: PatternIndexMap,
     pending_song_map: SongIndexMap,
+    pending_impact: EditImpact,
 }
 
 #[derive(Clone, Copy)]
@@ -357,8 +450,10 @@ fn clear_parameter_lock(
 impl Editor {
     pub fn new(project: Project) -> Self {
         Self {
-            saved: project.clone(),
             project,
+            state_id: 0,
+            saved_state_id: 0,
+            next_state_id: 1,
             pattern: 0,
             undo: VecDeque::new(),
             redo: Vec::new(),
@@ -367,13 +462,15 @@ impl Editor {
             step_clipboard: None,
             pending_pattern_map: PatternIndexMap::identity(),
             pending_song_map: SongIndexMap::identity(),
+            pending_impact: EditImpact::default(),
         }
     }
     pub fn is_dirty(&self) -> bool {
-        self.project != self.saved
+        self.state_id != self.saved_state_id
     }
     pub fn mark_saved(&mut self) {
-        self.saved = self.project.clone();
+        self.saved_state_id = self.state_id;
+        self.end_coalescing();
     }
     pub fn end_coalescing(&mut self) {
         if let Some(revision) = self.undo.back_mut() {
@@ -381,8 +478,10 @@ impl Editor {
         }
     }
     pub fn replace_loaded(&mut self, p: Project) {
-        self.project = p.clone();
-        self.saved = p;
+        self.project = p;
+        self.state_id = 0;
+        self.saved_state_id = 0;
+        self.next_state_id = 1;
         self.undo.clear();
         self.redo.clear();
         self.pattern = 0;
@@ -391,6 +490,7 @@ impl Editor {
         self.step_clipboard = None;
         self.pending_pattern_map = PatternIndexMap::identity();
         self.pending_song_map = SongIndexMap::identity();
+        self.pending_impact = EditImpact::full();
     }
     pub fn pattern(&self) -> usize {
         self.pattern
@@ -400,6 +500,14 @@ impl Editor {
     }
     pub fn take_song_map(&mut self) -> SongIndexMap {
         std::mem::replace(&mut self.pending_song_map, SongIndexMap::identity())
+    }
+    pub(crate) fn take_edit_impact(&mut self) -> EditImpact {
+        std::mem::take(&mut self.pending_impact)
+    }
+    pub(crate) fn discard_pending_sync(&mut self) {
+        self.pending_pattern_map = PatternIndexMap::identity();
+        self.pending_song_map = SongIndexMap::identity();
+        self.pending_impact = EditImpact::default();
     }
     pub fn select_pattern(&mut self, pattern: usize) -> bool {
         if pattern >= self.project.patterns.len() {
@@ -434,15 +542,29 @@ impl Editor {
         if cursor >= self.project.patterns.len() {
             return Ok((false, self.pattern));
         }
-        let before = self.project.clone();
-        let before_count = before.patterns.len();
+        let before_patterns = self.project.patterns.clone();
+        let before_song = self.project.song.clone();
+        let before_count = before_patterns.len();
         let before_pattern = self.pattern;
-        let (next_cursor, next_active) = f(&mut self.project, cursor, before_pattern)?;
+        let (next_cursor, next_active) = match f(&mut self.project, cursor, before_pattern) {
+            Ok(result) => result,
+            Err(error) => {
+                self.project.patterns = before_patterns;
+                self.project.song = before_song;
+                return Err(error);
+            }
+        };
         self.pattern = next_active;
-        if before == self.project {
+        let mut delta = ProjectDelta {
+            patterns: Some(before_patterns),
+            song: Some(before_song),
+            ..ProjectDelta::default()
+        };
+        delta.prune_unchanged(&self.project);
+        if delta.is_empty() {
             return Ok((false, next_cursor));
         }
-        self.push_revision(before, before_pattern, None);
+        self.push_revision(delta, before_pattern, None);
         if self.project.patterns.len() == before_count + 1 {
             self.record_pattern_map(
                 PatternIndexMap::insert(cursor),
@@ -458,15 +580,22 @@ impl Editor {
     }
     fn push_revision(
         &mut self,
-        before: Project,
+        delta: ProjectDelta,
         before_pattern: usize,
         coalesce: Option<CoalesceKey>,
     ) {
+        self.pending_impact.merge(EditImpact::from_delta(&delta));
+        let before_state_id = self.state_id;
+        let after_state_id = self.next_state_id;
+        self.next_state_id = self.next_state_id.wrapping_add(1);
+        self.state_id = after_state_id;
         if self.undo.len() == 256 {
             self.undo.pop_front();
         }
         self.undo.push_back(Revision {
-            delta: ProjectDelta::between(before, &self.project),
+            delta,
+            before_state_id,
+            after_state_id,
             pattern: before_pattern,
             coalesce,
             at: Instant::now(),
@@ -570,7 +699,7 @@ impl Editor {
 
     pub fn paste_step(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
         let clipboard = self.step_clipboard.ok_or(EditError::EmptyStepClipboard)?;
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let destination = active_track_mut(project, pattern, track)?;
             if destination.kind != clipboard.kind {
                 return Err(EditError::IncompatibleStepClipboard);
@@ -626,7 +755,7 @@ impl Editor {
             pattern: (self.pattern + 1) as u8,
             bars: 1,
         };
-        let changed = self.edit(None, |project, _| {
+        let changed = self.edit_song(None, |project, _| {
             project.song.insert(cursor + 1, entry);
             Ok(())
         })?;
@@ -646,7 +775,7 @@ impl Editor {
         if self.project.song.len() >= MAX_SONG_ENTRY_COUNT {
             return Ok(false);
         }
-        let changed = self.edit(None, |project, _| {
+        let changed = self.edit_song(None, |project, _| {
             project.song.insert(cursor + 1, entry);
             Ok(())
         })?;
@@ -674,7 +803,7 @@ impl Editor {
         if cursor >= self.project.song.len() || self.project.song.len() >= MAX_SONG_ENTRY_COUNT {
             return Ok(false);
         }
-        let changed = self.edit(None, |project, _| {
+        let changed = self.edit_song(None, |project, _| {
             project.song.insert(cursor + 1, entry);
             Ok(())
         })?;
@@ -692,7 +821,7 @@ impl Editor {
             return Ok(false);
         }
         if self.project.song.len() == 1 {
-            return self.edit(None, |project, _| {
+            return self.edit_song(None, |project, _| {
                 project.song[0] = SongEntry {
                     pattern: 1,
                     bars: 1,
@@ -700,7 +829,7 @@ impl Editor {
                 Ok(())
             });
         }
-        let changed = self.edit(None, |project, _| {
+        let changed = self.edit_song(None, |project, _| {
             project.song.remove(cursor);
             Ok(())
         })?;
@@ -722,7 +851,7 @@ impl Editor {
 
     pub fn change_song_pattern(&mut self, cursor: usize, delta: i8) -> Result<bool, EditError> {
         let count = self.project.patterns.len() as i16;
-        self.edit(None, |project, _| {
+        self.edit_song(None, |project, _| {
             let entry = project.song.get_mut(cursor).ok_or(EditError::InvalidStep)?;
             entry.pattern = (i16::from(entry.pattern) + i16::from(delta)).clamp(1, count) as u8;
             Ok(())
@@ -730,7 +859,7 @@ impl Editor {
     }
 
     pub fn change_song_bars(&mut self, cursor: usize, delta: i8) -> Result<bool, EditError> {
-        self.edit(None, |project, _| {
+        self.edit_song(None, |project, _| {
             let entry = project.song.get_mut(cursor).ok_or(EditError::InvalidStep)?;
             entry.bars = (i16::from(entry.bars) + i16::from(delta)).clamp(1, 64) as u8;
             Ok(())
@@ -741,10 +870,41 @@ impl Editor {
         F: FnOnce(&mut Project, usize) -> Result<(), EditError>,
     {
         let before = self.project.clone();
-        f(&mut self.project, self.pattern)?;
+        if let Err(error) = f(&mut self.project, self.pattern) {
+            self.project = before;
+            return Err(error);
+        }
         if before == self.project {
             return Ok(false);
         }
+        let delta = ProjectDelta::between(before, &self.project);
+        self.commit_delta(key, delta);
+        Ok(true)
+    }
+
+    fn edit_delta<F>(
+        &mut self,
+        key: Option<CoalesceKey>,
+        mut delta: ProjectDelta,
+        f: F,
+    ) -> Result<bool, EditError>
+    where
+        F: FnOnce(&mut Project, usize) -> Result<(), EditError>,
+    {
+        if let Err(error) = f(&mut self.project, self.pattern) {
+            delta.swap(&mut self.project);
+            return Err(error);
+        }
+        delta.prune_unchanged(&self.project);
+        if delta.is_empty() {
+            return Ok(false);
+        }
+        self.commit_delta(key, delta);
+        Ok(true)
+    }
+
+    fn commit_delta(&mut self, key: Option<CoalesceKey>, delta: ProjectDelta) {
+        self.pending_impact.merge(EditImpact::from_delta(&delta));
         let now = Instant::now();
         let merge = key.is_some()
             && self.undo.back().is_some_and(|r| {
@@ -752,15 +912,17 @@ impl Editor {
             });
         if merge {
             let r = self.undo.back_mut().unwrap();
-            r.delta
-                .merge_earliest(ProjectDelta::between(before, &self.project));
+            r.delta.merge_earliest(delta);
             r.at = now;
+            r.after_state_id = self.next_state_id;
         } else {
             if self.undo.len() == 256 {
                 self.undo.pop_front();
             }
             self.undo.push_back(Revision {
-                delta: ProjectDelta::between(before, &self.project),
+                delta,
+                before_state_id: self.state_id,
+                after_state_id: self.next_state_id,
                 pattern: self.pattern,
                 coalesce: key,
                 at: now,
@@ -770,12 +932,109 @@ impl Editor {
                 inverse_song_map: SongIndexMap::identity(),
             });
         }
+        self.state_id = self.next_state_id;
+        self.next_state_id = self.next_state_id.wrapping_add(1);
         self.redo.clear();
-        Ok(true)
+    }
+
+    pub fn edit_globals<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
+    where
+        F: FnOnce(&mut Project, usize) -> Result<(), EditError>,
+    {
+        let delta = ProjectDelta {
+            globals: Some(self.project.globals),
+            ..ProjectDelta::default()
+        };
+        self.edit_delta(key, delta, f)
+    }
+
+    pub fn edit_track<F>(
+        &mut self,
+        track: usize,
+        key: Option<CoalesceKey>,
+        f: F,
+    ) -> Result<bool, EditError>
+    where
+        F: FnOnce(&mut Project, usize) -> Result<(), EditError>,
+    {
+        let before = self
+            .project
+            .tracks
+            .get(track)
+            .cloned()
+            .ok_or(EditError::InvalidTrack)?;
+        let delta = ProjectDelta {
+            tracks: vec![(track, before)],
+            ..ProjectDelta::default()
+        };
+        self.edit_delta(key, delta, f)
+    }
+
+    fn edit_active_track<F>(
+        &mut self,
+        track: usize,
+        key: Option<CoalesceKey>,
+        f: F,
+    ) -> Result<bool, EditError>
+    where
+        F: FnOnce(&mut Project, usize) -> Result<(), EditError>,
+    {
+        let before_track = self
+            .project
+            .tracks
+            .get(track)
+            .cloned()
+            .ok_or(EditError::InvalidTrack)?;
+        let before_steps = self
+            .project
+            .patterns
+            .get(self.pattern)
+            .and_then(|pattern| pattern.tracks.get(track))
+            .map(|sequence| sequence.steps.clone())
+            .ok_or(EditError::InvalidTrack)?;
+        let delta = ProjectDelta {
+            tracks: vec![(track, before_track)],
+            sequences: vec![(self.pattern, track, before_steps)],
+            ..ProjectDelta::default()
+        };
+        self.edit_delta(key, delta, f)
+    }
+
+    fn edit_song<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
+    where
+        F: FnOnce(&mut Project, usize) -> Result<(), EditError>,
+    {
+        let delta = ProjectDelta {
+            song: Some(self.project.song.clone()),
+            ..ProjectDelta::default()
+        };
+        self.edit_delta(key, delta, f)
+    }
+
+    fn edit_active_pattern<F>(&mut self, key: Option<CoalesceKey>, f: F) -> Result<bool, EditError>
+    where
+        F: FnOnce(&mut Project, usize) -> Result<(), EditError>,
+    {
+        let sequences = self.project.patterns[self.pattern]
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(track, sequence)| (self.pattern, track, sequence.steps.clone()))
+            .collect();
+        self.edit_delta(
+            key,
+            ProjectDelta {
+                sequences,
+                ..ProjectDelta::default()
+            },
+            f,
+        )
     }
     pub fn undo(&mut self) -> bool {
         if let Some(mut r) = self.undo.pop_back() {
+            self.pending_impact.merge(EditImpact::from_delta(&r.delta));
             r.delta.swap(&mut self.project);
+            self.state_id = r.before_state_id;
             std::mem::swap(&mut r.pattern, &mut self.pattern);
             self.pending_pattern_map = r.inverse_pattern_map;
             self.pending_song_map = r.inverse_song_map;
@@ -789,7 +1048,9 @@ impl Editor {
     }
     pub fn redo(&mut self) -> bool {
         if let Some(mut r) = self.redo.pop() {
+            self.pending_impact.merge(EditImpact::from_delta(&r.delta));
             r.delta.swap(&mut self.project);
+            self.state_id = r.after_state_id;
             std::mem::swap(&mut r.pattern, &mut self.pattern);
             self.pending_pattern_map = r.inverse_pattern_map;
             self.pending_song_map = r.inverse_song_map;
@@ -808,7 +1069,7 @@ impl Editor {
         if generated.inserted == 0 {
             return Ok(0);
         }
-        self.edit(None, |project, pattern| {
+        self.edit_active_pattern(None, |project, pattern| {
             for (index, steps) in generated.tracks.iter().enumerate() {
                 if matches!(config.target, GeneratorTarget::Track(track) if track != index) {
                     continue;
@@ -822,7 +1083,7 @@ impl Editor {
         Ok(generated.inserted)
     }
     pub fn toggle_event(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.edit(None, move |p, pattern| {
+        self.edit_active_track(track, None, move |p, pattern| {
             let t = active_track_mut(p, pattern, track)?;
             if step >= t.steps.len() {
                 return Err(EditError::InvalidStep);
@@ -912,7 +1173,7 @@ impl Editor {
         step: usize,
         recipe: DrumRecipeSlot,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let track = active_track_mut(project, pattern, track)?;
             if !matches!(track.kind, TrackKind::Hat | TrackKind::Tom)
                 || recipe.get() > track.drum_recipe_count()
@@ -947,7 +1208,7 @@ impl Editor {
         track: usize,
         step: usize,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let track = active_track_mut(project, pattern, track)?;
             if !matches!(track.kind, TrackKind::Hat | TrackKind::Tom) {
                 return Err(EditError::InvalidDrumRecipe);
@@ -967,7 +1228,7 @@ impl Editor {
         })
     }
     pub fn set_note(&mut self, track: usize, step: usize, degree: u8) -> Result<bool, EditError> {
-        self.edit(None, move |p, pattern| {
+        self.edit_active_track(track, None, move |p, pattern| {
             let mut t = active_track_mut(p, pattern, track)?;
             if !matches!(
                 t.kind,
@@ -1134,7 +1395,7 @@ impl Editor {
         step: usize,
         shape: ChordShape,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let mut t = active_track_mut(project, pattern, track)?;
             if !t.kind.supports_voicing() {
                 return Err(EditError::NoChordShape);
@@ -1203,7 +1464,7 @@ impl Editor {
         step: usize,
         value: bool,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let mut t = active_track_mut(project, pattern, track)?;
             if !t.kind.supports_voicing() {
                 return Err(EditError::InvalidParameter);
@@ -1227,7 +1488,7 @@ impl Editor {
         step: usize,
         value: ArpeggioType,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let mut t = active_track_mut(project, pattern, track)?;
             if !t.kind.supports_voicing() {
                 return Err(EditError::InvalidParameter);
@@ -1251,7 +1512,7 @@ impl Editor {
         step: usize,
         value: ArpeggioRate,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let mut t = active_track_mut(project, pattern, track)?;
             if !t.kind.supports_voicing() {
                 return Err(EditError::InvalidParameter);
@@ -1269,7 +1530,7 @@ impl Editor {
         })
     }
     pub fn toggle_tie(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.edit(None, move |p, pattern| {
+        self.edit_active_track(track, None, move |p, pattern| {
             let t = active_track_mut(p, pattern, track)?;
             if !matches!(
                 t.kind,
@@ -1298,7 +1559,7 @@ impl Editor {
         })
     }
     pub fn clear(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.edit(None, move |p, pattern| {
+        self.edit_active_track(track, None, move |p, pattern| {
             let t = active_track_mut(p, pattern, track)?;
             if step >= t.steps.len() {
                 return Err(EditError::InvalidStep);
@@ -1314,7 +1575,7 @@ impl Editor {
     /// whole operation is recorded as one undoable edit.
     pub fn clear_track(&mut self, track: usize) -> Result<usize, EditError> {
         let mut cleared = 0;
-        self.edit(None, |p, pattern| {
+        self.edit_active_track(track, None, |p, pattern| {
             let t = active_track_mut(p, pattern, track)?;
             cleared = t.steps.iter().filter(|step| step.is_some()).count();
             t.steps.fill(None);
@@ -1332,7 +1593,7 @@ impl Editor {
         if !(MIN_STEP_COUNT..=MAX_STEP_COUNT).contains(&length) {
             return Err(EditError::InvalidLength);
         }
-        self.edit(key, move |p, pattern| {
+        self.edit_active_track(track, key, move |p, pattern| {
             let t = active_track_mut(p, pattern, track)?;
             t.steps.resize(length, None);
             cleanup_invalid_ties(t.steps);
@@ -1341,7 +1602,7 @@ impl Editor {
     }
 
     pub fn duplicate_track(&mut self, track: usize) -> Result<bool, EditError> {
-        self.edit(None, move |p, pattern| {
+        self.edit_active_track(track, None, move |p, pattern| {
             let t = active_track_mut(p, pattern, track)?;
             if t.steps.len() > MAX_STEP_COUNT / 2 {
                 return Err(EditError::CannotDouble);
@@ -1360,7 +1621,7 @@ impl Editor {
     }
 
     pub fn toggle_accent(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let mut t = active_track_mut(project, pattern, track)?;
             match t.steps.get_mut(step).ok_or(EditError::InvalidStep)? {
                 Some(event) => {
@@ -1374,7 +1635,7 @@ impl Editor {
     }
 
     pub fn toggle_slide(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let t = active_track_mut(project, pattern, track)?;
             if !matches!(t.kind, TrackKind::Bass | TrackKind::Lead) {
                 return Err(EditError::NoSlide);
@@ -1424,7 +1685,7 @@ impl Editor {
         if !condition.valid() {
             return Err(EditError::NoTriggerSettings);
         }
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let event = active_track_mut(project, pattern, track)?
                 .steps
                 .get_mut(step)
@@ -1445,7 +1706,7 @@ impl Editor {
         if !(1..=4).contains(&count) {
             return Err(EditError::NoTriggerSettings);
         }
-        self.edit(None, move |project, pattern| {
+        self.edit_active_track(track, None, move |project, pattern| {
             let event = active_track_mut(project, pattern, track)?
                 .steps
                 .get_mut(step)
@@ -1476,7 +1737,7 @@ impl Editor {
         value: Microtiming,
         key: Option<CoalesceKey>,
     ) -> Result<bool, EditError> {
-        self.edit(key, move |project, pattern| {
+        self.edit_active_track(track, key, move |project, pattern| {
             let event = active_track_mut(project, pattern, track)?
                 .steps
                 .get_mut(step)
@@ -1499,7 +1760,7 @@ impl Editor {
         if value.get() > 75 {
             return Err(EditError::InvalidParameter);
         }
-        self.edit(key, move |project, _pattern| {
+        self.edit_track(track, key, move |project, _pattern| {
             project
                 .tracks
                 .get_mut(track)
@@ -1515,7 +1776,7 @@ impl Editor {
         value: Percent,
         key: Option<CoalesceKey>,
     ) -> Result<bool, EditError> {
-        self.edit(key, move |project, _pattern| {
+        self.edit_track(track, key, move |project, _pattern| {
             project
                 .tracks
                 .get_mut(track)
@@ -1534,7 +1795,7 @@ impl Editor {
         value: ParameterValue,
         key: Option<CoalesceKey>,
     ) -> Result<bool, EditError> {
-        self.edit(key, move |p, pattern| {
+        self.edit_active_track(track, key, move |p, pattern| {
             let mut t = active_track_mut(p, pattern, track)?;
             write_parameter(&mut t, step, scope, parameter, value)
         })
@@ -1550,7 +1811,7 @@ impl Editor {
         key: Option<CoalesceKey>,
     ) -> Result<bool, EditError> {
         let (recipe, parameter) = recipe_parameter;
-        self.edit(key, move |project, pattern| {
+        self.edit_active_track(track, key, move |project, pattern| {
             let mut track = active_track_mut(project, pattern, track)?;
             if recipe.get() > track.drum_recipe_count()
                 || !matches!(
@@ -1629,7 +1890,7 @@ impl Editor {
         step: usize,
         parameter: ParameterId,
     ) -> Result<bool, EditError> {
-        self.edit(None, move |p, pattern| {
+        self.edit_active_track(track, None, move |p, pattern| {
             let mut t = active_track_mut(p, pattern, track)?;
             clear_parameter_lock(&mut t, step, parameter)
         })
@@ -1658,7 +1919,7 @@ impl Editor {
         config: Option<LfoConfig>,
         key: Option<CoalesceKey>,
     ) -> Result<bool, EditError> {
-        self.edit(key, move |project, _pattern| {
+        self.edit_track(track, key, move |project, _pattern| {
             let track = project
                 .tracks
                 .get_mut(track)
@@ -1720,6 +1981,51 @@ mod tests {
         assert!(!e.is_dirty());
         assert!(e.redo());
         assert!(e.is_dirty());
+    }
+
+    #[test]
+    fn scoped_edits_and_history_report_exact_audio_impacts() {
+        let mut editor = Editor::new(Project::new());
+        assert_eq!(editor.take_edit_impact(), EditImpact::default());
+
+        editor.toggle_event(0, 0).unwrap();
+        let impact = editor.take_edit_impact();
+        assert_eq!(impact.tracks, 0);
+        assert_eq!(impact.sequences, vec![(0, 0)]);
+        assert!(!impact.patterns_structural);
+
+        editor
+            .set_track_probability(0, Percent::new(75).unwrap(), None)
+            .unwrap();
+        let impact = editor.take_edit_impact();
+        assert_eq!(impact.tracks, 1);
+        assert!(impact.sequences.is_empty());
+
+        assert!(editor.undo());
+        let impact = editor.take_edit_impact();
+        assert_eq!(impact.tracks, 1);
+        assert!(impact.sequences.is_empty());
+    }
+
+    #[test]
+    fn saving_ends_coalescing_so_undo_restores_the_saved_state() {
+        let mut editor = Editor::new(Project::new());
+        let key = Some(CoalesceKey(0, 0, u8::MAX));
+        editor
+            .set_track_probability(0, Percent::new(90).unwrap(), key)
+            .unwrap();
+        editor.mark_saved();
+        editor
+            .set_track_probability(0, Percent::new(80).unwrap(), key)
+            .unwrap();
+        assert!(editor.is_dirty());
+
+        assert!(editor.undo());
+        assert_eq!(
+            editor.project.tracks[0].probability,
+            Percent::new(90).unwrap()
+        );
+        assert!(!editor.is_dirty());
     }
 
     #[test]

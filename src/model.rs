@@ -37,6 +37,13 @@ impl PatternIndexMap {
         }
     }
 
+    pub(crate) fn is_identity(self) -> bool {
+        self.forward
+            .iter()
+            .enumerate()
+            .all(|(index, mapped)| *mapped == index as u8)
+    }
+
     pub fn insert(after: usize) -> Self {
         Self {
             forward: std::array::from_fn(|i| if i > after { (i + 1) as u8 } else { i as u8 }),
@@ -98,6 +105,10 @@ impl SongIndexMap {
         Self {
             kind: SongIndexMapKind::Identity,
         }
+    }
+
+    pub(crate) fn is_identity(self) -> bool {
+        self.kind == SongIndexMapKind::Identity
     }
 
     pub fn insert(after: usize) -> Self {

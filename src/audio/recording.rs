@@ -286,6 +286,24 @@ fn writer_loop(
     let mut shutdown = false;
     let mut shutdown_error = None;
     loop {
+        if current.is_none() && !shutdown {
+            match commands.recv() {
+                Ok(WorkerCommand::Prepare(take)) => {
+                    current = Some(CurrentTake {
+                        path: take.path,
+                        writer: Some(take.writer),
+                        frames: 0,
+                        frames_since_flush: 0,
+                        first_error: None,
+                    });
+                }
+                Ok(WorkerCommand::Shutdown { take_error }) => {
+                    shutdown = true;
+                    shutdown_error = take_error;
+                }
+                Err(_) => shutdown = true,
+            }
+        }
         loop {
             match commands.try_recv() {
                 Ok(WorkerCommand::Prepare(take)) => {

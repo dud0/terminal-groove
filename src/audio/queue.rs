@@ -19,12 +19,14 @@ pub struct Audio {
     pub(super) recording_worker: super::recording::RecordingWorker,
     recording_state: super::RecordingState,
     recording_path: Option<PathBuf>,
+    snapshot_project: AudioProject,
 }
 
 pub(super) struct AudioResources {
     pub(super) log_path: PathBuf,
     pub(super) sample_rate: u32,
     pub(super) recording_worker: super::recording::RecordingWorker,
+    pub(super) snapshot_project: AudioProject,
 }
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 #[error("audio command queue full")]
@@ -51,6 +53,7 @@ impl Audio {
             recording_worker: resources.recording_worker,
             recording_state: super::RecordingState::Idle,
             recording_path: None,
+            snapshot_project: resources.snapshot_project,
         }
     }
 
@@ -59,6 +62,25 @@ impl Audio {
         self.producer
             .push(command)
             .map_err(|rtrb::PushError::Full(_)| QueueFull)
+    }
+    pub(crate) fn send_project_update(
+        &mut self,
+        project: &Project,
+        impact: &crate::reducer::EditImpact,
+        smoothing: ParameterSmoothing,
+        pattern_map: PatternIndexMap,
+        song_map: SongIndexMap,
+    ) -> Result<(), QueueFull> {
+        let next = self.snapshot_project.updated(project, impact);
+        let command = AudioCommand::ReplaceProject {
+            project: Box::new(next.clone()),
+            smoothing,
+            pattern_map,
+            song_map,
+        };
+        self.send(command)?;
+        self.snapshot_project = next;
+        Ok(())
     }
     pub fn available_commands(&self) -> usize {
         self.producer.slots()

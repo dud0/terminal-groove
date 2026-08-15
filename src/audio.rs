@@ -18,6 +18,7 @@ use rtrb::{Producer, RingBuffer};
 use std::{
     fs::OpenOptions,
     io::Write,
+    ops::{Index, IndexMut},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -53,12 +54,52 @@ struct AudioPattern {
     tracks: [AudioSequence; TRACK_COUNT],
 }
 #[derive(Clone, Debug)]
+struct AudioPatterns(Arc<[Arc<AudioPattern>]>);
+
+impl AudioPatterns {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn get(&self, index: usize) -> Option<&AudioPattern> {
+        self.0.get(index).map(AsRef::as_ref)
+    }
+
+    fn shared_vec(&self) -> Vec<Arc<AudioPattern>> {
+        self.0.to_vec()
+    }
+}
+
+impl From<Vec<Arc<AudioPattern>>> for AudioPatterns {
+    fn from(patterns: Vec<Arc<AudioPattern>>) -> Self {
+        Self(patterns.into())
+    }
+}
+
+impl Index<usize> for AudioPatterns {
+    type Output = AudioPattern;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl IndexMut<usize> for AudioPatterns {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        Arc::make_mut(&mut Arc::make_mut(&mut self.0)[index])
+    }
+}
+#[derive(Clone, Debug)]
 pub struct AudioProject {
     globals: Globals,
     tracks: [AudioTrack; TRACK_COUNT],
-    patterns: Box<[AudioPattern]>,
-    song: Box<[SongEntry]>,
+    patterns: AudioPatterns,
+    song: Arc<[SongEntry]>,
 }
+
+pub(crate) const AUDIO_COMMAND_QUEUE_SIZE: usize = 256;
+pub(crate) const AUDIO_RETIRE_QUEUE_SIZE: usize = AUDIO_COMMAND_QUEUE_SIZE;
+pub(crate) const MAX_COMMANDS_PER_CALLBACK: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParameterSmoothing {
@@ -75,44 +116,91 @@ impl ParameterSmoothing {
     }
 }
 impl AudioProject {
+    fn track_from_project(project: &Project, i: usize) -> AudioTrack {
+        let t = &project.tracks[i];
+        AudioTrack {
+            level: t.level,
+            pan: t.pan,
+            muted: t.muted,
+            delay_send: t.delay_send,
+            reverb_send: t.reverb_send,
+            swing: t.swing,
+            probability: t.probability,
+            instrument: t.instrument,
+            effects: t.effects,
+            lfos: t.lfos,
+            input_degree: t.input_degree.unwrap_or(1),
+            input_octave: t.input_octave.unwrap_or(3),
+            input_accent: t.input_accent,
+            input_chord_shape: t.input_voicing_shape().unwrap_or(ChordShape::Single),
+            input_chord_arpeggio: t.input_chord_arpeggio.unwrap_or_default(),
+        }
+    }
+
+    fn pattern_from_project(project: &Project, pattern: usize) -> Arc<AudioPattern> {
+        let source = &project.patterns[pattern];
+        Arc::new(AudioPattern {
+            tracks: std::array::from_fn(|track| {
+                let steps = &source.tracks[track].steps;
+                AudioSequence {
+                    steps: std::array::from_fn(|s| steps.get(s).copied().flatten()),
+                    step_count: steps.len() as u8,
+                }
+            }),
+        })
+    }
+
     pub fn from_project(project: &Project) -> Self {
         Self {
             globals: project.globals,
-            tracks: std::array::from_fn(|i| {
-                let t = &project.tracks[i];
-                AudioTrack {
-                    level: t.level,
-                    pan: t.pan,
-                    muted: t.muted,
-                    delay_send: t.delay_send,
-                    reverb_send: t.reverb_send,
-                    swing: t.swing,
-                    probability: t.probability,
-                    instrument: t.instrument,
-                    effects: t.effects,
-                    lfos: t.lfos,
-                    input_degree: t.input_degree.unwrap_or(1),
-                    input_octave: t.input_octave.unwrap_or(3),
-                    input_accent: t.input_accent,
-                    input_chord_shape: t.input_voicing_shape().unwrap_or(ChordShape::Single),
-                    input_chord_arpeggio: t.input_chord_arpeggio.unwrap_or_default(),
-                }
-            }),
-            patterns: project
-                .patterns
-                .iter()
-                .map(|source| AudioPattern {
-                    tracks: std::array::from_fn(|track| {
-                        let steps = &source.tracks[track].steps;
-                        AudioSequence {
-                            steps: std::array::from_fn(|s| steps.get(s).copied().flatten()),
-                            step_count: steps.len() as u8,
-                        }
-                    }),
-                })
+            tracks: std::array::from_fn(|i| Self::track_from_project(project, i)),
+            patterns: (0..project.patterns.len())
+                .map(|pattern| Self::pattern_from_project(project, pattern))
                 .collect::<Vec<_>>()
-                .into_boxed_slice(),
-            song: project.song.clone().into_boxed_slice(),
+                .into(),
+            song: project.song.clone().into(),
+        }
+    }
+
+    fn updated(&self, project: &Project, impact: &crate::reducer::EditImpact) -> Self {
+        let mut tracks = self.tracks;
+        for (track, target) in tracks.iter_mut().enumerate() {
+            if impact.track_changed(track) {
+                *target = Self::track_from_project(project, track);
+            }
+        }
+        let patterns =
+            if impact.patterns_structural || self.patterns.len() != project.patterns.len() {
+                (0..project.patterns.len())
+                    .map(|pattern| Self::pattern_from_project(project, pattern))
+                    .collect::<Vec<_>>()
+                    .into()
+            } else if impact.sequences.is_empty() {
+                self.patterns.clone()
+            } else {
+                let mut patterns = self.patterns.shared_vec();
+                let mut changed = [false; crate::model::MAX_PATTERN_COUNT];
+                for &(pattern, _) in &impact.sequences {
+                    if pattern < patterns.len() && !changed[pattern] {
+                        patterns[pattern] = Self::pattern_from_project(project, pattern);
+                        changed[pattern] = true;
+                    }
+                }
+                patterns.into()
+            };
+        Self {
+            globals: if impact.globals {
+                project.globals
+            } else {
+                self.globals
+            },
+            tracks,
+            patterns,
+            song: if impact.song {
+                project.song.clone().into()
+            } else {
+                self.song.clone()
+            },
         }
     }
 }
@@ -399,10 +487,11 @@ fn open_inner(
     let status = Arc::new(AudioStatus::default());
     let (recording_worker, recording_producer) =
         recording::RecordingWorker::spawn(sr, status.clone())?;
-    let (producer, consumer) = RingBuffer::new(256);
-    let (retire_producer, retired) = RingBuffer::new(32);
+    let (producer, consumer) = RingBuffer::new(AUDIO_COMMAND_QUEUE_SIZE);
+    let (retire_producer, retired) = RingBuffer::new(AUDIO_RETIRE_QUEUE_SIZE);
     let (error_producer, error_consumer) = RingBuffer::new(AUDIO_ERROR_QUEUE_SIZE);
     let initial = AudioProject::from_project(project);
+    let snapshot_project = initial.clone();
     let stream = match format {
         SampleFormat::F32 => {
             let error_status = status.clone();
@@ -510,6 +599,7 @@ fn open_inner(
             log_path: default_audio_log_path(),
             sample_rate: sr,
             recording_worker,
+            snapshot_project,
         },
     ))
 }

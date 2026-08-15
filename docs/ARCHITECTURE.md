@@ -6,21 +6,25 @@ document records implementation boundaries and maintenance rules.
 
 ## Data flow
 
-The TUI reads `Project` through `Editor`. Mutations go through the reducer, which records
-region-based undo deltas and structural pattern-index changes. Before committing an edit, the
-controller checks command-queue capacity and then sends an immutable audio snapshot plus any
-pattern-index mapping through a bounded SPSC queue.
+The TUI reads `Project` through `Editor`. Mutations go through scoped reducer helpers, which record
+region-based undo deltas, revision identities, audio edit impacts, and structural pattern-index
+changes. Before committing an edit, the controller checks command-queue capacity. A main-thread
+snapshot builder then reuses unchanged `Arc`-backed audio patterns and sends an immutable snapshot
+plus any pattern/song-index mappings through a bounded SPSC queue.
 
-The callback owns voices, sequencing state, smoothers, and effects. Replaced snapshots go to a
-retirement queue and are destroyed by the UI thread. Status returns through atomics; stream errors
-use a bounded queue and are logged outside the callback.
+The callback owns voices, sequencing state, smoothers, and effects. Each callback processes at most
+eight commands and coalesces only adjacent identity-map replacements. Structural replacements and
+intervening commands retain FIFO order. Replaced and superseded snapshots go to a retirement queue
+sized to the command queue and are reaped on every UI iteration. Status returns through atomics;
+stream errors use a bounded queue and are logged outside the callback.
 
 Live recording taps each final limited stereo frame before CPAL channel mapping. The callback sends
 frames and an ordered end marker through a preallocated two-second SPSC queue to a named WAV writer
-thread. That worker performs sample conversion, disk I/O, periodic header checkpointing, and final
-header updates. The UI creates a unique destination and prepares the encoder before issuing the
-allocation-free callback start command. Completion or failure returns as an event containing the
-path and accepted frame count; recording state itself is transport-independent.
+thread. That worker blocks on its command receiver while idle, then performs sample conversion,
+disk I/O, periodic header checkpointing, and final header updates while a take exists. The UI
+creates a unique destination and prepares the encoder before issuing the allocation-free callback
+start command. Completion or failure returns as an event containing the path and accepted frame
+count; recording state itself is transport-independent.
 
 ## Layer boundaries
 
@@ -35,6 +39,8 @@ path and accepted frame count; recording state itself is transport-independent.
 
 Song references are intentionally persisted and maintained during structural pattern edits before
 song playback and editing are exposed. Preserve their validation, undo behavior, and remapping.
+Project JSON is first parsed by a recursive duplicate-key-rejecting visitor, before migrations or
+typed deserialization, so duplicate fields cannot be hidden by `serde_json::Value` normalization.
 
 ## Control metadata
 

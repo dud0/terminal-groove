@@ -1,7 +1,7 @@
 use crate::model::{Instrument, LfoAssignments, Percent, Project, Track, TrackEffects, TrackKind};
 use serde::{
     Deserialize, Deserializer, Serialize,
-    de::{Error as _, IgnoredAny, MapAccess, Visitor},
+    de::{Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor},
 };
 use std::{
     fmt,
@@ -39,6 +39,70 @@ pub enum ProjectIoError {
 }
 
 pub const PRESET_FORMAT_VERSION: u32 = 4;
+
+struct StrictJsonValue(serde_json::Value);
+
+impl<'de> Deserialize<'de> for StrictJsonValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct StrictValueVisitor;
+        impl<'de> Visitor<'de> for StrictValueVisitor {
+            type Value = StrictJsonValue;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON value without duplicate object keys")
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(value.into()))
+            }
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(value.into()))
+            }
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(value.into()))
+            }
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+                serde_json::Number::from_f64(value)
+                    .map(serde_json::Value::Number)
+                    .map(StrictJsonValue)
+                    .ok_or_else(|| E::custom("non-finite JSON number"))
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(value.into()))
+            }
+            fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(value.into()))
+            }
+            fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(serde_json::Value::Null))
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(serde_json::Value::Null))
+            }
+            fn visit_seq<A: SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut values = Vec::new();
+                while let Some(value) = sequence.next_element::<StrictJsonValue>()? {
+                    values.push(value.0);
+                }
+                Ok(StrictJsonValue(serde_json::Value::Array(values)))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut values = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if values.contains_key(&key) {
+                        return Err(A::Error::custom(format_args!("duplicate field `{key}`")));
+                    }
+                    values.insert(key, map.next_value::<StrictJsonValue>()?.0);
+                }
+                Ok(StrictJsonValue(serde_json::Value::Object(values)))
+            }
+        }
+        deserializer.deserialize_any(StrictValueVisitor)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TrackPreset {
@@ -418,8 +482,9 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
         path: path.into(),
         source,
     })?;
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|source| ProjectIoError::Json {
+    let mut value = serde_json::from_slice::<StrictJsonValue>(&bytes)
+        .map(|value| value.0)
+        .map_err(|source| ProjectIoError::Json {
             path: path.into(),
             source,
         })?;
@@ -648,6 +713,36 @@ mod tests {
         save_atomic(&f, &p).unwrap();
         assert_eq!(load(&f).unwrap(), p);
         assert!(fs::read(&f).unwrap().ends_with(b"\n"));
+    }
+
+    #[test]
+    fn project_loading_rejects_duplicate_keys_at_every_depth() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("duplicate.groove.json");
+        let json = serde_json::to_string_pretty(&Project::new()).unwrap();
+
+        let duplicate_version = json.replacen(
+            "\"format_version\": 25",
+            "\"format_version\": 25,\n  \"format_version\": 25",
+            1,
+        );
+        fs::write(&path, duplicate_version).unwrap();
+        let error = load(&path).unwrap_err();
+        assert!(matches!(error, ProjectIoError::Json { .. }));
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate field `format_version`")
+        );
+
+        let tempo = Project::new().globals.tempo_bpm;
+        let field = format!("\"tempo_bpm\": {tempo}");
+        let duplicate_nested =
+            json.replacen(&field, &format!("{field},\n    \"tempo_bpm\": {tempo}"), 1);
+        fs::write(&path, duplicate_nested).unwrap();
+        let error = load(&path).unwrap_err();
+        assert!(matches!(error, ProjectIoError::Json { .. }));
+        assert!(error.to_string().contains("duplicate field `tempo_bpm`"));
     }
 
     #[test]

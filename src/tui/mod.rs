@@ -16,18 +16,37 @@ use std::{
 const DIRECT_PARAMETER_RAMP: Duration = Duration::from_millis(30);
 const DIRECT_PERCENTAGE_HINT: &str = "[`/-/1–9/0] 0/10–90/100%";
 
-struct TerminalGuard;
+#[derive(Default)]
+struct TerminalGuard {
+    raw: bool,
+    alternate_screen: bool,
+    cursor_hidden: bool,
+}
 impl TerminalGuard {
     fn enter() -> Result<Self> {
+        let mut guard = Self {
+            raw: true,
+            ..Self::default()
+        };
         enable_raw_mode()?;
-        execute!(stdout(), EnterAlternateScreen, crossterm::cursor::Hide)?;
-        Ok(Self)
+        guard.alternate_screen = true;
+        execute!(stdout(), EnterAlternateScreen)?;
+        guard.cursor_hidden = true;
+        execute!(stdout(), crossterm::cursor::Hide)?;
+        Ok(guard)
     }
 }
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(stdout(), crossterm::cursor::Show, LeaveAlternateScreen);
+        if self.cursor_hidden {
+            let _ = execute!(stdout(), crossterm::cursor::Show);
+        }
+        if self.alternate_screen {
+            let _ = execute!(stdout(), LeaveAlternateScreen);
+        }
+        if self.raw {
+            let _ = disable_raw_mode();
+        }
     }
 }
 
@@ -54,16 +73,29 @@ pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result
     }));
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut app = App::new(project, path);
+    let mut redraw = true;
     while !app.quit {
-        controller::refresh_audio_status(&mut app, audio);
+        audio.reap_retired();
+        let status_changed = controller::refresh_audio_status(&mut app, audio);
+        let animations_before = app.fader_animations.len();
         app.fader_animations
             .retain(|animation| !animation.is_complete(Instant::now()));
-        terminal.draw(|f| render::draw(f, &app, audio))?;
+        let animating = !app.fader_animations.is_empty();
+        redraw |= status_changed || animations_before != app.fader_animations.len();
+        if redraw || animating {
+            terminal.draw(|f| render::draw(f, &app, audio))?;
+            redraw = false;
+        }
         if event::poll(Duration::from_millis(8))? {
-            if let Event::Key(k) = event::read()? {
-                if k.kind == event::KeyEventKind::Press {
-                    input::handle_key(&mut app, audio, k)?
+            match event::read()? {
+                Event::Key(k) => {
+                    if k.kind == event::KeyEventKind::Press {
+                        input::handle_key(&mut app, audio, k)?;
+                        redraw = true;
+                    }
                 }
+                Event::Resize(_, _) => redraw = true,
+                _ => {}
             }
         }
     }

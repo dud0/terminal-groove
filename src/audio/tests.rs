@@ -417,6 +417,160 @@ mod tests {
     }
 
     #[test]
+    fn pending_snapshot_applies_after_ui_reaps_without_another_command() {
+        let project = Project::new();
+        let status = Arc::new(AudioStatus::default());
+        let (mut retire, mut retired) = RingBuffer::new(1);
+        retire
+            .push(Box::new(AudioProject::from_project(&project)))
+            .unwrap();
+        let mut renderer = Renderer::new_with_retirement(
+            Box::new(AudioProject::from_project(&project)),
+            48_000,
+            status.clone(),
+            retire,
+        );
+        let mut edited = project.clone();
+        edited.globals.tempo_bpm = 137;
+        renderer.command(Audio::snapshot(&edited));
+        assert!(renderer.pending.is_some());
+        let (producer, mut commands) = RingBuffer::new(1);
+        drop(producer);
+        let mut output = [];
+
+        retired.pop().unwrap();
+        render(
+            &mut output,
+            2,
+            48_000,
+            &status,
+            &mut renderer,
+            &mut commands,
+            |sample| sample,
+        );
+
+        assert!(renderer.pending.is_none());
+        assert_eq!(renderer.project.globals.tempo_bpm, 137);
+    }
+
+    #[test]
+    fn callback_processes_only_the_fixed_command_budget() {
+        let project = Project::new();
+        let status = Arc::new(AudioStatus::default());
+        let (retire, _retired) = RingBuffer::new(16);
+        let mut renderer = Renderer::new_with_retirement(
+            Box::new(AudioProject::from_project(&project)),
+            48_000,
+            status.clone(),
+            retire,
+        );
+        let (mut producer, mut commands) = RingBuffer::new(16);
+        for _ in 0..10 {
+            producer.push(AudioCommand::PlayPause).unwrap();
+        }
+        let mut output = [];
+
+        render(
+            &mut output,
+            2,
+            48_000,
+            &status,
+            &mut renderer,
+            &mut commands,
+            |sample| sample,
+        );
+
+        assert_eq!(producer.slots(), 14);
+        assert!(!renderer.playing);
+    }
+
+    #[test]
+    fn callback_coalesces_identity_snapshots_and_retires_every_box() {
+        let project = Project::new();
+        let status = Arc::new(AudioStatus::default());
+        let (retire, mut retired) = RingBuffer::new(8);
+        let mut renderer = Renderer::new_with_retirement(
+            Box::new(AudioProject::from_project(&project)),
+            48_000,
+            status.clone(),
+            retire,
+        );
+        let (mut producer, mut commands) = RingBuffer::new(8);
+        for tempo in [121, 122, 123] {
+            let mut edited = project.clone();
+            edited.globals.tempo_bpm = tempo;
+            producer.push(Audio::snapshot(&edited)).unwrap();
+        }
+        let mut output = [];
+
+        crate::test_allocator::reset();
+        let before = allocator_counts();
+        render(
+            &mut output,
+            2,
+            48_000,
+            &status,
+            &mut renderer,
+            &mut commands,
+            |sample| sample,
+        );
+        assert_eq!(allocator_counts(), before);
+        assert_eq!(renderer.project.globals.tempo_bpm, 123);
+        assert_eq!(producer.slots(), 8);
+        let mut retired_count = 0;
+        while retired.pop().is_ok() {
+            retired_count += 1;
+        }
+        assert_eq!(retired_count, 3);
+    }
+
+    #[test]
+    fn incremental_snapshots_reuse_unchanged_patterns_and_match_full_rebuilds() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        let base = AudioProject::from_project(&project);
+
+        project.tracks[0].muted = true;
+        let track_update = base.updated(
+            &project,
+            &crate::reducer::EditImpact {
+                tracks: 1,
+                ..Default::default()
+            },
+        );
+        assert!(Arc::ptr_eq(&base.patterns.0[0], &track_update.patterns.0[0]));
+        assert!(Arc::ptr_eq(&base.patterns.0[1], &track_update.patterns.0[1]));
+        assert!(track_update.tracks[0].muted);
+
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::ZERO,
+            recipe: Default::default(),
+            locks: Default::default(),
+        });
+        let sequence_update = track_update.updated(
+            &project,
+            &crate::reducer::EditImpact {
+                sequences: vec![(0, 0)],
+                ..Default::default()
+            },
+        );
+        let full = AudioProject::from_project(&project);
+        assert!(!Arc::ptr_eq(
+            &track_update.patterns.0[0],
+            &sequence_update.patterns.0[0]
+        ));
+        assert!(Arc::ptr_eq(
+            &track_update.patterns.0[1],
+            &sequence_update.patterns.0[1]
+        ));
+        assert_eq!(sequence_update.patterns[0], full.patterns[0]);
+        assert_eq!(sequence_update.patterns[1], full.patterns[1]);
+    }
+
+    #[test]
     fn idle_preview_does_not_advance_unselected_lfos_or_effects() {
         let project = performance_project();
         let status = Arc::new(AudioStatus::default());

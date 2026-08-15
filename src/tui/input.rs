@@ -354,7 +354,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 a.status = "Audio command queue full; edit rejected".into();
                 return Ok(());
             }
-            let _ = a.editor.edit(None, |p, _| {
+            let _ = a.editor.edit_track(ti, None, |p, _| {
                 p.tracks[ti].muted = !p.tracks[ti].muted;
                 Ok(())
             });
@@ -618,7 +618,7 @@ pub(super) fn select_track(a: &mut App, track: usize) {
 
 pub(super) fn commit_pattern(a: &mut App, audio: &mut Audio, pattern: usize) -> bool {
     let previous = a.editor.pattern();
-    if pattern >= a.editor.project.patterns.len() || audio.available_commands() < 2 {
+    if pattern >= a.editor.project.patterns.len() || audio.available_commands() < 1 {
         a.status = "Audio command queue full; pattern switch rejected".into();
         return false;
     }
@@ -719,7 +719,7 @@ pub(super) fn handle_pattern_dialog(a: &mut App, audio: &mut Audio, k: KeyEvent)
 }
 
 fn commit_song(a: &mut App, audio: &mut Audio, entry: usize) -> bool {
-    if entry >= a.editor.project.song.len() || audio.available_commands() < 2 {
+    if entry >= a.editor.project.song.len() || audio.available_commands() < 1 {
         a.status = "Audio command queue full; song switch rejected".into();
         return false;
     }

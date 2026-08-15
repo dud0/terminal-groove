@@ -224,16 +224,19 @@ pub(super) fn sync_project_with_smoothing(
     };
     let pattern_map = a.editor.take_pattern_map();
     let song_map = a.editor.take_song_map();
+    let impact = a.editor.take_edit_impact();
     if audio
-        .send(Audio::snapshot_with_smoothing_and_maps(
+        .send_project_update(
             a.editor.project(),
+            &impact,
             smoothing,
             pattern_map,
             song_map,
-        ))
+        )
         .is_err()
     {
         a.editor.undo();
+        a.editor.discard_pending_sync();
         a.status = "Audio command queue full; edit rejected".into();
         false
     } else {
@@ -253,7 +256,7 @@ pub(super) fn change_octave(a: &mut App, audio: &mut Audio, d: i8) {
         a.status = "Audio command queue full; edit rejected".into();
         return;
     }
-    let changed = a.editor.edit(None, |p, _| {
+    let changed = a.editor.edit_track(ti, None, |p, _| {
         p.tracks[ti].input_octave = Some(new);
         Ok(())
     });
@@ -678,7 +681,7 @@ fn load_preset_entry(a: &mut App, audio: &mut Audio, track: usize, entry: &Prese
         a.status = "Audio command queue full; preset load rejected".into();
         return;
     }
-    match a.editor.edit(None, |project, _| {
+    match a.editor.edit_track(track, None, |project, _| {
         preset
             .apply_to_track(&mut project.tracks[track])
             .map_err(|_| crate::reducer::EditError::InvalidParameter)
@@ -903,7 +906,7 @@ pub(super) fn edit_global<F: FnOnce(&mut crate::model::Globals)>(
     }
     let changed = a
         .editor
-        .edit(
+        .edit_globals(
             Some(crate::reducer::CoalesceKey(usize::MAX, 0, id as u8)),
             |p, _| {
                 f(&mut p.globals);
@@ -1129,7 +1132,22 @@ pub(super) fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
     }
     Ok(())
 }
-pub(super) fn refresh_audio_status(a: &mut App, audio: &mut Audio) {
+pub(super) fn refresh_audio_status(a: &mut App, audio: &mut Audio) -> bool {
+    let before = (
+        a.recording_state,
+        a.playing,
+        a.paused,
+        a.active_pattern,
+        a.queued_pattern,
+        a.song_mode,
+        a.active_song,
+        a.queued_song,
+        a.song_bar,
+        a.playheads,
+        a.callback_overruns,
+        a.max_callback_load_per_mille,
+    );
+    let mut status_changed = false;
     let recording_event = audio.poll_recording_event();
     a.recording_state = audio.recording_state();
     let recording_status = recording_event.map(|event| {
@@ -1193,7 +1211,7 @@ pub(super) fn refresh_audio_status(a: &mut App, audio: &mut Audio) {
         .load(Ordering::Relaxed);
     let diagnostics = audio.log_pending_diagnostics();
     if audio.status.failed.load(Ordering::Acquire) {
-        a.status = match diagnostics {
+        let status = match diagnostics {
             Ok(_) => format!(
                 "Audio stream failed; details logged to {}",
                 audio.audio_log_path().display()
@@ -1203,15 +1221,35 @@ pub(super) fn refresh_audio_status(a: &mut App, audio: &mut Audio) {
                 audio.audio_log_path().display()
             ),
         };
+        status_changed |= a.status != status;
+        a.status = status;
     } else if let Ok(diagnostics) = diagnostics {
         if diagnostics.non_finite {
-            a.status = format!(
+            let status = format!(
                 "Audio DSP produced a non-finite value; details logged to {}",
                 audio.audio_log_path().display()
-            )
+            );
+            status_changed |= a.status != status;
+            a.status = status;
         }
     }
     if let Some(recording_status) = recording_status {
+        status_changed |= a.status != recording_status;
         a.status = recording_status;
     }
+    let after = (
+        a.recording_state,
+        a.playing,
+        a.paused,
+        a.active_pattern,
+        a.queued_pattern,
+        a.song_mode,
+        a.active_song,
+        a.queued_song,
+        a.song_bar,
+        a.playheads,
+        a.callback_overruns,
+        a.max_callback_load_per_mille,
+    );
+    status_changed || before != after
 }

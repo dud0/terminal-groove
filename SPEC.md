@@ -568,7 +568,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 - A new edit after undo clears redo history.
 - Loading a project or creating a new project clears both histories.
 - Undo history is never serialized.
-- Dirty state is based on whether the current project model equals the last successfully loaded or saved revision. Undoing back to that revision clears the dirty marker; redoing away from it restores the marker.
+- Dirty state is based on whether the current revision identity equals the last successfully loaded or saved revision. Undoing back to that revision clears the dirty marker; redoing away from it restores the marker.
 - An edit must not be committed to the UI model unless its corresponding engine command can be queued. A full engine queue produces a visible error instead of allowing UI/audio state to diverge.
 
 ## 8. Project file format
@@ -577,7 +577,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`. TUI Save As appends this extension to bare names and does not duplicate it when already present; explicit CLI project paths are used literally.
-- Version 25 is strict: reject unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs/recipes, invalid tie graphs, and song references outside the dynamic pattern list. Canonical nine-track v21 files are upgraded by appending the built-in FM track and one empty 16-step FM sequence to every pattern; v22 adds contextual Chord/FM shape defaults; v21–v23 discard the removed Chord spread base value and step locks; and v21–v24 discard legacy Chord chorus values and chorus locks, initializing `effects.chorus` to Off on every track. Saves emit v25 only; version 20 and earlier, missing versions, malformed v21 layouts, and unknown future versions are rejected.
+- Version 25 is strict: reject duplicate object keys at every depth, unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs/recipes, invalid tie graphs, and song references outside the dynamic pattern list. Duplicate keys are rejected before any legacy migration. Canonical nine-track v21 files are upgraded by appending the built-in FM track and one empty 16-step FM sequence to every pattern; v22 adds contextual Chord/FM shape defaults; v21–v23 discard the removed Chord spread base value and step locks; and v21–v24 discard legacy Chord chorus values and chorus locks, initializing `effects.chorus` to Off on every track. Saves emit v25 only; version 20 and earlier, missing versions, malformed v21 layouts, and unknown future versions are rejected.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -745,13 +745,13 @@ Use one binary package with testable modules for model/validation, reducer and h
 
 - The main thread owns terminal input, rendering, dialogs, undo/redo, file I/O, and the canonical editable project.
 - CPAL's audio callback owns transport timing, a mirrored engine project, voices, filters, effects, and sample conversion.
-- UI-to-audio communication uses a preallocated bounded SPSC queue of typed commands. Transport, pattern selection, and audition commands are small; project edits are converted on the main thread into immutable boxed project snapshots before being queued.
-- Live recording uses a dedicated named writer thread and a preallocated lock-free SPSC queue sized for two seconds of stereo frames at the active sample rate. The callback taps the final limited internal stereo pair before mono or multichannel device mapping. It sends raw finite `f32` frames and an ordered end marker only; the writer thread clamps and converts interleaved samples to signed 24-bit PCM, checkpoints the WAV header about once per second, explicitly flushes and finalizes the file, and reports completion outside the callback.
+- UI-to-audio communication uses a preallocated bounded SPSC queue of typed commands. Transport, pattern selection, and audition commands are small; project edits are converted on the main thread into immutable boxed project snapshots before being queued. The main-thread snapshot builder structurally shares unchanged audio patterns and rebuilds only regions identified by reducer edit metadata; structural pattern edits rebuild the pattern collection.
+- Live recording uses a dedicated named writer thread and a preallocated lock-free SPSC queue sized for two seconds of stereo frames at the active sample rate. The callback taps the final limited internal stereo pair before mono or multichannel device mapping. It sends raw finite `f32` frames and an ordered end marker only; the writer thread clamps and converts interleaved samples to signed 24-bit PCM, checkpoints the WAV header about once per second, explicitly flushes and finalizes the file, and reports completion outside the callback. The writer blocks on its command receiver while no take exists and polls the audio ring only while a take is active or finalizing.
 - One recording-queue slot is reserved for the ordered end marker. Queue exhaustion stops capture instead of introducing gaps and retains a contiguous prefix. File creation happens before the callback receives its allocation-free start command. Disk, encoding, RIFF-size, and queue-overflow failures stop and finalize the partial take where possible. Application shutdown stops the callback producer, drains accepted frames, finalizes the take, and joins the writer thread.
 - Independent per-track playheads and transport telemetry return through atomics or a second bounded channel where intermediate redundant playhead updates may be dropped.
 - Each non-empty CPAL callback measures elapsed monotonic time from before command draining/rendering through completion. Its deadline is the current output frame count divided by the selected sample rate, not a hard-coded buffer size. The callback records maximum duration in nanoseconds and maximum elapsed/deadline load in per-mille relaxed atomics, and increments a relaxed cumulative overrun counter only when elapsed time is strictly greater than that deadline. These diagnostics are allocation-free, lock-free, non-blocking, and free of callback formatting or logging; all three counters reset when a new stream is opened.
 - Project files are parsed and validated on the main thread. Opening or creating a project queues a stop followed by its immutable snapshot; the callback applies the snapshot at a command boundary and reuses its preallocated audio state.
-- The callback must not allocate or free heap-backed project snapshots, lock a mutex, block, access the filesystem, format text, or log. Replaced snapshots are returned through a bounded retirement queue and reclaimed on the main thread.
+- The callback must not allocate or free heap-backed project snapshots, lock a mutex, block, access the filesystem, format text, or log. Replaced and coalesced snapshots are returned through a retirement queue sized to the command queue and reclaimed on every main-thread UI iteration as well as send and shutdown paths.
 - Noise generators use preallocated deterministic PRNG state local to each voice.
 - Idle drum voices do not advance oscillators, filters, or noise state; their mixer
   smoothers continue advancing so live parameter changes remain synchronized.
@@ -778,8 +778,8 @@ Recordings are written in `Terminal Groove/Recordings/` below the OS Music folde
 - Support the common `f32`, `i16`, and `u16` device sample formats; reject other formats clearly.
 - Render all DSP as `f32` stereo internally and convert only at the final device boundary.
 - Allocate voices, filter state, delay memory, and reverb buffers before stream playback.
-- Drain pending edits at the beginning of each callback. Step-affecting edits received before a step boundary apply at that boundary.
-- UI polling should add no more than approximately 8 ms of avoidable input latency while still allowing efficient redraws.
+- Process at most eight queued commands at the beginning of each callback. Consecutive project replacements with identity pattern/song maps are coalesced to the latest replacement; structural maps and intervening transport, audition, or recording commands preserve FIFO order. Step-affecting edits received before a step boundary apply at that boundary.
+- UI polling should add no more than approximately 8 ms of avoidable input latency. Redraw only after input or resize, visible audio/transport state changes, or while a fader animation is active.
 
 ## 11. Error handling
 
