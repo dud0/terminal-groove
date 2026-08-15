@@ -11,8 +11,8 @@ use crate::dsp::{EnvelopeProfile, StereoChorus};
 use crate::engine::{GateAction, synth_action};
 use crate::model::{
     ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT, DrumRecipeSlot,
-    Instrument, LEAD_TRACK_INDEX, ParameterId, ParameterLocks, Percent, SYNTH_TRACK_START,
-    StepEvent,
+    FM_TRACK_INDEX, Instrument, LEAD_TRACK_INDEX, ParameterId, ParameterLocks, Percent,
+    SYNTH_TRACK_START, StepEvent,
 };
 use std::sync::atomic::Ordering;
 
@@ -321,6 +321,70 @@ impl Renderer {
         smoothing: u32,
     ) {
         let t = project.tracks[track];
+        if let Instrument::Fm(p) = t.instrument {
+            voice.kind = SynthVoiceKind::Fm;
+            voice.env.set_profile(EnvelopeProfile::Generic);
+            voice.fm_waveform = locks.fm_waveform().unwrap_or(p.waveform);
+            voice.fm_ratio = locks.fm_ratio().unwrap_or(p.ratio);
+            voice.fm_amount.set(
+                locks
+                    .percent(ParameterId::FmAmount)
+                    .unwrap_or(p.amount)
+                    .get() as f32,
+                smoothing,
+            );
+            voice.fm_feedback.set(
+                locks
+                    .percent(ParameterId::FmFeedback)
+                    .unwrap_or(p.feedback)
+                    .get() as f32,
+                smoothing,
+            );
+            voice.fm_brightness.set(
+                locks
+                    .percent(ParameterId::Brightness)
+                    .unwrap_or(p.brightness)
+                    .get() as f32,
+                smoothing,
+            );
+            voice.env.configure_percent(
+                locks.percent(ParameterId::Attack).unwrap_or(p.attack).get(),
+                locks.percent(ParameterId::Decay).unwrap_or(p.decay).get(),
+                locks
+                    .percent(ParameterId::Sustain)
+                    .unwrap_or(p.sustain)
+                    .get(),
+                locks
+                    .percent(ParameterId::Release)
+                    .unwrap_or(p.release)
+                    .get(),
+                smoothing,
+            );
+            voice.level.set(
+                locks.percent(ParameterId::Level).unwrap_or(t.level).get() as f32,
+                smoothing,
+            );
+            voice.delay_send.set(
+                locks
+                    .percent(ParameterId::DelaySend)
+                    .unwrap_or(t.delay_send)
+                    .normalized(),
+                smoothing,
+            );
+            voice.reverb_send.set(
+                locks
+                    .percent(ParameterId::ReverbSend)
+                    .unwrap_or(t.reverb_send)
+                    .normalized(),
+                smoothing,
+            );
+            voice.pan.set(
+                locks.percent(ParameterId::Pan).unwrap_or(t.pan).get() as f32,
+                smoothing,
+            );
+            voice.locks = locks;
+            return;
+        }
         let (cutoff, resonance, filter_envelope, attack, decay, sustain, release) =
             match t.instrument {
                 Instrument::Bass(p) => {
@@ -805,7 +869,9 @@ impl Renderer {
         for track in 0..TRACK_COUNT {
             let live_locks = match track {
                 0..DRUM_TRACK_COUNT => self.drums[track].locks,
-                SYNTH_TRACK_START | LEAD_TRACK_INDEX => self.synth[track - SYNTH_TRACK_START].locks,
+                SYNTH_TRACK_START | LEAD_TRACK_INDEX | FM_TRACK_INDEX => {
+                    self.synth[track - SYNTH_TRACK_START].locks
+                }
                 CHORD_TRACK_INDEX => self
                     .chord
                     .voices
@@ -815,7 +881,7 @@ impl Renderer {
             };
             let preview_locks = match track {
                 0..DRUM_TRACK_COUNT => self.preview_drums[track].locks,
-                SYNTH_TRACK_START | LEAD_TRACK_INDEX => {
+                SYNTH_TRACK_START | LEAD_TRACK_INDEX | FM_TRACK_INDEX => {
                     self.preview[track - SYNTH_TRACK_START].locks
                 }
                 CHORD_TRACK_INDEX => self

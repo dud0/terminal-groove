@@ -23,9 +23,9 @@ use crate::{
     generator::{ChordShapePool, Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
         ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT,
-        DrumRecipeSlot, LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT, ParameterId,
-        ParameterValue, Percent, STEP_BANK_SIZE, STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind,
-        TriggerCondition, Waveform,
+        DrumRecipeSlot, FmRatio, FmWaveform, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
+        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, STEP_ROW_SIZE,
+        StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
     },
     reducer::{Editor, Scope},
 };
@@ -554,6 +554,7 @@ pub(super) fn track_jump_index(k: KeyEvent) -> Option<usize> {
         '&' => Some(6),
         '*' => Some(7),
         '(' => Some(8),
+        ')' => Some(9),
         _ => None,
     };
     if shifted_symbol.is_some() {
@@ -562,8 +563,8 @@ pub(super) fn track_jump_index(k: KeyEvent) -> Option<usize> {
     if k.modifiers.contains(KeyModifiers::SHIFT) {
         return c
             .to_digit(10)
-            .filter(|&track| (1..=9).contains(&track))
-            .map(|track| track as usize - 1);
+            .filter(|&track| track <= 9)
+            .map(|track| if track == 0 { 9 } else { track as usize - 1 });
     }
     None
 }
@@ -1336,6 +1337,46 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
                         audio,
                         parameter,
                         ParameterValue::LeadSubMode(next),
+                        true,
+                        false,
+                    );
+                    return Ok(true);
+                }
+                Ok(ParameterValue::FmWaveform(mode)) => {
+                    let index = FmWaveform::ALL
+                        .iter()
+                        .position(|choice| *choice == mode)
+                        .unwrap_or(0);
+                    let next = if k.code == KeyCode::Up {
+                        (index + 1).min(FmWaveform::ALL.len() - 1)
+                    } else {
+                        index.saturating_sub(1)
+                    };
+                    set_parameter(
+                        a,
+                        audio,
+                        parameter,
+                        ParameterValue::FmWaveform(FmWaveform::ALL[next]),
+                        true,
+                        false,
+                    );
+                    return Ok(true);
+                }
+                Ok(ParameterValue::FmRatio(mode)) => {
+                    let index = FmRatio::ALL
+                        .iter()
+                        .position(|choice| *choice == mode)
+                        .unwrap_or(0);
+                    let next = if k.code == KeyCode::Up {
+                        (index + 1).min(FmRatio::ALL.len() - 1)
+                    } else {
+                        index.saturating_sub(1)
+                    };
+                    set_parameter(
+                        a,
+                        audio,
+                        parameter,
+                        ParameterValue::FmRatio(FmRatio::ALL[next]),
                         true,
                         false,
                     );
@@ -2286,6 +2327,7 @@ pub(super) fn set_parameter(
             ParameterValue::Chorus(_) => None,
             ParameterValue::Spread(_) => None,
             ParameterValue::LeadSubMode(_) => None,
+            ParameterValue::FmWaveform(_) | ParameterValue::FmRatio(_) => None,
         });
     let key = keep_editing.then_some(coalesce_key(track, step, parameter, a.parameter_recipe));
     let kind = a.editor.project.tracks[track].kind;

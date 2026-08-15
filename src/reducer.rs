@@ -865,6 +865,18 @@ impl Editor {
                     microtiming: crate::model::Microtiming::ZERO,
                     locks: Default::default(),
                 }
+            } else if t.kind == TrackKind::Fm {
+                StepEvent::Note {
+                    degree: t.input_degree.unwrap(),
+                    octave: t.input_octave.unwrap(),
+                    accent: t.input_accent,
+                    chord_shape: None,
+                    arpeggio: ArpeggioConfig::default(),
+                    condition: TriggerCondition::Always,
+                    retrigger_count: 1,
+                    microtiming: crate::model::Microtiming::ZERO,
+                    locks: Default::default(),
+                }
             } else {
                 StepEvent::Trigger {
                     accent: t.input_accent,
@@ -957,7 +969,10 @@ impl Editor {
     pub fn set_note(&mut self, track: usize, step: usize, degree: u8) -> Result<bool, EditError> {
         self.edit(None, move |p, pattern| {
             let mut t = active_track_mut(p, pattern, track)?;
-            if !matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
+            if !matches!(
+                t.kind,
+                TrackKind::Bass | TrackKind::Chord | TrackKind::Lead | TrackKind::Fm
+            ) {
                 return Err(EditError::NotSynth);
             }
             if step >= t.steps.len() || !(1..=8).contains(&degree) {
@@ -1253,7 +1268,10 @@ impl Editor {
     pub fn toggle_tie(&mut self, track: usize, step: usize) -> Result<bool, EditError> {
         self.edit(None, move |p, pattern| {
             let t = active_track_mut(p, pattern, track)?;
-            if !matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
+            if !matches!(
+                t.kind,
+                TrackKind::Bass | TrackKind::Chord | TrackKind::Lead | TrackKind::Fm
+            ) {
                 return Err(EditError::NotSynth);
             }
             if step >= t.steps.len() {

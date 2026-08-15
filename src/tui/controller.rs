@@ -58,6 +58,7 @@ fn preset_kind_name(kind: TrackKind) -> &'static str {
         TrackKind::Bass => "bass",
         TrackKind::Chord => "chord",
         TrackKind::Lead => "lead",
+        TrackKind::Fm => "fm",
     }
 }
 

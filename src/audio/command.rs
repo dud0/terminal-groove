@@ -67,9 +67,7 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
                 voice.envelope.elapsed = voice.envelope.decay_samples;
             }
             for v in renderer.synth.iter_mut().chain(renderer.preview.iter_mut()) {
-                v.gate_off();
-                v.active = false;
-                v.remaining = 0;
+                v.reset_to_idle();
             }
             for v in renderer
                 .chord

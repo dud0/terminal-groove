@@ -3,10 +3,10 @@ use super::{controller::*, controls::GLOBAL_CONTROLS, input::*, overlays::*, ren
 use crate::{
     generator::{ChordShapePool, Target as GeneratorTarget},
     model::{
-        CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, GlobalParameterId, LEAD_TRACK_INDEX,
-        LfoConfig, LfoDivision, LfoRate, Microtiming, ParameterId, ParameterValue, Percent,
-        RIMSHOT_TRACK_INDEX, STEP_BANK_SIZE, SYNTH_TRACK_START, StepEvent, TRACK_COUNT, TrackKind,
-        TriggerCondition, Waveform,
+        CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, FM_TRACK_INDEX, GlobalParameterId,
+        LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate, Microtiming, ParameterId,
+        ParameterValue, Percent, RIMSHOT_TRACK_INDEX, STEP_BANK_SIZE, SYNTH_TRACK_START, StepEvent,
+        TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
     },
     reducer::Scope,
 };
@@ -71,6 +71,14 @@ fn parameter_shortcuts_follow_track_context() {
     );
     assert_eq!(parameter_shortcut(TrackKind::Chord, 'o'), None);
     assert_eq!(parameter_shortcut(TrackKind::Chord, 't'), None);
+    assert_eq!(
+        parameter_shortcut(TrackKind::Fm, 'q'),
+        Some(ParameterId::FmRatio)
+    );
+    assert_eq!(
+        parameter_shortcut(TrackKind::Fm, 'm'),
+        Some(ParameterId::FmAmount)
+    );
 }
 #[test]
 fn parameter_banks_are_contextual_and_model_compatible() {
@@ -84,6 +92,7 @@ fn parameter_banks_are_contextual_and_model_compatible() {
         (TrackKind::Bass, 9),
         (TrackKind::Chord, 18),
         (TrackKind::Lead, 19),
+        (TrackKind::Fm, 14),
     ];
     let common = [
         ParameterId::Level,
@@ -677,7 +686,7 @@ fn trigger_selector_arrows_follow_the_visual_order() {
 
 #[test]
 fn shifted_track_numbers_select_the_expected_track() {
-    for (key, track) in ('1'..='9').zip(0..TRACK_COUNT) {
+    for (key, track) in ('1'..='9').chain(std::iter::once('0')).zip(0..TRACK_COUNT) {
         assert_eq!(
             track_jump_index(KeyEvent::new(KeyCode::Char(key), KeyModifiers::SHIFT)),
             Some(track)
@@ -698,6 +707,10 @@ fn shifted_track_numbers_select_the_expected_track() {
     assert_eq!(
         track_jump_index(KeyEvent::new(KeyCode::Char('('), KeyModifiers::SHIFT)),
         Some(8)
+    );
+    assert_eq!(
+        track_jump_index(KeyEvent::new(KeyCode::Char(')'), KeyModifiers::SHIFT)),
+        Some(9)
     );
 }
 
@@ -814,7 +827,7 @@ fn pitch_lfo_parameter_card_advertises_assignment_removal() {
 }
 
 #[test]
-fn pitch_lfo_card_is_visible_for_chord_and_lead_only() {
+fn pitch_lfo_card_is_visible_for_chord_lead_and_fm_only() {
     let mut project = Project::new();
     project.tracks[CHORD_TRACK_INDEX].lfos.set(
         ParameterId::Pitch,
@@ -835,9 +848,12 @@ fn pitch_lfo_card_is_visible_for_chord_and_lead_only() {
     let chord = rendered(&app, 220, 34);
     assert!(chord.contains("[i]"));
 
-    app.row = TRACK_COUNT;
+    app.row = LEAD_TRACK_INDEX + 1;
     let lead = rendered(&app, 220, 34);
     assert!(lead.contains("Pitch"));
+    app.row = FM_TRACK_INDEX + 1;
+    let fm = rendered(&app, 220, 34);
+    assert!(fm.contains("Pitch"));
     app.row = 1;
     let kick = rendered(&app, 220, 34);
     assert!(!kick.contains("Pitch"));
@@ -1658,6 +1674,23 @@ fn rimshot_readouts_show_reference_modes_and_longest_decay() {
     assert_eq!(
         physical_parameter_readout(&app, RIMSHOT_TRACK_INDEX, 0, ParameterId::Decay),
         "45 ms longest mode · BASE"
+    );
+}
+
+#[test]
+fn fm_readouts_show_synthesis_units() {
+    let app = App::new(Project::new(), None);
+    assert!(
+        physical_parameter_readout(&app, FM_TRACK_INDEX, 0, ParameterId::FmAmount)
+            .contains("index 1.47 rad")
+    );
+    assert!(
+        physical_parameter_readout(&app, FM_TRACK_INDEX, 0, ParameterId::FmFeedback)
+            .contains("0.08π rad")
+    );
+    assert!(
+        physical_parameter_readout(&app, FM_TRACK_INDEX, 0, ParameterId::Brightness)
+            .contains("Hz · BASE")
     );
 }
 

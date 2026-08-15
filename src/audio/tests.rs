@@ -4,7 +4,7 @@ mod tests {
     use super::*;
     use crate::model::{
         ArpeggioRate, ArpeggioType, ChordShape, ChordSpread, DistortionParameters,
-        FlangerParameters, LEAD_TRACK_INDEX, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
+        FlangerParameters, LEAD_TRACK_INDEX, FM_TRACK_INDEX, FmWaveform, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
         ParameterValue, PhaserParameters, RIMSHOT_TRACK_INDEX, TrackEffects,
         Microtiming,
     };
@@ -3089,5 +3089,32 @@ mod tests {
 
         assert_eq!(renderer.active_song, 0);
         assert_eq!(renderer.song_bar, 0);
+    }
+
+    #[test]
+    fn fm_voice_is_deterministic_finite_and_waveforms_are_distinct() {
+        fn render(waveform: FmWaveform) -> Vec<f32> {
+            let mut project = Project::new();
+            let Instrument::Fm(parameters) = &mut project.tracks[FM_TRACK_INDEX].instrument else { unreachable!() };
+            parameters.waveform = waveform;
+            parameters.amount = Percent::new(100).unwrap();
+            parameters.feedback = Percent::new(100).unwrap();
+            parameters.brightness = Percent::new(100).unwrap();
+            let audio = AudioProject::from_project(&project);
+            let mut voice = SynthVoice::new(44_100.0);
+            Renderer::configure_synth_voice(
+                &audio, 44_100.0, FM_TRACK_INDEX,
+                SynthTrigger { degree: 1, octave: 3, accent: true, slide: false, chord_shape: None, arpeggio: Default::default() },
+                ParameterLocks::default(), &mut voice,
+            );
+            let offsets = [0.0; ParameterId::ALL.len()];
+            (0..2048).map(|_| Renderer::render_synth(&mut voice, 44_100.0, &offsets).0).collect()
+        }
+        let sine = render(FmWaveform::Sine);
+        let sine_again = render(FmWaveform::Sine);
+        let saw = render(FmWaveform::Saw);
+        assert_eq!(sine, sine_again);
+        assert!(sine.iter().chain(&saw).all(|sample| sample.is_finite() && sample.abs() <= 2.0));
+        assert!(sine.iter().zip(&saw).any(|(left, right)| (left - right).abs() > 1.0e-4));
     }
 }

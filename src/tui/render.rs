@@ -18,9 +18,9 @@ use crate::tui::DIRECT_PERCENTAGE_HINT;
 use crate::{
     audio::{Audio, RecordingState},
     model::{
-        ChordShape, ChorusMode, DelayDivision, GlobalParameterId, ParameterId, ParameterValue,
-        PitchClass, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT, TrackKind,
-        TriggerCondition, Waveform,
+        ChordShape, ChorusMode, DelayDivision, FmRatio, FmWaveform, GlobalParameterId, ParameterId,
+        ParameterValue, PitchClass, STEP_BANK_SIZE, STEP_ROW_SIZE, Scale, StepEvent, TRACK_COUNT,
+        TrackKind, TriggerCondition, Waveform,
     },
     reducer::Scope,
 };
@@ -93,7 +93,7 @@ const HELP_TEXT: &str =
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete remove · Esc close
 SEQUENCER  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
-           Tab parameters · p LOCK parameters · ~ globals · Shift+1..9 tracks · Enter event · Del clear · Esc BASE
+           Tab parameters · p LOCK parameters · ~ globals · Shift+1..0 tracks · Enter event · Del clear · Esc BASE
            g pattern generator · o audition selected step
            Shift+Delete clear selected track
 EVENTS & TRACKS  m mute · l length · Shift+D double
@@ -111,7 +111,7 @@ PARAMETERS  v level · n pan · y delay send · b reverb send
            Tom recipes/Cymbal/Rimshot: u tune · t tone · d decay
            Bass: w waveform · c cutoff · R resonance · f filter env · d decay
            Chord/Lead: w osc mix · P pulse · u sub · O noise · i pitch LFO
-           Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR
+           Chord/Lead: c cutoff · R resonance · f filter env · a/d/s/r ADSR · FM: w/q/m/f/b + i + ADSR
            Chord: h chorus · e spread
            Shift+L LFO · [`/1–9/0] percent · ↑/↓ adjust · ←/→ switch parameter
            Enter/Esc finish · Backspace/Delete remove lock/LFO
@@ -119,7 +119,10 @@ GLOBAL  t tempo · y delay division · f feedback · r reverb time
         b reverb tone · p pre-delay · m reverb return · k key · s scale · ←/→ select · ↑/↓ adjust";
 
 pub(super) fn track_label(t: &crate::model::Track) -> String {
-    if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
+    if matches!(
+        t.kind,
+        TrackKind::Bass | TrackKind::Chord | TrackKind::Lead | TrackKind::Fm
+    ) {
         format!("{} O{}", t.name, t.input_octave.unwrap_or(3))
     } else {
         t.name.clone()
@@ -783,6 +786,48 @@ const LEAD_PARAMETERS: [ParameterDescriptor; 19] = [
     RELEASE_PARAMETER,
 ];
 
+const FM_PARAMETERS: [ParameterDescriptor; 14] = [
+    LEVEL_PARAMETER,
+    DELAY_SEND_PARAMETER,
+    REVERB_SEND_PARAMETER,
+    PAN_PARAMETER,
+    ParameterDescriptor {
+        id: ParameterId::FmWaveform,
+        label: "Waveform",
+        shortcut: "w",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::FmRatio,
+        label: "Ratio",
+        shortcut: "q",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::FmAmount,
+        label: "Amount",
+        shortcut: "m",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::FmFeedback,
+        label: "Feedback",
+        shortcut: "f",
+        group: ParameterGroup::Instrument,
+    },
+    ParameterDescriptor {
+        id: ParameterId::Brightness,
+        label: "Bright",
+        shortcut: "b",
+        group: ParameterGroup::Filter,
+    },
+    PITCH_PARAMETER,
+    ATTACK_PARAMETER,
+    SYNTH_DECAY_PARAMETER,
+    SUSTAIN_PARAMETER,
+    RELEASE_PARAMETER,
+];
+
 pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescriptor] {
     match kind {
         TrackKind::Kick => &KICK_PARAMETERS,
@@ -794,6 +839,7 @@ pub(super) fn parameter_descriptors(kind: TrackKind) -> &'static [ParameterDescr
         TrackKind::Bass => &BASS_PARAMETERS,
         TrackKind::Chord => &CHORD_PARAMETERS,
         TrackKind::Lead => &LEAD_PARAMETERS,
+        TrackKind::Fm => &FM_PARAMETERS,
     }
 }
 
@@ -1084,6 +1130,8 @@ pub(super) fn physical_parameter_readout(
         ParameterValue::Chorus(ChorusMode::Ii) => "Mode II".into(),
         ParameterValue::Spread(value) => value.to_string(),
         ParameterValue::LeadSubMode(value) => format!("{value:?}"),
+        ParameterValue::FmWaveform(value) => value.to_string(),
+        ParameterValue::FmRatio(value) => format!("{value}:1"),
         ParameterValue::Percent(value) => {
             let value = value.get();
             match (a.editor.project.tracks[track].kind, parameter) {
@@ -1229,6 +1277,26 @@ pub(super) fn physical_parameter_readout(
                     format!("{:.3} s", crate::dsp::exp_map(value, 0.002, 12.0))
                 }
                 (TrackKind::Lead, ParameterId::Decay | ParameterId::Release) => {
+                    format!("{:.3} s", crate::dsp::exp_map(value, 0.002, 10.0))
+                }
+                (TrackKind::Fm, ParameterId::FmAmount) => {
+                    format!("index {:.2} rad", 12.0 * (value as f32 / 100.0).powi(2))
+                }
+                (TrackKind::Fm, ParameterId::FmFeedback) => {
+                    format!("{:.2}π rad", 0.95 * value as f32 / 100.0)
+                }
+                (TrackKind::Fm, ParameterId::Brightness) => {
+                    format!("{:.0} Hz", crate::dsp::exp_map(value, 200.0, 20_000.0))
+                }
+                (TrackKind::Fm, ParameterId::Attack) => {
+                    let seconds = if value == 0 {
+                        0.0
+                    } else {
+                        crate::dsp::exp_map(value, 0.0015, 4.0)
+                    };
+                    format!("{seconds:.3} s")
+                }
+                (TrackKind::Fm, ParameterId::Decay | ParameterId::Release) => {
                     format!("{:.3} s", crate::dsp::exp_map(value, 0.002, 10.0))
                 }
                 (TrackKind::Chord | TrackKind::Lead, ParameterId::OscillatorMix) => {
@@ -1533,7 +1601,10 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         .or_else(|| selected_chord_shape(a, track))
         .map(|shape| format!(" · Chord trigger {shape}"))
         .unwrap_or_default();
-    let context = if matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead) {
+    let context = if matches!(
+        t.kind,
+        TrackKind::Bass | TrackKind::Chord | TrackKind::Lead | TrackKind::Fm
+    ) {
         format!(
             "{} · Step {} · {}{} · {} · Mute {}",
             track_label(t),
@@ -1768,6 +1839,8 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 crate::model::ChordSpread::Wide => "WIDE".into(),
             },
             ParameterValue::LeadSubMode(value) => format!("{value:?}"),
+            ParameterValue::FmWaveform(value) => value.to_string().to_uppercase(),
+            ParameterValue::FmRatio(value) => format!("{value}:1"),
         };
         let has_lfo = t.lfos.get(descriptor.id).is_some();
         let compact_origin = match origin {
@@ -1860,6 +1933,26 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                         crate::model::LeadSubMode::TwoOctaveSquare => segment_count / 2,
                         crate::model::LeadSubMode::TwoOctaveNarrowPulse => 0,
                     };
+                    if segment == selected { "●" } else { "│" }
+                }
+                ParameterValue::FmWaveform(mode) => {
+                    let index = FmWaveform::ALL
+                        .iter()
+                        .position(|choice| *choice == mode)
+                        .unwrap_or(0);
+                    let selected = ((FmWaveform::ALL.len() - 1 - index)
+                        * usize::from(segment_count.saturating_sub(1))
+                        / (FmWaveform::ALL.len() - 1)) as u16;
+                    if segment == selected { "●" } else { "│" }
+                }
+                ParameterValue::FmRatio(mode) => {
+                    let index = FmRatio::ALL
+                        .iter()
+                        .position(|choice| *choice == mode)
+                        .unwrap_or(0);
+                    let selected = ((FmRatio::ALL.len() - 1 - index)
+                        * usize::from(segment_count.saturating_sub(1))
+                        / (FmRatio::ALL.len() - 1)) as u16;
                     if segment == selected { "●" } else { "│" }
                 }
             };

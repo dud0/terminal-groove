@@ -7,7 +7,7 @@ use super::{
 use crate::dsp::{
     Delay, EnvStage, Lfo, MasterLimiter, Reverb, SidechainCompressor, Smoother, exp_map_f32,
 };
-use crate::model::{MAX_STEP_COUNT, Waveform};
+use crate::model::{FmWaveform, MAX_STEP_COUNT, Waveform};
 use rtrb::{Producer, RingBuffer};
 use std::f32::consts::TAU;
 use std::sync::{Arc, atomic::Ordering};
@@ -213,6 +213,7 @@ impl Renderer {
                     v.chord_highpass.clear_state();
                 }
                 SynthVoiceKind::Lead => v.lead_filter.reset(),
+                SynthVoiceKind::Fm => v.fm_filter.clear_state(),
             }
             return (0.0, 0.0, 0.0);
         }
@@ -220,6 +221,7 @@ impl Renderer {
             SynthVoiceKind::Bass => Self::render_bass(v, sr, offsets),
             SynthVoiceKind::Chord => Self::render_chord(v, sr, offsets),
             SynthVoiceKind::Lead => Self::render_lead(v, sr, offsets),
+            SynthVoiceKind::Fm => Self::render_fm(v, sr, offsets),
         }
     }
 
@@ -321,6 +323,77 @@ impl Renderer {
         Self::render_poly_voice(v, sr, offsets, SynthVoiceKind::Lead)
     }
 
+    fn render_fm(
+        v: &mut SynthVoice,
+        sr: f32,
+        offsets: &[f32; ParameterId::ALL.len()],
+    ) -> (f32, f32, f32) {
+        Self::advance_voice_gate(v);
+        let frequency =
+            pitch_modulated_frequency(v.freq.next_value(), offsets[ParameterId::Pitch as usize])
+                .clamp(1.0, sr * 0.45);
+        let env = v.env.next_sample_modulated(
+            offsets[ParameterId::Attack as usize],
+            offsets[ParameterId::Decay as usize],
+            offsets[ParameterId::Sustain as usize],
+            offsets[ParameterId::Release as usize],
+        );
+        let amount = modulated_percent(
+            v.fm_amount.next_value(),
+            offsets[ParameterId::FmAmount as usize],
+        ) / 100.0;
+        let feedback = modulated_percent(
+            v.fm_feedback.next_value(),
+            offsets[ParameterId::FmFeedback as usize],
+        ) / 100.0;
+        let brightness = modulated_percent(
+            v.fm_brightness.next_value(),
+            offsets[ParameterId::Brightness as usize],
+        );
+        let index = 12.0 * amount * amount * (1.0 + v.accent_filter.next_value());
+        let feedback_phase = feedback * 0.95 * std::f32::consts::PI;
+        let oversampled_rate = sr * 4.0;
+        let mod_frequency = (frequency * v.fm_ratio.value()).clamp(1.0, oversampled_rate * 0.45);
+        let mut sample = 0.0;
+        for _ in 0..4 {
+            let modulator =
+                (TAU * v.fm_modulator_phase + v.fm_previous_modulator * feedback_phase).sin();
+            v.fm_previous_modulator = if modulator.is_finite() {
+                modulator
+            } else {
+                0.0
+            };
+            let phase = (v.fm_carrier_phase + modulator * index / TAU).rem_euclid(1.0);
+            sample += match v.fm_waveform {
+                FmWaveform::Sine => (TAU * phase).sin(),
+                FmWaveform::Triangle => 1.0 - 4.0 * (phase - 0.5).abs(),
+                FmWaveform::Saw => 2.0 * phase - 1.0,
+            };
+            v.fm_carrier_phase = (v.fm_carrier_phase + frequency / oversampled_rate).fract();
+            v.fm_modulator_phase =
+                (v.fm_modulator_phase + mod_frequency / oversampled_rate).fract();
+        }
+        sample *= 0.25;
+        if v.filter_control_remaining == 0 {
+            let cutoff = exp_map_f32(brightness, 200.0, 20_000.0_f32.min(sr * 0.45));
+            v.fm_filter.set_lowpass(cutoff, 0.707, sr);
+            v.filter_control_remaining = 8;
+        }
+        v.filter_control_remaining -= 1;
+        let filtered = v.fm_filter.process(sample);
+        let output = if filtered.is_finite() {
+            (filtered * 1.4).tanh()
+        } else {
+            v.fm_filter.clear_state();
+            0.0
+        };
+        (
+            output * env * v.accent_gain.next_value() * 1.25,
+            v.delay_send.next_value(),
+            v.reverb_send.next_value(),
+        )
+    }
+
     fn render_poly_voice(
         v: &mut SynthVoice,
         sr: f32,
@@ -395,6 +468,7 @@ impl Renderer {
                     16,
                 ),
                 SynthVoiceKind::Bass => unreachable!(),
+                SynthVoiceKind::Fm => unreachable!(),
             }
             v.filter_control_remaining = 8;
         }
@@ -443,6 +517,7 @@ impl Renderer {
                 SynthVoiceKind::Chord => v.chord_filter.process(v.chord_highpass.process(source)),
                 SynthVoiceKind::Lead => v.lead_filter.process(source),
                 SynthVoiceKind::Bass => unreachable!(),
+                SynthVoiceKind::Fm => unreachable!(),
             };
         }
         filtered *= 0.5;
@@ -638,7 +713,7 @@ impl Renderer {
             let gain = level.powi(2);
             mix.add(effect_l * pl, effect_r * pr, delay_send, reverb_send, gain);
         }
-        for i in [0, 2] {
+        for i in [0, 2, 3] {
             let track = i + super::SYNTH_TRACK_START;
             let (x, ds, rs) =
                 Self::render_synth(&mut self.synth[i], self.sr, &self.lfo_offsets[track]);

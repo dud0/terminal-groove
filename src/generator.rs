@@ -98,6 +98,7 @@ fn is_anchor(kind: TrackKind, step: usize, groove: Option<&[bool]>) -> bool {
         }
         TrackKind::Chord => step % 8 == 0,
         TrackKind::Lead => step % 4 == 2,
+        TrackKind::Fm => step % 4 == 0,
     }
 }
 
@@ -218,7 +219,7 @@ pub fn generate_for_pattern(project: &Project, pattern: usize, config: Config) -
         );
         if matches!(
             track.kind,
-            TrackKind::Bass | TrackKind::Chord | TrackKind::Lead
+            TrackKind::Bass | TrackKind::Chord | TrackKind::Lead | TrackKind::Fm
         ) {
             inserted += add_ties(&mut tracks[index], &mut rng, config.ties);
         }
@@ -294,6 +295,17 @@ fn fill_track(
                 octave: rng.range(range_low, range_high),
                 accent,
                 slide: rng.percent(slides),
+                condition: TriggerCondition::Always,
+                retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
+                locks: ParameterLocks::default(),
+            },
+            TrackKind::Fm => StepEvent::Note {
+                degree: rng.range(1, 8),
+                octave: rng.range(range_low, range_high),
+                accent,
+                chord_shape: None,
+                arpeggio: ArpeggioConfig::default(),
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
                 microtiming: crate::model::Microtiming::ZERO,
@@ -635,6 +647,19 @@ mod tests {
                 .steps
                 .iter()
                 .any(|event| matches!(event, Some(StepEvent::LeadNote { .. })))
+        );
+        assert!(
+            project.patterns[0].tracks[crate::model::FM_TRACK_INDEX]
+                .steps
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    Some(StepEvent::Note {
+                        chord_shape: None,
+                        arpeggio: ArpeggioConfig { enabled: false, .. },
+                        ..
+                    })
+                ))
         );
     }
 }

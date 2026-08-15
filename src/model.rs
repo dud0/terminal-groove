@@ -14,7 +14,8 @@ pub const RIMSHOT_TRACK_INDEX: usize = DRUM_TRACK_COUNT - 1;
 pub const SYNTH_TRACK_START: usize = DRUM_TRACK_COUNT;
 pub const CHORD_TRACK_INDEX: usize = SYNTH_TRACK_START + 1;
 pub const LEAD_TRACK_INDEX: usize = SYNTH_TRACK_START + 2;
-pub const TRACK_COUNT: usize = 9;
+pub const FM_TRACK_INDEX: usize = SYNTH_TRACK_START + 3;
+pub const TRACK_COUNT: usize = 10;
 pub const MIN_PATTERN_COUNT: usize = 1;
 pub const MAX_PATTERN_COUNT: usize = 100;
 pub const MAX_SONG_ENTRY_COUNT: usize = 256;
@@ -141,7 +142,7 @@ impl SongIndexMap {
 pub enum ValidationError {
     #[error("unsupported format_version {0}")]
     Version(u32),
-    #[error("tracks: expected exactly nine tracks")]
+    #[error("tracks: expected exactly ten tracks")]
     TrackCount,
     #[error("patterns: expected between 1 and 100 patterns, got {0}")]
     PatternCount(usize),
@@ -425,6 +426,89 @@ impl fmt::Display for Scale {
 pub enum Waveform {
     Square,
     Saw,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FmWaveform {
+    #[default]
+    Sine,
+    Triangle,
+    Saw,
+}
+
+impl FmWaveform {
+    pub const ALL: [Self; 3] = [Self::Sine, Self::Triangle, Self::Saw];
+}
+
+impl fmt::Display for FmWaveform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Sine => "Sine",
+                Self::Triangle => "Triangle",
+                Self::Saw => "Saw",
+            }
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FmRatio {
+    #[serde(rename = "0.5")]
+    Half,
+    #[serde(rename = "1")]
+    One,
+    #[serde(rename = "1.5")]
+    OneAndHalf,
+    #[default]
+    #[serde(rename = "2")]
+    Two,
+    #[serde(rename = "3")]
+    Three,
+    #[serde(rename = "4")]
+    Four,
+    #[serde(rename = "5")]
+    Five,
+    #[serde(rename = "6")]
+    Six,
+    #[serde(rename = "8")]
+    Eight,
+}
+
+impl FmRatio {
+    pub const ALL: [Self; 9] = [
+        Self::Half,
+        Self::One,
+        Self::OneAndHalf,
+        Self::Two,
+        Self::Three,
+        Self::Four,
+        Self::Five,
+        Self::Six,
+        Self::Eight,
+    ];
+    pub const fn value(self) -> f32 {
+        match self {
+            Self::Half => 0.5,
+            Self::One => 1.0,
+            Self::OneAndHalf => 1.5,
+            Self::Two => 2.0,
+            Self::Three => 3.0,
+            Self::Four => 4.0,
+            Self::Five => 5.0,
+            Self::Six => 6.0,
+            Self::Eight => 8.0,
+        }
+    }
+}
+
+impl fmt::Display for FmRatio {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -736,6 +820,7 @@ pub enum TrackKind {
     Bass,
     Chord,
     Lead,
+    Fm,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1071,6 +1156,20 @@ pub struct LeadParameters {
     pub release: Percent,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmParameters {
+    pub waveform: FmWaveform,
+    pub ratio: FmRatio,
+    pub amount: Percent,
+    pub feedback: Percent,
+    pub brightness: Percent,
+    pub attack: Percent,
+    pub decay: Percent,
+    pub sustain: Percent,
+    pub release: Percent,
+}
+
 /// The Lead divider is phase locked to the main oscillator. The narrow
 /// mode deliberately keeps the two-octave divider's shorter pulse shape.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1193,6 +1292,7 @@ pub enum Instrument {
     Bass(BassParameters),
     Chord(ChordParameters),
     Lead(LeadParameters),
+    Fm(FmParameters),
 }
 
 const PARAMETER_COUNT: usize = ParameterId::COUNT;
@@ -1280,6 +1380,20 @@ impl ParameterLocks {
         }
     }
 
+    pub fn fm_waveform(&self) -> Option<FmWaveform> {
+        match self.get(ParameterId::FmWaveform) {
+            Some(ParameterValue::FmWaveform(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn fm_ratio(&self) -> Option<FmRatio> {
+        match self.get(ParameterId::FmRatio) {
+            Some(ParameterValue::FmRatio(value)) => Some(value),
+            _ => None,
+        }
+    }
+
     pub fn set(&mut self, parameter: ParameterId, value: ParameterValue) -> bool {
         if !parameter.accepts_lock_value(value) {
             return false;
@@ -1330,6 +1444,12 @@ impl Serialize for ParameterLocks {
                     ParameterValue::LeadSubMode(value) => {
                         map.serialize_entry(parameter.name(), &value)?
                     }
+                    ParameterValue::FmWaveform(value) => {
+                        map.serialize_entry(parameter.name(), &value)?
+                    }
+                    ParameterValue::FmRatio(value) => {
+                        map.serialize_entry(parameter.name(), &value)?
+                    }
                 }
             }
         }
@@ -1373,6 +1493,12 @@ impl<'de> Visitor<'de> for ParameterLocksVisitor {
                 ParameterValueKind::LeadSubMode => map
                     .next_value::<Option<LeadSubMode>>()?
                     .map(ParameterValue::LeadSubMode),
+                ParameterValueKind::FmWaveform => map
+                    .next_value::<Option<FmWaveform>>()?
+                    .map(ParameterValue::FmWaveform),
+                ParameterValueKind::FmRatio => map
+                    .next_value::<Option<FmRatio>>()?
+                    .map(ParameterValue::FmRatio),
             };
             if let Some(value) = value
                 && !locks.set(parameter, value)
@@ -1782,6 +1908,9 @@ impl<'de> Deserialize<'de> for Track {
             TrackKind::Lead => Instrument::Lead(
                 serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
             ),
+            TrackKind::Fm => Instrument::Fm(
+                serde_json::from_value(wire.instrument).map_err(serde::de::Error::custom)?,
+            ),
         };
         Ok(Self {
             kind: wire.kind,
@@ -1805,7 +1934,7 @@ impl<'de> Deserialize<'de> for Track {
     }
 }
 
-/// A pattern owns only its nine sequences. Instrument and mixer settings live
+/// A pattern owns only its ten sequences. Instrument and mixer settings live
 /// on the project tracks and are consequently shared by every pattern.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1886,7 +2015,7 @@ impl Project {
             muted: false,
             delay_send: p(0),
             reverb_send: match kind {
-                TrackKind::Chord | TrackKind::Lead => p(20),
+                TrackKind::Chord | TrackKind::Lead | TrackKind::Fm => p(20),
                 _ => p(0),
             },
             swing: p(0),
@@ -1901,7 +2030,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 21,
+            format_version: 22,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -2021,6 +2150,21 @@ impl Project {
                         release: p(20),
                     }),
                 ),
+                synth(
+                    TrackKind::Fm,
+                    "FM",
+                    Instrument::Fm(FmParameters {
+                        waveform: FmWaveform::Sine,
+                        ratio: FmRatio::Two,
+                        amount: p(35),
+                        feedback: p(8),
+                        brightness: p(72),
+                        attack: p(0),
+                        decay: p(55),
+                        sustain: p(55),
+                        release: p(40),
+                    }),
+                ),
             ],
             patterns: vec![Pattern {
                 tracks: (0..TRACK_COUNT)
@@ -2044,7 +2188,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 21 {
+        if self.format_version != 22 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -2060,6 +2204,7 @@ impl Project {
             (TrackKind::Bass, "Bass"),
             (TrackKind::Chord, "Chord"),
             (TrackKind::Lead, "Lead"),
+            (TrackKind::Fm, "FM"),
         ];
         if !(40..=240).contains(&self.globals.tempo_bpm)
             || !self.globals.reverb_time_seconds.is_finite()
@@ -2088,7 +2233,10 @@ impl Project {
             if t.kind != expected[ti].0 || t.name != expected[ti].1 {
                 return Err(ValidationError::TrackOrder(ti, expected[ti].1));
             }
-            let pitched = matches!(t.kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead);
+            let pitched = matches!(
+                t.kind,
+                TrackKind::Bass | TrackKind::Chord | TrackKind::Lead | TrackKind::Fm
+            );
             let instrument_ok = matches!(
                 (t.kind, t.instrument),
                 (TrackKind::Kick, Instrument::Kick(_))
@@ -2100,6 +2248,7 @@ impl Project {
                     | (TrackKind::Bass, Instrument::Bass(_))
                     | (TrackKind::Chord, Instrument::Chord(_))
                     | (TrackKind::Lead, Instrument::Lead(_))
+                    | (TrackKind::Fm, Instrument::Fm(_))
             );
             if !instrument_ok
                 || pitched != t.input_degree.is_some()
@@ -2158,7 +2307,18 @@ impl Project {
                                 | (TrackKind::Bass, StepEvent::Tie { .. })
                                 | (TrackKind::Chord, StepEvent::Note { .. })
                                 | (TrackKind::Lead, StepEvent::LeadNote { .. })
-                                | (TrackKind::Chord | TrackKind::Lead, StepEvent::Tie { .. })
+                                | (
+                                    TrackKind::Fm,
+                                    StepEvent::Note {
+                                        chord_shape: None,
+                                        arpeggio: ArpeggioConfig { enabled: false, .. },
+                                        ..
+                                    }
+                                )
+                                | (
+                                    TrackKind::Chord | TrackKind::Lead | TrackKind::Fm,
+                                    StepEvent::Tie { .. }
+                                )
                         );
                         if !event_ok {
                             return Err(ValidationError::EventKind(ti, si));
@@ -2189,7 +2349,7 @@ impl Project {
                             ..
                         } = event
                         {
-                            if track.kind == TrackKind::Lead
+                            if matches!(track.kind, TrackKind::Lead | TrackKind::Fm)
                                 && (chord_shape.is_some() || !arpeggio.is_default())
                             {
                                 return Err(ValidationError::EventKind(ti, si));
@@ -2208,7 +2368,7 @@ impl Project {
                 }
                 if matches!(
                     track.kind,
-                    TrackKind::Bass | TrackKind::Chord | TrackKind::Lead
+                    TrackKind::Bass | TrackKind::Chord | TrackKind::Lead | TrackKind::Fm
                 ) {
                     validate_ties(ti, &sequence.steps)?;
                 }
@@ -2376,6 +2536,11 @@ pub enum ParameterId {
     BitCrusherBits,
     BitCrusherRate,
     BitCrusherMix,
+    FmWaveform,
+    FmRatio,
+    FmAmount,
+    FmFeedback,
+    Brightness,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2385,6 +2550,8 @@ pub enum ParameterValue {
     Chorus(ChorusMode),
     Spread(ChordSpread),
     LeadSubMode(LeadSubMode),
+    FmWaveform(FmWaveform),
+    FmRatio(FmRatio),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2394,10 +2561,12 @@ pub enum ParameterValueKind {
     Chorus,
     Spread,
     LeadSubMode,
+    FmWaveform,
+    FmRatio,
 }
 
 impl ParameterId {
-    pub const COUNT: usize = 40;
+    pub const COUNT: usize = 45;
     pub const ALL: [Self; Self::COUNT] = [
         Self::Level,
         Self::Pan,
@@ -2439,6 +2608,11 @@ impl ParameterId {
         Self::BitCrusherBits,
         Self::BitCrusherRate,
         Self::BitCrusherMix,
+        Self::FmWaveform,
+        Self::FmRatio,
+        Self::FmAmount,
+        Self::FmFeedback,
+        Self::Brightness,
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -2453,6 +2627,8 @@ impl ParameterId {
             Self::Chorus => ParameterValueKind::Chorus,
             Self::Spread => ParameterValueKind::Spread,
             Self::LeadSubMode => ParameterValueKind::LeadSubMode,
+            Self::FmWaveform => ParameterValueKind::FmWaveform,
+            Self::FmRatio => ParameterValueKind::FmRatio,
             _ => ParameterValueKind::Percent,
         }
     }
@@ -2493,6 +2669,9 @@ impl ParameterId {
                 | Self::Sustain
                 | Self::Release
                 | Self::Pitch
+                | Self::FmAmount
+                | Self::FmFeedback
+                | Self::Brightness
         )
     }
 
@@ -2508,6 +2687,8 @@ impl ParameterId {
             | (ParameterValueKind::Chorus, ParameterValue::Chorus(_))
             | (ParameterValueKind::Spread, ParameterValue::Spread(_))
             | (ParameterValueKind::LeadSubMode, ParameterValue::LeadSubMode(_)) => true,
+            (ParameterValueKind::FmWaveform, ParameterValue::FmWaveform(_))
+            | (ParameterValueKind::FmRatio, ParameterValue::FmRatio(_)) => true,
             _ => false,
         }
     }
@@ -2557,8 +2738,12 @@ impl ParameterId {
                     | TrackKind::Bass
                     | TrackKind::Chord
                     | TrackKind::Lead
+                    | TrackKind::Fm
             ),
-            Self::Attack => matches!(kind, TrackKind::Kick | TrackKind::Chord | TrackKind::Lead),
+            Self::Attack => matches!(
+                kind,
+                TrackKind::Kick | TrackKind::Chord | TrackKind::Lead | TrackKind::Fm
+            ),
             Self::Waveform => matches!(kind, TrackKind::Bass),
             Self::OscillatorMix | Self::PulseWidth | Self::SubOscillator | Self::Noise => {
                 matches!(kind, TrackKind::Chord | TrackKind::Lead)
@@ -2571,7 +2756,14 @@ impl ParameterId {
             Self::Cutoff | Self::Resonance | Self::FilterEnvelope => {
                 matches!(kind, TrackKind::Bass | TrackKind::Chord | TrackKind::Lead)
             }
-            Self::Sustain | Self::Release => matches!(kind, TrackKind::Chord | TrackKind::Lead),
+            Self::Sustain | Self::Release => {
+                matches!(kind, TrackKind::Chord | TrackKind::Lead | TrackKind::Fm)
+            }
+            Self::FmWaveform
+            | Self::FmRatio
+            | Self::FmAmount
+            | Self::FmFeedback
+            | Self::Brightness => matches!(kind, TrackKind::Fm),
             Self::Pitch => false,
         }
     }
@@ -2585,7 +2777,8 @@ impl ParameterId {
     }
 
     pub const fn supports_lfo(self, kind: TrackKind) -> bool {
-        (matches!(self, Self::Pitch) && matches!(kind, TrackKind::Chord | TrackKind::Lead))
+        (matches!(self, Self::Pitch)
+            && matches!(kind, TrackKind::Chord | TrackKind::Lead | TrackKind::Fm))
             || (self.is_valid_for(kind)
                 && !matches!(
                     self,
@@ -2613,6 +2806,8 @@ impl ParameterId {
                         | Self::PortamentoTime
                         | Self::Chorus
                         | Self::Spread
+                        | Self::FmWaveform
+                        | Self::FmRatio
                 ))
     }
 
@@ -2658,6 +2853,11 @@ impl ParameterId {
             Self::BitCrusherBits => "bit_crusher_bits",
             Self::BitCrusherRate => "bit_crusher_rate",
             Self::BitCrusherMix => "bit_crusher_mix",
+            Self::FmWaveform => "fm_waveform",
+            Self::FmRatio => "fm_ratio",
+            Self::FmAmount => "fm_amount",
+            Self::FmFeedback => "fm_feedback",
+            Self::Brightness => "brightness",
         }
     }
 
@@ -2685,6 +2885,11 @@ impl ParameterId {
             Self::BitCrusherBits => "bit crusher bits",
             Self::BitCrusherRate => "bit crusher rate",
             Self::BitCrusherMix => "bit crusher mix",
+            Self::FmWaveform => "waveform",
+            Self::FmRatio => "ratio",
+            Self::FmAmount => "FM amount",
+            Self::FmFeedback => "feedback",
+            Self::Brightness => "brightness",
             _ => self.name(),
         }
     }
@@ -2812,6 +3017,7 @@ impl Track {
                 Instrument::Bass(p) => ParameterValue::Percent(p.decay),
                 Instrument::Chord(p) => ParameterValue::Percent(p.decay),
                 Instrument::Lead(p) => ParameterValue::Percent(p.decay),
+                Instrument::Fm(p) => ParameterValue::Percent(p.decay),
                 _ => return None,
             },
             ParameterId::Waveform => match self.instrument {
@@ -2880,16 +3086,39 @@ impl Track {
                 Instrument::Kick(p) => ParameterValue::Percent(p.attack),
                 Instrument::Chord(p) => ParameterValue::Percent(p.attack),
                 Instrument::Lead(p) => ParameterValue::Percent(p.attack),
+                Instrument::Fm(p) => ParameterValue::Percent(p.attack),
                 _ => return None,
             },
             ParameterId::Sustain => match self.instrument {
                 Instrument::Chord(p) => ParameterValue::Percent(p.sustain),
                 Instrument::Lead(p) => ParameterValue::Percent(p.sustain),
+                Instrument::Fm(p) => ParameterValue::Percent(p.sustain),
                 _ => return None,
             },
             ParameterId::Release => match self.instrument {
                 Instrument::Chord(p) => ParameterValue::Percent(p.release),
                 Instrument::Lead(p) => ParameterValue::Percent(p.release),
+                Instrument::Fm(p) => ParameterValue::Percent(p.release),
+                _ => return None,
+            },
+            ParameterId::FmWaveform => match self.instrument {
+                Instrument::Fm(p) => ParameterValue::FmWaveform(p.waveform),
+                _ => return None,
+            },
+            ParameterId::FmRatio => match self.instrument {
+                Instrument::Fm(p) => ParameterValue::FmRatio(p.ratio),
+                _ => return None,
+            },
+            ParameterId::FmAmount => match self.instrument {
+                Instrument::Fm(p) => ParameterValue::Percent(p.amount),
+                _ => return None,
+            },
+            ParameterId::FmFeedback => match self.instrument {
+                Instrument::Fm(p) => ParameterValue::Percent(p.feedback),
+                _ => return None,
+            },
+            ParameterId::Brightness => match self.instrument {
+                Instrument::Fm(p) => ParameterValue::Percent(p.brightness),
                 _ => return None,
             },
             ParameterId::Pitch => return None,
@@ -3002,6 +3231,7 @@ impl Track {
                 Instrument::Bass(p) => p.decay = v,
                 Instrument::Chord(p) => p.decay = v,
                 Instrument::Lead(p) => p.decay = v,
+                Instrument::Fm(p) => p.decay = v,
                 _ => return false,
             },
             (ParameterId::Waveform, ParameterValue::Waveform(v)) => match &mut self.instrument {
@@ -3081,16 +3311,41 @@ impl Track {
                 Instrument::Kick(p) => p.attack = v,
                 Instrument::Chord(p) => p.attack = v,
                 Instrument::Lead(p) => p.attack = v,
+                Instrument::Fm(p) => p.attack = v,
                 _ => return false,
             },
             (ParameterId::Sustain, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Chord(p) => p.sustain = v,
                 Instrument::Lead(p) => p.sustain = v,
+                Instrument::Fm(p) => p.sustain = v,
                 _ => return false,
             },
             (ParameterId::Release, ParameterValue::Percent(v)) => match &mut self.instrument {
                 Instrument::Chord(p) => p.release = v,
                 Instrument::Lead(p) => p.release = v,
+                Instrument::Fm(p) => p.release = v,
+                _ => return false,
+            },
+            (ParameterId::FmWaveform, ParameterValue::FmWaveform(v)) => {
+                match &mut self.instrument {
+                    Instrument::Fm(p) => p.waveform = v,
+                    _ => return false,
+                }
+            }
+            (ParameterId::FmRatio, ParameterValue::FmRatio(v)) => match &mut self.instrument {
+                Instrument::Fm(p) => p.ratio = v,
+                _ => return false,
+            },
+            (ParameterId::FmAmount, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Fm(p) => p.amount = v,
+                _ => return false,
+            },
+            (ParameterId::FmFeedback, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Fm(p) => p.feedback = v,
+                _ => return false,
+            },
+            (ParameterId::Brightness, ParameterValue::Percent(v)) => match &mut self.instrument {
+                Instrument::Fm(p) => p.brightness = v,
                 _ => return false,
             },
             (ParameterId::Pitch, _) => return false,
@@ -3353,7 +3608,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 21);
+        assert_eq!(project.format_version, 22);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
@@ -3561,6 +3816,10 @@ mod tests {
                 ParameterValue::Spread(ChordSpread::Wide)
             } else if parameter == ParameterId::LeadSubMode {
                 ParameterValue::LeadSubMode(LeadSubMode::TwoOctaveSquare)
+            } else if parameter == ParameterId::FmWaveform {
+                ParameterValue::FmWaveform(FmWaveform::Triangle)
+            } else if parameter == ParameterId::FmRatio {
+                ParameterValue::FmRatio(FmRatio::Four)
             } else {
                 percent
             };
@@ -3818,5 +4077,48 @@ mod tests {
             .drum_recipe_mut()
             .unwrap() = DrumRecipeSlot::THREE;
         assert_eq!(project.validate(), Err(ValidationError::DrumRecipe(2, 0)));
+    }
+
+    #[test]
+    fn fm_defaults_selectors_locks_and_event_shape_are_strict() {
+        let mut project = Project::new();
+        assert_eq!(project.tracks[FM_TRACK_INDEX].kind, TrackKind::Fm);
+        let Instrument::Fm(fm) = project.tracks[FM_TRACK_INDEX].instrument else {
+            panic!("expected FM")
+        };
+        assert_eq!((fm.waveform, fm.ratio), (FmWaveform::Sine, FmRatio::Two));
+        assert_eq!(
+            (fm.amount, fm.feedback, fm.brightness),
+            (p(35), p(8), p(72))
+        );
+        assert_eq!(
+            (fm.attack, fm.decay, fm.sustain, fm.release),
+            (p(0), p(55), p(55), p(40))
+        );
+        assert_eq!(project.tracks[FM_TRACK_INDEX].reverb_send, p(20));
+        assert_eq!(serde_json::to_string(&FmRatio::Half).unwrap(), "\"0.5\"");
+        assert_eq!(
+            serde_json::to_string(&FmRatio::OneAndHalf).unwrap(),
+            "\"1.5\""
+        );
+        assert!(ParameterId::FmAmount.supports_lfo(TrackKind::Fm));
+        assert!(ParameterId::Pitch.supports_lfo(TrackKind::Fm));
+        assert!(!ParameterId::FmRatio.supports_lfo(TrackKind::Fm));
+
+        project.patterns[0].tracks[FM_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            accent: true,
+            chord_shape: Some(ChordShape::Single),
+            arpeggio: Default::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::ZERO,
+            locks: Default::default(),
+        });
+        assert_eq!(
+            project.validate(),
+            Err(ValidationError::EventKind(FM_TRACK_INDEX, 0))
+        );
     }
 }

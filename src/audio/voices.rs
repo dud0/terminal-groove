@@ -4,7 +4,8 @@ use crate::dsp::{
     additive_source_gains,
 };
 use crate::model::{
-    ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, ParameterLocks, Waveform,
+    ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, FmRatio, FmWaveform, ParameterLocks,
+    Waveform,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,6 +13,7 @@ pub(super) enum SynthVoiceKind {
     Bass,
     Chord,
     Lead,
+    Fm,
 }
 
 pub(super) struct SynthVoice {
@@ -31,6 +33,15 @@ pub(super) struct SynthVoice {
     pub(super) chord_filter: ChordFilter,
     pub(super) lead_filter: LeadFilter,
     pub(super) chord_highpass: Biquad,
+    pub(super) fm_filter: Biquad,
+    pub(super) fm_carrier_phase: f32,
+    pub(super) fm_modulator_phase: f32,
+    pub(super) fm_previous_modulator: f32,
+    pub(super) fm_waveform: FmWaveform,
+    pub(super) fm_ratio: FmRatio,
+    pub(super) fm_amount: Smoother,
+    pub(super) fm_feedback: Smoother,
+    pub(super) fm_brightness: Smoother,
     pub(super) freq: Smoother,
     pub(super) wave: Waveform,
     pub(super) oscillator_mix: Smoother,
@@ -497,6 +508,15 @@ impl SynthVoice {
             chord_filter: Default::default(),
             lead_filter: Default::default(),
             chord_highpass,
+            fm_filter: Biquad::new(),
+            fm_carrier_phase: 0.0,
+            fm_modulator_phase: 0.0,
+            fm_previous_modulator: 0.0,
+            fm_waveform: FmWaveform::Sine,
+            fm_ratio: FmRatio::Two,
+            fm_amount: Smoother::new(35.0),
+            fm_feedback: Smoother::new(8.0),
+            fm_brightness: Smoother::new(72.0),
             freq: Smoother::new(110.0),
             wave: Waveform::Saw,
             oscillator_mix: Smoother::new(70.0),
@@ -584,6 +604,10 @@ impl SynthVoice {
         self.chord_filter.reset();
         self.lead_filter.reset();
         self.chord_highpass.clear_state();
+        self.fm_filter.clear_state();
+        self.fm_carrier_phase = 0.0;
+        self.fm_modulator_phase = 0.0;
+        self.fm_previous_modulator = 0.0;
     }
 
     pub(super) fn gate_off(&mut self) {

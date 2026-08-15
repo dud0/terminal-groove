@@ -1907,6 +1907,17 @@ impl Biquad {
             1.0 - alpha,
         );
     }
+    pub fn set_lowpass(&mut self, frequency: f32, q: f32, sample_rate: f32) {
+        let (cos, _sin, alpha) = Self::common(frequency, q, sample_rate);
+        self.set(
+            (1.0 - cos) * 0.5,
+            1.0 - cos,
+            (1.0 - cos) * 0.5,
+            1.0 + alpha,
+            -2.0 * cos,
+            1.0 - alpha,
+        );
+    }
     pub fn process(&mut self, input: f32) -> f32 {
         let output = self.b0 * input + self.z1;
         self.z1 = self.b1 * input - self.a1 * output + self.z2;
