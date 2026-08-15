@@ -292,6 +292,15 @@ pub(super) struct ParameterDescriptor {
     pub(super) group: ParameterGroup,
 }
 
+#[derive(Clone, Copy)]
+struct ParameterCardRender {
+    active: bool,
+    group_color: Color,
+    style: Style,
+    segment_count: u16,
+    show_shortcut: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ParameterGroup {
     Mixer,
@@ -1722,11 +1731,13 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 content,
                 t,
                 descriptor,
-                active,
-                group_color,
-                style,
-                segment_count,
-                !compact,
+                ParameterCardRender {
+                    active,
+                    group_color,
+                    style,
+                    segment_count,
+                    show_shortcut: !compact,
+                },
             );
             continue;
         }
@@ -1927,16 +1938,12 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
     }
 }
 
-pub(super) fn render_pitch_lfo_card(
+fn render_pitch_lfo_card(
     f: &mut ratatui::Frame,
     content: Rect,
     track: &crate::model::Track,
     descriptor: &ParameterDescriptor,
-    active: bool,
-    group_color: Color,
-    style: Style,
-    segment_count: u16,
-    show_shortcut: bool,
+    render: ParameterCardRender,
 ) {
     let config = track.lfos.get(ParameterId::Pitch);
     let value_label = config
@@ -1948,13 +1955,13 @@ pub(super) fn render_pitch_lfo_card(
             )
         })
         .unwrap_or_else(|| "—".into());
-    let value_label = if show_shortcut || config.is_none() {
+    let value_label = if render.show_shortcut || config.is_none() {
         value_label
     } else {
         format!("{value_label}~")
     };
-    render_centered(f, &value_label, content, style);
-    for segment in 0..segment_count {
+    render_centered(f, &value_label, content, render.style);
+    for segment in 0..render.segment_count {
         let segment_area = Rect {
             x: content.x,
             y: content.y + 1 + segment,
@@ -1963,24 +1970,24 @@ pub(super) fn render_pitch_lfo_card(
         };
         let symbol = config.map_or("···", |config| {
             if usize::from(segment)
-                >= usize::from(segment_count)
-                    - fader_segments_for(config.depth.get(), segment_count)
+                >= usize::from(render.segment_count)
+                    - fader_segments_for(config.depth.get(), render.segment_count)
             {
                 "███"
             } else {
                 "···"
             }
         });
-        let segment_style = if active {
+        let segment_style = if render.active {
             Style::default()
-                .fg(group_color)
+                .fg(render.group_color)
                 .reversed()
                 .add_modifier(Modifier::BOLD)
         } else if symbol == "···" {
             Style::default().fg(Color::DarkGray)
         } else {
             Style::default()
-                .fg(group_color)
+                .fg(render.group_color)
                 .add_modifier(Modifier::BOLD)
         };
         render_centered(f, symbol, segment_area, segment_style);
@@ -1990,23 +1997,23 @@ pub(super) fn render_pitch_lfo_card(
         descriptor.label,
         Rect {
             x: content.x,
-            y: content.y + 1 + segment_count,
+            y: content.y + 1 + render.segment_count,
             width: content.width,
             height: 1,
         },
-        style,
+        render.style,
     );
-    if !show_shortcut {
+    if !render.show_shortcut {
         return;
     }
-    let shortcut_style = if active {
+    let shortcut_style = if render.active {
         Style::default()
-            .fg(group_color)
+            .fg(render.group_color)
             .reversed()
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .fg(group_color)
+            .fg(render.group_color)
             .add_modifier(Modifier::BOLD)
     };
     f.render_widget(
@@ -2023,7 +2030,7 @@ pub(super) fn render_pitch_lfo_card(
         .alignment(Alignment::Center),
         Rect {
             x: content.x,
-            y: content.y + 2 + segment_count,
+            y: content.y + 2 + render.segment_count,
             width: content.width,
             height: 1,
         },
