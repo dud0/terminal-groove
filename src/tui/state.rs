@@ -248,7 +248,7 @@ impl GeneratorDialog {
             return false;
         };
         match field {
-            6 => kind == TrackKind::Chord,
+            6 => kind.supports_voicing(),
             9 => matches!(kind, TrackKind::Bass | TrackKind::Lead),
             _ => true,
         }

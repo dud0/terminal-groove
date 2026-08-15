@@ -51,7 +51,9 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
                     v.active = false;
                 }
                 Renderer::release_chord(&mut renderer.chord);
+                Renderer::release_chord(&mut renderer.fm_chord);
                 renderer.chord.arpeggio = ArpeggioState::default();
+                renderer.fm_chord.arpeggio = ArpeggioState::default();
             }
         }
         AudioCommand::Stop => {
@@ -75,21 +77,28 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
                 .voices
                 .iter_mut()
                 .chain(renderer.preview_chord.voices.iter_mut())
+                .chain(renderer.fm_chord.voices.iter_mut())
+                .chain(renderer.preview_fm_chord.voices.iter_mut())
             {
                 v.gate_off();
-                v.active = false;
-                v.remaining = 0;
+                v.reset_to_idle();
             }
             renderer.chord.active = false;
             renderer.preview_chord.active = false;
+            renderer.fm_chord.active = false;
+            renderer.preview_fm_chord.active = false;
             renderer.preview_activity = [false; TRACK_COUNT];
             renderer.chord.arpeggio = ArpeggioState::default();
             renderer.preview_chord.arpeggio = ArpeggioState::default();
+            renderer.fm_chord.arpeggio = ArpeggioState::default();
+            renderer.preview_fm_chord.arpeggio = ArpeggioState::default();
             for chorus in renderer
                 .chord
                 .choruses
                 .iter_mut()
                 .chain(renderer.preview_chord.choruses.iter_mut())
+                .chain(renderer.fm_chord.choruses.iter_mut())
+                .chain(renderer.preview_fm_chord.choruses.iter_mut())
             {
                 chorus.clear();
             }

@@ -52,7 +52,9 @@ impl std::fmt::Display for EditError {
                 Self::CannotDouble => "track is longer than 32 steps and cannot be doubled",
                 Self::NoAccent => "accent requires a trigger or note",
                 Self::NoSlide => "slide requires a Bass or Lead note",
-                Self::NoChordShape => "chord shape requires a Chord note or empty Chord step",
+                Self::NoChordShape => {
+                    "voicing requires a Chord/FM note or empty Chord/FM step"
+                }
                 Self::NoTriggerSettings => "trigger settings require a trigger or note",
                 Self::InvalidDrumRecipe => "recipe is incompatible with this drum track",
                 Self::EmptyStepClipboard => "step clipboard is empty",
@@ -840,14 +842,12 @@ impl Editor {
                     microtiming: crate::model::Microtiming::ZERO,
                     locks: Default::default(),
                 }
-            } else if t.kind == TrackKind::Chord {
+            } else if t.kind.supports_voicing() {
                 StepEvent::Note {
                     degree: t.input_degree.unwrap(),
                     octave: t.input_octave.unwrap(),
                     accent: t.input_accent,
-                    chord_shape: t
-                        .input_chord_shape
-                        .filter(|shape| *shape != ChordShape::default()),
+                    chord_shape: t.input_chord_shape,
                     arpeggio: t.input_chord_arpeggio.unwrap_or_default(),
                     condition: TriggerCondition::Always,
                     retrigger_count: 1,
@@ -1099,17 +1099,16 @@ impl Editor {
                     degree,
                     octave,
                     accent,
-                    chord_shape: if t.kind == TrackKind::Chord {
+                    chord_shape: if t.kind.supports_voicing() {
                         if existing_note {
-                            chord_shape.filter(|shape| *shape != ChordShape::default())
+                            chord_shape
                         } else {
                             t.input_chord_shape
-                                .filter(|shape| *shape != ChordShape::default())
                         }
                     } else {
                         None
                     },
-                    arpeggio: if t.kind == TrackKind::Chord {
+                    arpeggio: if t.kind.supports_voicing() {
                         if existing_note {
                             arpeggio
                         } else {
@@ -1137,14 +1136,15 @@ impl Editor {
     ) -> Result<bool, EditError> {
         self.edit(None, move |project, pattern| {
             let mut t = active_track_mut(project, pattern, track)?;
-            if t.kind != TrackKind::Chord {
+            if !t.kind.supports_voicing() {
                 return Err(EditError::NoChordShape);
             }
+            let shape = t.canonical_voicing_shape(shape);
             match t.steps.get_mut(step).ok_or(EditError::InvalidStep)? {
                 Some(StepEvent::Note { chord_shape, .. }) => {
-                    *chord_shape = (shape != ChordShape::default()).then_some(shape);
+                    *chord_shape = shape;
                 }
-                None => t.input_chord_shape = (shape != ChordShape::default()).then_some(shape),
+                None => t.input_chord_shape = shape,
                 Some(StepEvent::Tie { .. }) | Some(_) => return Err(EditError::NoChordShape),
             }
             Ok(())
@@ -1153,19 +1153,22 @@ impl Editor {
 
     pub fn chord_shape_value(&self, track: usize, step: usize) -> Result<ChordShape, EditError> {
         let t = active_track(&self.project, self.pattern, track)?;
-        if t.kind != TrackKind::Chord {
+        if !t.kind.supports_voicing() {
             return Err(EditError::NoChordShape);
         }
+        let default_shape = t.default_voicing_shape().ok_or(EditError::NoChordShape)?;
         let base = match t.steps.get(step).ok_or(EditError::InvalidStep)?.as_ref() {
-            Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or_default(),
+            Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or(default_shape),
             Some(StepEvent::Tie { .. }) => {
                 let source = tie_source(t.steps, step).ok_or(EditError::InvalidTie)?;
                 match t.steps[source] {
-                    Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or_default(),
+                    Some(StepEvent::Note { chord_shape, .. }) => {
+                        chord_shape.unwrap_or(default_shape)
+                    }
                     _ => return Err(EditError::NoChordShape),
                 }
             }
-            None => t.input_chord_shape.unwrap_or_default(),
+            None => t.input_voicing_shape().ok_or(EditError::NoChordShape)?,
             Some(_) => return Err(EditError::NoChordShape),
         };
         Ok(base)
@@ -1177,7 +1180,7 @@ impl Editor {
         step: usize,
     ) -> Result<ArpeggioConfig, EditError> {
         let t = active_track(&self.project, self.pattern, track)?;
-        if t.kind != TrackKind::Chord {
+        if !t.kind.supports_voicing() {
             return Err(EditError::InvalidParameter);
         }
         match t.steps.get(step).ok_or(EditError::InvalidStep)?.as_ref() {
@@ -1202,7 +1205,7 @@ impl Editor {
     ) -> Result<bool, EditError> {
         self.edit(None, move |project, pattern| {
             let mut t = active_track_mut(project, pattern, track)?;
-            if t.kind != TrackKind::Chord {
+            if !t.kind.supports_voicing() {
                 return Err(EditError::InvalidParameter);
             }
             match t.steps.get_mut(step).ok_or(EditError::InvalidStep)? {
@@ -1226,7 +1229,7 @@ impl Editor {
     ) -> Result<bool, EditError> {
         self.edit(None, move |project, pattern| {
             let mut t = active_track_mut(project, pattern, track)?;
-            if t.kind != TrackKind::Chord {
+            if !t.kind.supports_voicing() {
                 return Err(EditError::InvalidParameter);
             }
             match t.steps.get_mut(step).ok_or(EditError::InvalidStep)? {
@@ -1250,7 +1253,7 @@ impl Editor {
     ) -> Result<bool, EditError> {
         self.edit(None, move |project, pattern| {
             let mut t = active_track_mut(project, pattern, track)?;
-            if t.kind != TrackKind::Chord {
+            if !t.kind.supports_voicing() {
                 return Err(EditError::InvalidParameter);
             }
             match t.steps.get_mut(step).ok_or(EditError::InvalidStep)? {
@@ -2517,6 +2520,39 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn fm_voicing_defaults_to_single_and_preserves_polyphonic_articulation() {
+        let mut editor = Editor::new(Project::new());
+        assert_eq!(
+            editor.chord_shape_value(crate::model::FM_TRACK_INDEX, 0),
+            Ok(ChordShape::Single)
+        );
+        editor
+            .set_chord_shape(
+                crate::model::FM_TRACK_INDEX,
+                0,
+                ChordShape::SeventhFirstInversion,
+            )
+            .unwrap();
+        editor
+            .set_arpeggio_enabled(crate::model::FM_TRACK_INDEX, 0, true)
+            .unwrap();
+        editor.set_note(crate::model::FM_TRACK_INDEX, 0, 4).unwrap();
+        assert!(matches!(
+            editor.active_steps(crate::model::FM_TRACK_INDEX).unwrap()[0],
+            Some(StepEvent::Note {
+                chord_shape: Some(ChordShape::SeventhFirstInversion),
+                arpeggio: ArpeggioConfig { enabled: true, .. },
+                ..
+            })
+        ));
+        editor.toggle_tie(crate::model::FM_TRACK_INDEX, 1).unwrap();
+        assert_eq!(
+            editor.chord_shape_value(crate::model::FM_TRACK_INDEX, 1),
+            Ok(ChordShape::SeventhFirstInversion)
+        );
     }
 
     #[test]

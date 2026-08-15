@@ -594,6 +594,9 @@ fn generator_dialog_marks_track_specific_fields_inapplicable() {
     dialog.target = GeneratorTarget::Track(LEAD_TRACK_INDEX);
     assert!(!dialog.field_is_applicable(&project, 6));
     assert!(dialog.field_is_applicable(&project, 9));
+    dialog.target = GeneratorTarget::Track(FM_TRACK_INDEX);
+    assert!(dialog.field_is_applicable(&project, 6));
+    assert!(!dialog.field_is_applicable(&project, 9));
     dialog.target = GeneratorTarget::WholePattern;
     assert!(dialog.field_is_applicable(&project, 6));
     assert!(dialog.field_is_applicable(&project, 9));
@@ -602,7 +605,7 @@ fn generator_dialog_marks_track_specific_fields_inapplicable() {
     dialog.target = GeneratorTarget::Track(0);
     app.mode = Mode::GeneratorDialog(dialog);
     let screen = rendered(&app, 120, 34);
-    assert!(screen.contains("> Chord shapes All shapes  (n/a)"));
+    assert!(screen.contains("> Voicings   All shapes  (n/a)"));
     assert!(screen.contains("Slides     18%  (n/a)"));
 }
 
@@ -736,10 +739,20 @@ fn chord_editor_uses_the_shifted_chord_row() {
     assert!(matches!(app.mode, Mode::ChordEdit { .. }));
 
     app.mode = Mode::Navigation;
+    app.row = FM_TRACK_INDEX + 1;
+    open_chord_editor(&mut app);
+    assert!(matches!(
+        app.mode,
+        Mode::ChordEdit {
+            shape: ChordShape::Single
+        }
+    ));
+
+    app.mode = Mode::Navigation;
     app.row = DRUM_TRACK_COUNT;
     open_chord_editor(&mut app);
     assert_eq!(app.mode, Mode::Navigation);
-    assert!(app.status.contains("Chord track only"));
+    assert!(app.status.contains("Chord and FM"));
 }
 
 #[test]
@@ -1301,14 +1314,14 @@ fn chord_shape_modal_and_title_render_at_minimum_size() {
     let mut app = App::new(project, None);
     app.row = CHORD_TRACK_INDEX + 1;
     let title_screen = rendered(&app, 120, 34);
-    assert!(title_screen.contains("Chord trigger 1-3"));
+    assert!(title_screen.contains("Voicing 1-3 CHORD"));
     app.mode = Mode::ChordEdit {
         shape: ChordShape::DyadThird,
     };
     let screen = rendered(&app, 120, 34);
-    assert!(screen.contains("Chord · Step 1"));
+    assert!(screen.contains("Voicing · Chord · Step 1"));
     assert!(screen.contains("Shape"));
-    assert!(screen.contains("○ 1"));
+    assert!(screen.contains("○ 1 (Mono)"));
     assert!(screen.contains("● 1-3"));
     assert!(screen.contains("○ 1-5"));
     assert!(screen.contains("[←/→] select"));

@@ -52,7 +52,7 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::LfoEdit { parameter, .. } => {
             format!("Track LFO edit ({})", parameter.display_name())
         }
-        Mode::ChordEdit { shape } => format!("Chord trigger edit ({shape})"),
+        Mode::ChordEdit { shape } => format!("Voicing edit ({shape})"),
         Mode::TriggerEdit { .. } => "Trigger editor".into(),
         Mode::SwingEdit => "Track swing edit".into(),
         Mode::TrackProbabilityEdit => "Track probability edit".into(),
@@ -103,7 +103,7 @@ SEQUENCER  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→
 EVENTS & TRACKS  m mute · l length · Shift+D double
                  a accent/default · Shift+G Bass/Lead slide · Shift+T microtiming/condition/retrigger · Shift+S swing · Shift+Q probability
                  Hat 1/2 Closed/Open · Tom 1/2/3 Low/Medium/High · 0 clear recipe locks
-                 1–8 note · [ / ] octave · t tie · C Chord trigger editor
+                 1–8 note · [ / ] octave · t tie · C Voicing editor (Chord/FM)
 PARAMETERS  v level · n pan · y delay send · b reverb send
            Tab/Shift+Tab sequencer mode · Shift+← PARAMS · Shift+→ EFFECTS
            p BASE/LOCK · PageUp/Down step · Shift+PageUp/Down step bank
@@ -123,10 +123,14 @@ GLOBAL  t tempo · y delay division · f feedback · r reverb time
         b reverb tone · p pre-delay · m reverb return · k key · s scale · ←/→ select · ↑/↓ adjust";
 
 pub(super) fn track_label(t: &crate::model::Track) -> String {
-    if matches!(
-        t.kind,
-        TrackKind::Bass | TrackKind::Chord | TrackKind::Lead | TrackKind::Fm
-    ) {
+    if t.kind.supports_voicing() {
+        let mode = if t.input_voicing_shape() == Some(ChordShape::Single) {
+            'M'
+        } else {
+            'C'
+        };
+        format!("{} {mode} O{}", t.name, t.input_octave.unwrap_or(3))
+    } else if matches!(t.kind, TrackKind::Bass | TrackKind::Lead) {
         format!("{} O{}", t.name, t.input_octave.unwrap_or(3))
     } else {
         t.name.clone()
@@ -279,23 +283,23 @@ pub(super) fn articulation_title(a: &App, track: usize) -> String {
 }
 
 pub(super) fn selected_chord_shape(a: &App, track: usize) -> Option<ChordShape> {
-    if a.editor.project.tracks.get(track)?.kind != TrackKind::Chord {
+    let track_config = a.editor.project.tracks.get(track)?;
+    if !track_config.kind.supports_voicing() {
         return None;
     }
+    let default_shape = track_config.default_voicing_shape()?;
     let steps = a.editor.active_steps(track)?;
     match steps[a.step].as_ref() {
-        Some(StepEvent::Note { chord_shape, .. }) => Some(chord_shape.unwrap_or_default()),
+        Some(StepEvent::Note { chord_shape, .. }) => Some(chord_shape.unwrap_or(default_shape)),
         Some(StepEvent::Tie { .. }) => crate::model::tie_source(steps, a.step).and_then(|source| {
             match steps[source].as_ref() {
-                Some(StepEvent::Note { chord_shape, .. }) => Some(chord_shape.unwrap_or_default()),
+                Some(StepEvent::Note { chord_shape, .. }) => {
+                    Some(chord_shape.unwrap_or(default_shape))
+                }
                 _ => None,
             }
         }),
-        None => Some(
-            a.editor.project.tracks[track]
-                .input_chord_shape
-                .unwrap_or_default(),
-        ),
+        None => track_config.input_voicing_shape(),
         _ => None,
     }
 }
@@ -1629,7 +1633,14 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         .chord_shape_value(track, a.step)
         .ok()
         .or_else(|| selected_chord_shape(a, track))
-        .map(|shape| format!(" · Chord trigger {shape}"))
+        .map(|shape| {
+            let mode = if shape == ChordShape::Single {
+                "MONO"
+            } else {
+                "CHORD"
+            };
+            format!(" · Voicing {shape} {mode}")
+        })
         .unwrap_or_default();
     let context = if matches!(
         t.kind,
@@ -2709,7 +2720,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         ));
     } else if matches!(a.mode, Mode::ChordEdit { .. }) {
         status_lines.push(Line::from(
-            "Chord trigger · [←/→] field  [↑/↓] adjust  [PageUp/Down] step  [Enter/Esc] finish",
+            "Voicing · [←/→] field  [↑/↓] adjust  [PageUp/Down] step  [Enter/Esc] finish",
         ));
     } else if matches!(a.mode, Mode::GlobalEdit(_) | Mode::TempoInput(_)) {
         status_lines.push(Line::from(

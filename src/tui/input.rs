@@ -22,10 +22,10 @@ use crate::{
     audio::{Audio, AudioCommand},
     generator::{ChordShapePool, Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
-        ArpeggioRate, ArpeggioType, CHORD_TRACK_INDEX, ChordShape, ChorusMode, DRUM_TRACK_COUNT,
-        DrumRecipeSlot, FmAlgorithm, FmOperatorField, FmRatio, LfoConfig, LfoDivision, LfoRate,
-        LfoWaveform, MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE,
-        STEP_ROW_SIZE, StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
+        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, DRUM_TRACK_COUNT, DrumRecipeSlot,
+        FmAlgorithm, FmOperatorField, FmRatio, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
+        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, STEP_ROW_SIZE,
+        StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
     },
     reducer::{Editor, Scope},
 };
@@ -399,7 +399,11 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             a.mode = Mode::TrackProbabilityEdit;
             a.status = format!("{} probability", a.editor.project.tracks[a.row - 1].name);
         }
-        KeyCode::Char('C') if a.row == CHORD_TRACK_INDEX + 1 => open_chord_editor(a),
+        KeyCode::Char('C')
+            if a.row > 0 && a.editor.project.tracks[a.row - 1].kind.supports_voicing() =>
+        {
+            open_chord_editor(a)
+        }
         KeyCode::Char(c @ '1'..='3')
             if a.row > 0 && k.modifiers.is_empty() && selected_recipe_shortcut(a, c).is_some() =>
         {
@@ -1413,7 +1417,7 @@ pub(super) fn handle_parameter_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
             a.mode = Mode::Help;
             Ok(true)
         }
-        KeyCode::Char('C') if track == CHORD_TRACK_INDEX => {
+        KeyCode::Char('C') if a.editor.project.tracks[track].kind.supports_voicing() => {
             a.mode = Mode::Navigation;
             open_chord_editor(a);
             Ok(true)
@@ -1557,32 +1561,34 @@ pub(super) fn open_lfo_editor(a: &mut App, audio: &mut Audio, parameter: Paramet
 }
 
 pub(super) fn open_chord_editor(a: &mut App) {
-    if a.row != CHORD_TRACK_INDEX + 1 {
-        a.status = "Chord editor is available on the Chord track only".into();
+    if a.row == 0 || !a.editor.project.tracks[a.row - 1].kind.supports_voicing() {
+        a.status = "Voicing editor is available on Chord and FM tracks".into();
         return;
     }
-    let track = &a.editor.project.tracks[CHORD_TRACK_INDEX];
-    let steps = a.editor.active_steps(CHORD_TRACK_INDEX).unwrap();
+    let track_index = a.row - 1;
+    let track = &a.editor.project.tracks[track_index];
+    let steps = a.editor.active_steps(track_index).unwrap();
     let shape = match steps[a.step].as_ref() {
-        Some(StepEvent::Note { chord_shape, .. }) => chord_shape.unwrap_or_default(),
-        Some(StepEvent::Tie { .. }) => {
-            selected_chord_shape(a, CHORD_TRACK_INDEX).unwrap_or_default()
+        Some(StepEvent::Note { chord_shape, .. }) => {
+            chord_shape.unwrap_or_else(|| track.default_voicing_shape().unwrap())
         }
-        None => track.input_chord_shape.unwrap_or_default(),
+        Some(StepEvent::Tie { .. }) => selected_chord_shape(a, track_index)
+            .unwrap_or_else(|| track.default_voicing_shape().unwrap()),
+        None => track.input_voicing_shape().unwrap(),
         _ => return,
     };
     let shape = a
         .editor
-        .chord_shape_value(CHORD_TRACK_INDEX, a.step)
+        .chord_shape_value(track_index, a.step)
         .unwrap_or(shape);
     a.chord_field = ChordField::Shape;
     a.mode = Mode::ChordEdit { shape };
     a.status = if matches!(steps[a.step], Some(StepEvent::Tie { .. })) {
-        "Chord settings are inherited; edit the note trigger".into()
+        "Voicing is inherited; edit the note trigger".into()
     } else if steps[a.step].is_none() {
-        "Editing Chord input defaults".into()
+        "Editing voicing input defaults".into()
     } else {
-        "Editing Chord trigger settings".into()
+        "Editing trigger voicing".into()
     };
 }
 
@@ -1612,7 +1618,7 @@ pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
         }
         KeyCode::Enter | KeyCode::Esc | KeyCode::Char('C') => {
             a.mode = Mode::Navigation;
-            a.status = "Chord trigger editing finished".into();
+            a.status = "Voicing editing finished".into();
         }
         KeyCode::Char('?') => a.mode = Mode::Help,
         KeyCode::Left | KeyCode::Right => {
@@ -1629,7 +1635,7 @@ pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
         }
         KeyCode::PageUp | KeyCode::PageDown => {
             move_chord_editor_step(a, k.code == KeyCode::PageDown);
-            a.status = format!("Editing Chord at step {}", a.step + 1);
+            a.status = format!("Editing voicing at step {}", a.step + 1);
         }
         KeyCode::Up | KeyCode::Down => {
             let step = a.step;
@@ -1642,7 +1648,7 @@ pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
                     let next = lfo_choice_index(index, ChordShape::ALL.len(), k.code);
                     let next_shape = ChordShape::ALL[next];
                     if read_only {
-                        a.status = "Chord settings are inherited; edit the note trigger".into();
+                        a.status = "Voicing is inherited; edit the note trigger".into();
                     } else if next_shape != shape
                         && apply(a, audio, |editor| {
                             editor.set_chord_shape(track, step, next_shape)
@@ -1655,7 +1661,7 @@ pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
                 }
                 ChordField::Arp => {
                     if read_only {
-                        a.status = "Chord settings are inherited; edit the note trigger".into();
+                        a.status = "Voicing is inherited; edit the note trigger".into();
                     } else if apply(a, audio, |editor| {
                         editor.set_arpeggio_enabled(
                             track,
@@ -1677,7 +1683,7 @@ pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
                     if !config.enabled {
                         a.status = "Arpeggio type is disabled while Arp is off".into();
                     } else if read_only {
-                        a.status = "Chord settings are inherited; edit the note trigger".into();
+                        a.status = "Voicing is inherited; edit the note trigger".into();
                     } else {
                         let index = ArpeggioType::ALL
                             .iter()
@@ -1701,7 +1707,7 @@ pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
                     if !config.enabled {
                         a.status = "Arpeggio rate is disabled while Arp is off".into();
                     } else if read_only {
-                        a.status = "Chord settings are inherited; edit the note trigger".into();
+                        a.status = "Voicing is inherited; edit the note trigger".into();
                     } else {
                         let index = ArpeggioRate::ALL
                             .iter()
@@ -1726,10 +1732,17 @@ pub(super) fn handle_chord_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> R
 
 pub(super) fn move_chord_editor_step(a: &mut App, forward: bool) {
     move_step_page(a, forward);
+    let track = a.row - 1;
     let shape = a
         .editor
-        .chord_shape_value(CHORD_TRACK_INDEX, a.step)
-        .unwrap_or_else(|_| selected_chord_shape(a, a.row - 1).unwrap_or_default());
+        .chord_shape_value(track, a.step)
+        .unwrap_or_else(|_| {
+            selected_chord_shape(a, track).unwrap_or_else(|| {
+                a.editor.project.tracks[track]
+                    .default_voicing_shape()
+                    .unwrap()
+            })
+        });
     a.mode = Mode::ChordEdit { shape };
 }
 

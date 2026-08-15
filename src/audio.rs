@@ -5,9 +5,9 @@ use crate::{
     },
     engine::StepClock,
     model::{
-        ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, Globals, Instrument,
-        LfoAssignments, MAX_STEP_COUNT, ParameterId, Percent, Project, SYNTH_TRACK_START,
-        SongEntry, StepEvent, TRACK_COUNT, TrackEffects,
+        ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, FM_TRACK_INDEX, Globals,
+        Instrument, LfoAssignments, MAX_STEP_COUNT, ParameterId, Percent, Project,
+        SYNTH_TRACK_START, SongEntry, StepEvent, TRACK_COUNT, TrackEffects,
     },
     storage,
 };
@@ -94,7 +94,7 @@ impl AudioProject {
                     input_degree: t.input_degree.unwrap_or(1),
                     input_octave: t.input_octave.unwrap_or(3),
                     input_accent: t.input_accent,
-                    input_chord_shape: t.input_chord_shape.unwrap_or_default(),
+                    input_chord_shape: t.input_voicing_shape().unwrap_or(ChordShape::Single),
                     input_chord_arpeggio: t.input_chord_arpeggio.unwrap_or_default(),
                 }
             }),
@@ -143,10 +143,14 @@ struct Renderer {
     preview: [SynthVoice; 4],
     chord: ChordVoicePool,
     preview_chord: ChordVoicePool,
+    fm_chord: ChordVoicePool,
+    preview_fm_chord: ChordVoicePool,
     effects: [TrackEffectChain; NON_CHORD_TRACK_COUNT],
     preview_effects: [TrackEffectChain; NON_CHORD_TRACK_COUNT],
     chord_effects: [TrackEffectChain; 2],
     preview_chord_effects: [TrackEffectChain; 2],
+    fm_chord_effects: [TrackEffectChain; 2],
+    preview_fm_chord_effects: [TrackEffectChain; 2],
     sidechain: SidechainCompressor,
     delay: Delay,
     reverb: Reverb,
@@ -170,13 +174,13 @@ struct Renderer {
     recording: recording::RecordingProducer,
 }
 
-const NON_CHORD_TRACK_COUNT: usize = TRACK_COUNT - 1;
+const NON_CHORD_TRACK_COUNT: usize = TRACK_COUNT - 2;
 const SCHEDULED_ACTION_COUNT: usize = 96;
 
-/// Maps a logical track to its ordinary effect-chain slot. Chord is handled by
-/// its two independent group chains and intentionally has no ordinary slot.
+/// Maps a logical track to its ordinary effect-chain slot. Voicing-capable
+/// tracks use two independent group chains and have no ordinary slot.
 const fn effect_slot(track: usize) -> Option<usize> {
-    if track == CHORD_TRACK_INDEX {
+    if track == CHORD_TRACK_INDEX || track == crate::model::FM_TRACK_INDEX {
         None
     } else if track < CHORD_TRACK_INDEX {
         Some(track)

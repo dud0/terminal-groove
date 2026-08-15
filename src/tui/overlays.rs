@@ -576,7 +576,16 @@ pub(super) fn render_chord_popup(
         None => "INPUT",
         _ => "",
     };
-    let panel = Block::bordered().title(format!("Chord · Step {} · {origin}", step + 1));
+    let track_name = &a.editor.project.tracks[track].name;
+    let mode = if selected == ChordShape::Single {
+        "MONO"
+    } else {
+        "CHORD"
+    };
+    let panel = Block::bordered().title(format!(
+        "Voicing · {track_name} · Step {} · {origin} · {mode}",
+        step + 1
+    ));
     let inner = panel.inner(popup_area);
     f.render_widget(panel, popup_area);
     let config = a
@@ -665,7 +674,13 @@ pub(super) fn render_chord_control(
     }
     match field {
         ChordField::Shape => {
-            let choices = ChordShape::ALL.map(|value| value.to_string());
+            let choices = ChordShape::ALL.map(|value| {
+                if value == ChordShape::Single {
+                    "1 (Mono)".into()
+                } else {
+                    value.to_string()
+                }
+            });
             let current = ChordShape::ALL
                 .iter()
                 .position(|value| *value == shape)
@@ -918,7 +933,7 @@ pub(super) fn render_generator_popup(
         (Some(3), format!("Density    {}", dialog.density)),
         (Some(4), format!("Low octave O{}", dialog.range_low)),
         (Some(5), format!("High octave O{}", dialog.range_high)),
-        (Some(6), format!("Chord shapes {}", dialog.chord_shapes)),
+        (Some(6), format!("Voicings   {}", dialog.chord_shapes)),
         (Some(7), format!("Ties       {}", dialog.ties)),
         (Some(8), format!("Accents    {}", dialog.accents)),
         (Some(9), format!("Slides     {}", dialog.slides)),

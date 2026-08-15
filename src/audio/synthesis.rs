@@ -733,14 +733,16 @@ impl Renderer {
     pub(super) fn trigger_chord(
         project: &AudioProject,
         sr: f32,
+        track: usize,
         trigger: SynthTrigger,
         locks: ParameterLocks,
         pool: &mut ChordVoicePool,
     ) {
-        let Instrument::Chord(_) = project.tracks[CHORD_TRACK_INDEX].instrument else {
-            return;
+        let shape = match project.tracks[track].instrument {
+            Instrument::Chord(_) => trigger.chord_shape.unwrap_or(ChordShape::TriadRoot),
+            Instrument::Fm(_) => trigger.chord_shape.unwrap_or(ChordShape::Single),
+            _ => return,
         };
-        let shape = trigger.chord_shape.unwrap_or_default();
         let arpeggio = trigger.arpeggio;
         pool.arpeggio_trigger = SynthTrigger {
             chord_shape: Some(shape),
@@ -769,9 +771,9 @@ impl Renderer {
             );
             pool.voice_count = 1;
             pool.group_voice_counts[pool.group] = 1;
-            Self::trigger_arpeggio_tone(project, sr, pool);
+            Self::trigger_arpeggio_tone(project, sr, track, pool);
             for chorus in &mut pool.choruses {
-                Self::configure_chorus(chorus, project.tracks[CHORD_TRACK_INDEX], locks);
+                Self::configure_chorus(chorus, project.tracks[track], locks);
             }
             pool.active = true;
             return;
@@ -799,24 +801,16 @@ impl Renderer {
         {
             let frequency = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
             Self::configure_synth_voice_frequency(
-                project,
-                sr,
-                CHORD_TRACK_INDEX,
-                frequency,
-                trigger,
-                locks,
-                voice,
+                project, sr, track, frequency, trigger, locks, voice,
             );
         }
         pool.voice_count = voice_count;
         pool.group_voice_counts[pool.group] = voice_count;
-        let spread =
-            locks
-                .spread()
-                .unwrap_or_else(|| match project.tracks[CHORD_TRACK_INDEX].instrument {
-                    Instrument::Chord(p) => p.spread,
-                    _ => crate::model::ChordSpread::Off,
-                });
+        let spread = match project.tracks[track].instrument {
+            Instrument::Chord(p) => locks.spread().unwrap_or(p.spread),
+            Instrument::Fm(_) => crate::model::ChordSpread::Wide,
+            _ => crate::model::ChordSpread::Off,
+        };
         let offsets = match voice_count {
             2 => [-50.0, 50.0, 0.0, 0.0],
             3 => [-50.0, 0.0, 50.0, 0.0],
@@ -826,7 +820,7 @@ impl Renderer {
         for (index, offset) in offsets.into_iter().take(voice_count).enumerate() {
             let target = locks
                 .percent(ParameterId::Pan)
-                .unwrap_or(project.tracks[CHORD_TRACK_INDEX].pan)
+                .unwrap_or(project.tracks[track].pan)
                 .get() as f32
                 + offset * spread.percent().normalized();
             pool.voices[pool.group * CHORD_GROUP_SIZE + index]
@@ -834,7 +828,7 @@ impl Renderer {
                 .set(target.clamp(0.0, 100.0), 0);
         }
         for chorus in &mut pool.choruses {
-            Self::configure_chorus(chorus, project.tracks[CHORD_TRACK_INDEX], locks);
+            Self::configure_chorus(chorus, project.tracks[track], locks);
         }
         pool.active = true;
     }
@@ -842,6 +836,7 @@ impl Renderer {
     pub(super) fn trigger_arpeggio_tone(
         project: &AudioProject,
         sr: f32,
+        track: usize,
         pool: &mut ChordVoicePool,
     ) {
         let index = pool.arpeggio.current_voice();
@@ -857,18 +852,17 @@ impl Renderer {
         Self::configure_synth_voice_frequency(
             project,
             sr,
-            CHORD_TRACK_INDEX,
+            track,
             frequency,
             pool.arpeggio_trigger,
             pool.arpeggio_locks,
             voice,
         );
-        let spread = pool.arpeggio_locks.spread().unwrap_or_else(|| {
-            match project.tracks[CHORD_TRACK_INDEX].instrument {
-                Instrument::Chord(p) => p.spread,
-                _ => crate::model::ChordSpread::Off,
-            }
-        });
+        let spread = match project.tracks[track].instrument {
+            Instrument::Chord(p) => pool.arpeggio_locks.spread().unwrap_or(p.spread),
+            Instrument::Fm(_) => crate::model::ChordSpread::Wide,
+            _ => crate::model::ChordSpread::Off,
+        };
         let offsets = match count {
             2 => [-50.0, 50.0, 0.0, 0.0],
             3 => [-50.0, 0.0, 50.0, 0.0],
@@ -879,7 +873,7 @@ impl Renderer {
             (pool
                 .arpeggio_locks
                 .percent(ParameterId::Pan)
-                .unwrap_or(project.tracks[CHORD_TRACK_INDEX].pan)
+                .unwrap_or(project.tracks[track].pan)
                 .get() as f32
                 + offsets[index.min(3)] * spread.percent().normalized())
             .clamp(0.0, 100.0),
@@ -902,29 +896,55 @@ impl Renderer {
         pool.arpeggio.enabled = false;
         pool.preview_remaining = 0;
     }
+
+    fn apply_voicing_tie(
+        project: &AudioProject,
+        track: usize,
+        track_params: AudioTrack,
+        locks: ParameterLocks,
+        pool: &mut ChordVoicePool,
+        smoothing: u32,
+    ) {
+        for voice in &mut pool.voices
+            [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
+        {
+            Self::apply_synth_params_core(project, track, locks, voice, smoothing);
+        }
+        for chorus in &mut pool.choruses {
+            Self::configure_chorus(chorus, track_params, locks);
+        }
+    }
     pub(super) fn refresh_active_parameters(&mut self, smoothing: u32) {
         for track in 0..TRACK_COUNT {
             let live_locks = match track {
                 0..DRUM_TRACK_COUNT => self.drums[track].locks,
-                SYNTH_TRACK_START | LEAD_TRACK_INDEX | FM_TRACK_INDEX => {
-                    self.synth[track - SYNTH_TRACK_START].locks
-                }
+                SYNTH_TRACK_START | LEAD_TRACK_INDEX => self.synth[track - SYNTH_TRACK_START].locks,
                 CHORD_TRACK_INDEX => self
                     .chord
                     .voices
                     .get(self.chord.group * CHORD_GROUP_SIZE)
                     .map_or(ParameterLocks::default(), |voice| voice.locks),
+                FM_TRACK_INDEX => self
+                    .fm_chord
+                    .voices
+                    .get(self.fm_chord.group * CHORD_GROUP_SIZE)
+                    .map_or(ParameterLocks::default(), |voice| voice.locks),
                 _ => ParameterLocks::default(),
             };
             let preview_locks = match track {
                 0..DRUM_TRACK_COUNT => self.preview_drums[track].locks,
-                SYNTH_TRACK_START | LEAD_TRACK_INDEX | FM_TRACK_INDEX => {
+                SYNTH_TRACK_START | LEAD_TRACK_INDEX => {
                     self.preview[track - SYNTH_TRACK_START].locks
                 }
                 CHORD_TRACK_INDEX => self
                     .preview_chord
                     .voices
                     .get(self.preview_chord.group * CHORD_GROUP_SIZE)
+                    .map_or(ParameterLocks::default(), |voice| voice.locks),
+                FM_TRACK_INDEX => self
+                    .preview_fm_chord
+                    .voices
+                    .get(self.preview_fm_chord.group * CHORD_GROUP_SIZE)
                     .map_or(ParameterLocks::default(), |voice| voice.locks),
                 _ => ParameterLocks::default(),
             };
@@ -940,10 +960,9 @@ impl Renderer {
             let locks = self.preview_drums[track].locks;
             Self::apply_drum_mix(&mut self.preview_drums[track], params, locks, smoothing);
         }
-        for track in [SYNTH_TRACK_START, LEAD_TRACK_INDEX, FM_TRACK_INDEX] {
+        for track in [SYNTH_TRACK_START, LEAD_TRACK_INDEX] {
             let index = track - SYNTH_TRACK_START;
-            if self.synth[index].active || (track == FM_TRACK_INDEX && !self.synth[index].is_idle())
-            {
+            if self.synth[index].active {
                 // Keep the effective lock chain latched until the next boundary.
                 let locks = self.synth[index].locks;
                 Self::apply_synth_params_core(
@@ -954,9 +973,7 @@ impl Renderer {
                     smoothing,
                 );
             }
-            if self.preview[index].active
-                || (track == FM_TRACK_INDEX && !self.preview[index].is_idle())
-            {
+            if self.preview[index].active {
                 let locks = self.preview[index].locks;
                 Self::apply_synth_params_core(
                     &self.project,
@@ -1009,6 +1026,28 @@ impl Renderer {
                     chorus,
                     self.project.tracks[CHORD_TRACK_INDEX],
                     chorus_locks,
+                );
+            }
+        }
+        for voice in &mut self.fm_chord.voices {
+            if !voice.is_idle() {
+                Self::apply_synth_params_core(
+                    &self.project,
+                    FM_TRACK_INDEX,
+                    voice.locks,
+                    voice,
+                    smoothing,
+                );
+            }
+        }
+        for voice in &mut self.preview_fm_chord.voices {
+            if !voice.is_idle() {
+                Self::apply_synth_params_core(
+                    &self.project,
+                    FM_TRACK_INDEX,
+                    voice.locks,
+                    voice,
+                    smoothing,
                 );
             }
         }
@@ -1142,9 +1181,9 @@ impl Renderer {
                 self.project.tracks[track].input_octave,
                 self.project.tracks[track].input_accent,
                 false,
-                (track == CHORD_TRACK_INDEX)
+                matches!(track, CHORD_TRACK_INDEX | FM_TRACK_INDEX)
                     .then_some(self.project.tracks[track].input_chord_shape),
-                if track == CHORD_TRACK_INDEX {
+                if matches!(track, CHORD_TRACK_INDEX | FM_TRACK_INDEX) {
                     self.project.tracks[track].input_chord_arpeggio
                 } else {
                     ArpeggioConfig::default()
@@ -1161,25 +1200,23 @@ impl Renderer {
             arpeggio,
         };
         self.restart_preview_trigger_lfos(track);
-        if track == CHORD_TRACK_INDEX {
-            Self::trigger_chord(
-                &self.project,
-                self.sr,
-                trigger,
-                locks,
-                &mut self.preview_chord,
-            );
+        if matches!(track, CHORD_TRACK_INDEX | FM_TRACK_INDEX) {
+            let pool = if track == CHORD_TRACK_INDEX {
+                &mut self.preview_chord
+            } else {
+                &mut self.preview_fm_chord
+            };
+            Self::trigger_chord(&self.project, self.sr, track, trigger, locks, pool);
             let remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
-            for voice in &mut self.preview_chord.voices[self.preview_chord.group * CHORD_GROUP_SIZE
-                ..self.preview_chord.group * CHORD_GROUP_SIZE + self.preview_chord.voice_count]
+            for voice in &mut pool.voices
+                [pool.group * CHORD_GROUP_SIZE..pool.group * CHORD_GROUP_SIZE + pool.voice_count]
             {
                 voice.remaining = remaining;
             }
-            if self.preview_chord.arpeggiated {
+            if pool.arpeggiated {
                 let interval = self.sr as f64 * 60.0 / self.project.globals.tempo_bpm as f64
-                    * self.preview_chord.arpeggio.rate.beats();
-                self.preview_chord.preview_remaining =
-                    (interval * self.preview_chord.arpeggio.order_len as f64).ceil() as u64;
+                    * pool.arpeggio.rate.beats();
+                pool.preview_remaining = (interval * pool.arpeggio.order_len as f64).ceil() as u64;
             }
             return;
         }
@@ -1326,6 +1363,7 @@ impl Renderer {
                 voice.active = false;
             }
             Self::release_chord(&mut self.chord);
+            Self::release_chord(&mut self.fm_chord);
         }
         for track in 0..TRACK_COUNT {
             let step = self.next_steps[track];
@@ -1421,10 +1459,10 @@ impl Renderer {
             return;
         }
         let vi = track - SYNTH_TRACK_START;
-        let active = if track == CHORD_TRACK_INDEX {
-            self.chord.active
-        } else {
-            self.synth[vi].active
+        let active = match track {
+            CHORD_TRACK_INDEX => self.chord.active,
+            FM_TRACK_INDEX => self.fm_chord.active,
+            _ => self.synth[vi].active,
         };
         let action = if !trigger_allowed
             && !retrigger
@@ -1459,7 +1497,23 @@ impl Renderer {
                 };
                 self.restart_trigger_lfos(track);
                 if track == CHORD_TRACK_INDEX {
-                    Self::trigger_chord(&self.project, self.sr, trigger, locks, &mut self.chord);
+                    Self::trigger_chord(
+                        &self.project,
+                        self.sr,
+                        track,
+                        trigger,
+                        locks,
+                        &mut self.chord,
+                    );
+                } else if track == FM_TRACK_INDEX {
+                    Self::trigger_chord(
+                        &self.project,
+                        self.sr,
+                        track,
+                        trigger,
+                        locks,
+                        &mut self.fm_chord,
+                    );
                 } else {
                     Self::configure_synth_voice(
                         &self.project,
@@ -1475,20 +1529,23 @@ impl Renderer {
                 if matches!(sequence.steps[step], Some(StepEvent::Tie { .. })) {
                     let locks = self.locks_at(track, step);
                     if track == CHORD_TRACK_INDEX {
-                        for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
-                            ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
-                        {
-                            Self::apply_synth_params_core(
-                                &self.project,
-                                track,
-                                locks,
-                                voice,
-                                ParameterSmoothing::Default.samples(self.sr),
-                            );
-                        }
-                        for chorus in &mut self.chord.choruses {
-                            Self::configure_chorus(chorus, t, locks);
-                        }
+                        Self::apply_voicing_tie(
+                            &self.project,
+                            track,
+                            t,
+                            locks,
+                            &mut self.chord,
+                            ParameterSmoothing::Default.samples(self.sr),
+                        );
+                    } else if track == FM_TRACK_INDEX {
+                        Self::apply_voicing_tie(
+                            &self.project,
+                            track,
+                            t,
+                            locks,
+                            &mut self.fm_chord,
+                            ParameterSmoothing::Default.samples(self.sr),
+                        );
                     } else {
                         Self::apply_synth_params_core(
                             &self.project,
@@ -1515,6 +1572,8 @@ impl Renderer {
                     for chorus in &mut self.chord.choruses {
                         Self::configure_chorus(chorus, t, ParameterLocks::default());
                     }
+                } else if track == FM_TRACK_INDEX {
+                    Self::release_chord(&mut self.fm_chord);
                 } else {
                     Self::apply_synth_params_core(
                         &self.project,

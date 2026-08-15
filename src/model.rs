@@ -890,6 +890,20 @@ pub enum TrackKind {
     Fm,
 }
 
+impl TrackKind {
+    pub const fn supports_voicing(self) -> bool {
+        matches!(self, Self::Chord | Self::Fm)
+    }
+
+    pub const fn default_chord_shape(self) -> Option<ChordShape> {
+        match self {
+            Self::Chord => Some(ChordShape::TriadRoot),
+            Self::Fm => Some(ChordShape::Single),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChordSpread {
@@ -2065,7 +2079,7 @@ fn bool_is_false(value: &bool) -> bool {
     !*value
 }
 fn chord_shape_is_default(value: &Option<ChordShape>) -> bool {
-    value.is_none() || value == &Some(ChordShape::default())
+    value.is_none()
 }
 fn arpeggio_is_default(value: &Option<ArpeggioConfig>) -> bool {
     value.is_none() || value.is_some_and(|config| config.is_default())
@@ -2114,7 +2128,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 22,
+            format_version: 23,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -2291,7 +2305,7 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 22 {
+        if self.format_version != 23 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
@@ -2356,7 +2370,7 @@ impl Project {
             if !instrument_ok
                 || pitched != t.input_degree.is_some()
                 || pitched != t.input_octave.is_some()
-                || (t.kind != TrackKind::Chord
+                || (!t.kind.supports_voicing()
                     && (t.input_chord_shape.is_some() || t.input_chord_arpeggio.is_some()))
             {
                 return Err(ValidationError::TrackOrder(ti, expected[ti].1));
@@ -2408,16 +2422,8 @@ impl Project {
                                 StepEvent::Trigger { .. }
                             ) | (TrackKind::Bass, StepEvent::BassNote { .. })
                                 | (TrackKind::Bass, StepEvent::Tie { .. })
-                                | (TrackKind::Chord, StepEvent::Note { .. })
+                                | (TrackKind::Chord | TrackKind::Fm, StepEvent::Note { .. })
                                 | (TrackKind::Lead, StepEvent::LeadNote { .. })
-                                | (
-                                    TrackKind::Fm,
-                                    StepEvent::Note {
-                                        chord_shape: None,
-                                        arpeggio: ArpeggioConfig { enabled: false, .. },
-                                        ..
-                                    }
-                                )
                                 | (
                                     TrackKind::Chord | TrackKind::Lead | TrackKind::Fm,
                                     StepEvent::Tie { .. }
@@ -2452,7 +2458,7 @@ impl Project {
                             ..
                         } = event
                         {
-                            if matches!(track.kind, TrackKind::Lead | TrackKind::Fm)
+                            if track.kind == TrackKind::Lead
                                 && (chord_shape.is_some() || !arpeggio.is_default())
                             {
                                 return Err(ValidationError::EventKind(ti, si));
@@ -3091,6 +3097,19 @@ impl ParameterId {
 }
 
 impl Track {
+    pub fn default_voicing_shape(&self) -> Option<ChordShape> {
+        self.kind.default_chord_shape()
+    }
+
+    pub fn input_voicing_shape(&self) -> Option<ChordShape> {
+        self.input_chord_shape
+            .or_else(|| self.default_voicing_shape())
+    }
+
+    pub fn canonical_voicing_shape(&self, shape: ChordShape) -> Option<ChordShape> {
+        (Some(shape) != self.default_voicing_shape()).then_some(shape)
+    }
+
     pub const fn drum_recipe_count(&self) -> u8 {
         match self.kind {
             TrackKind::Hat => 2,
@@ -3820,7 +3839,7 @@ mod tests {
     #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 22);
+        assert_eq!(project.format_version, 23);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
@@ -4352,10 +4371,7 @@ mod tests {
             microtiming: Microtiming::ZERO,
             locks: Default::default(),
         });
-        assert_eq!(
-            project.validate(),
-            Err(ValidationError::EventKind(FM_TRACK_INDEX, 0))
-        );
+        assert_eq!(project.validate(), Ok(()));
     }
 
     #[test]

@@ -280,7 +280,7 @@ fn migrate_v21(
         }
         sequences.push(serde_json::json!({ "steps": vec![serde_json::Value::Null; crate::model::STEP_BANK_SIZE] }));
     }
-    value["format_version"] = 22.into();
+    value["format_version"] = 23.into();
     Ok(value)
 }
 
@@ -295,7 +295,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if !matches!(version, Some(21 | 22)) {
+    if !matches!(version, Some(21..=23)) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
@@ -306,6 +306,8 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             path: path.into(),
             source,
         })?;
+    } else if version == Some(22) {
+        value["format_version"] = 23.into();
     }
     let project: Project =
         serde_json::from_value(value).map_err(|source| ProjectIoError::Json {
@@ -731,7 +733,7 @@ mod tests {
     #[test]
     fn default_schema_uses_required_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 22);
+        assert_eq!(value["format_version"], 23);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
@@ -1039,6 +1041,46 @@ mod tests {
     }
 
     #[test]
+    fn fm_voicing_round_trips_and_v22_uses_contextual_shape_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fm-voicing.groove.json");
+        let mut project = Project::new();
+        project.tracks[crate::model::FM_TRACK_INDEX].input_chord_shape =
+            Some(crate::model::ChordShape::DyadFifth);
+        project.patterns[0].tracks[crate::model::FM_TRACK_INDEX].steps[0] =
+            Some(crate::model::StepEvent::Note {
+                degree: 2,
+                octave: 4,
+                accent: false,
+                chord_shape: Some(crate::model::ChordShape::SeventhRoot),
+                arpeggio: crate::model::ArpeggioConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
+                condition: Default::default(),
+                retrigger_count: 1,
+                microtiming: crate::model::Microtiming::ZERO,
+                locks: Default::default(),
+            });
+        save_atomic(&path, &project).unwrap();
+        assert_eq!(load(&path).unwrap(), project);
+
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["format_version"] = 22.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.format_version, 23);
+        assert_eq!(
+            loaded.tracks[crate::model::CHORD_TRACK_INDEX].input_voicing_shape(),
+            Some(crate::model::ChordShape::TriadRoot)
+        );
+        assert_eq!(
+            loaded.tracks[crate::model::FM_TRACK_INDEX].input_voicing_shape(),
+            Some(crate::model::ChordShape::Single)
+        );
+    }
+
+    #[test]
     fn single_and_dyad_chord_shapes_use_stable_schema_names() {
         use crate::model::ChordShape;
 
@@ -1101,7 +1143,7 @@ mod tests {
             .remove("bit_crusher");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 22);
+        assert_eq!(loaded.format_version, 23);
         assert_eq!(
             loaded.tracks[0].effects.flanger,
             crate::model::FlangerParameters::default()
@@ -1254,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn v21_projects_migrate_every_pattern_to_v22_fm() {
+    fn v21_projects_migrate_every_pattern_to_v23_fm() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("legacy.groove.json");
         let mut project = Project::new();
@@ -1269,7 +1311,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
 
         let migrated = load(&path).unwrap();
-        assert_eq!(migrated.format_version, 22);
+        assert_eq!(migrated.format_version, 23);
         assert_eq!(migrated.tracks.len(), 10);
         assert_eq!(migrated.patterns.len(), 2);
         assert!(migrated.patterns.iter().all(|pattern| pattern.tracks[crate::model::FM_TRACK_INDEX].steps == vec![None; 16]));

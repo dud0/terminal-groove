@@ -283,7 +283,7 @@ fn fill_track(
                 degree: rng.range(1, 7),
                 octave: rng.range(range_low, range_high),
                 accent,
-                chord_shape: random_chord_shape(rng, chord_shapes),
+                chord_shape: random_chord_shape(rng, chord_shapes, kind),
                 arpeggio: ArpeggioConfig::default(),
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
@@ -304,7 +304,7 @@ fn fill_track(
                 degree: rng.range(1, 8),
                 octave: rng.range(range_low, range_high),
                 accent,
-                chord_shape: None,
+                chord_shape: random_chord_shape(rng, chord_shapes, kind),
                 arpeggio: ArpeggioConfig::default(),
                 condition: TriggerCondition::Always,
                 retrigger_count: 1,
@@ -328,14 +328,14 @@ const ROOT_CHORD_SHAPES: [ChordShape; 8] = [
     ChordShape::Sus4Root,
 ];
 
-fn random_chord_shape(rng: &mut Rng, pool: ChordShapePool) -> Option<ChordShape> {
+fn random_chord_shape(rng: &mut Rng, pool: ChordShapePool, kind: TrackKind) -> Option<ChordShape> {
     let shapes: &[ChordShape] = match pool {
         ChordShapePool::Default => return None,
         ChordShapePool::RootShapes => &ROOT_CHORD_SHAPES,
         ChordShapePool::AllShapes => &ChordShape::ALL,
     };
     let shape = shapes[usize::from(rng.range(0, shapes.len() as u8 - 1))];
-    (shape != ChordShape::default()).then_some(shape)
+    (Some(shape) != kind.default_chord_shape()).then_some(shape)
 }
 
 fn add_ties(steps: &mut [Step], rng: &mut Rng, amount: Percent) -> usize {

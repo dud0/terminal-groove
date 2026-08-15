@@ -52,6 +52,14 @@ impl Renderer {
         {
             effect.configure(chord_effects, ParameterLocks::default(), smoothing_samples);
         }
+        let fm_effects = self.project.tracks[super::FM_TRACK_INDEX].effects;
+        for effect in self
+            .fm_chord_effects
+            .iter_mut()
+            .chain(self.preview_fm_chord_effects.iter_mut())
+        {
+            effect.configure(fm_effects, ParameterLocks::default(), smoothing_samples);
+        }
     }
 
     pub(super) fn configure_track_effects(
@@ -62,18 +70,22 @@ impl Renderer {
         preview: bool,
     ) {
         let effects = self.project.tracks[track].effects;
-        if track == super::CHORD_TRACK_INDEX {
-            let chains = if preview {
+        if matches!(track, super::CHORD_TRACK_INDEX | super::FM_TRACK_INDEX) {
+            let chains = if track == super::CHORD_TRACK_INDEX && preview {
                 &mut self.preview_chord_effects
-            } else {
+            } else if track == super::CHORD_TRACK_INDEX {
                 &mut self.chord_effects
+            } else if preview {
+                &mut self.preview_fm_chord_effects
+            } else {
+                &mut self.fm_chord_effects
             };
             for effect in chains {
                 effect.configure(effects, locks, smoothing_samples);
             }
             return;
         }
-        let slot = effect_slot(track).expect("non-Chord track has an effect slot");
+        let slot = effect_slot(track).expect("track without voicing has an effect slot");
         if preview {
             self.preview_effects[slot].configure(effects, locks, smoothing_samples);
         } else {
@@ -88,6 +100,8 @@ impl Renderer {
             .chain(self.preview_effects.iter_mut())
             .chain(self.chord_effects.iter_mut())
             .chain(self.preview_chord_effects.iter_mut())
+            .chain(self.fm_chord_effects.iter_mut())
+            .chain(self.preview_fm_chord_effects.iter_mut())
         {
             effect.clear();
         }
