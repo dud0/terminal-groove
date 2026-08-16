@@ -1826,10 +1826,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             continue;
         }
         let style = if active {
-            Style::default()
-                .fg(group_color)
-                .bg(theme.selected().bg.unwrap_or(Color::Reset))
-                .add_modifier(Modifier::BOLD)
+            theme.selected()
         } else if !enabled {
             Style::default().fg(theme.disabled())
         } else {
@@ -1977,10 +1974,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 }
             };
             let segment_style = if active {
-                Style::default()
-                    .fg(group_color)
-                    .bg(theme.selected().bg.unwrap_or(Color::Reset))
-                    .add_modifier(Modifier::BOLD)
+                theme.selected()
             } else if symbol == "···" {
                 Style::default().fg(theme.disabled())
             } else {
