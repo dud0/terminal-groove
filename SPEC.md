@@ -69,7 +69,7 @@ Manual live recording captures the final limited stereo master to a 24-bit PCM W
 - Playback has persistent `DIRECT` and `SONG` transport modes. Direct mode loops the selected pattern. Song mode starts from a selected song entry, repeats its referenced pattern for its configured bar count, advances at bar boundaries, and stops/reset after the final entry. The actively displayed pattern always follows the confirmed audio pattern; queued selections do not change the editor view early. Pattern edits keep song references valid where possible.
 - `Ctrl+P` opens a horizontally organized pattern dialog. Left/right, `Home`, and `End` move a visual cursor without changing playback. `Enter` selects the cursor pattern while stopped or queues it for the next bar while playing, then closes the dialog. `N` inserts an empty pattern after the cursor, `D` duplicates it, `C` copies it, `X` cuts it, `V` pastes the copied pattern after the cursor, and `Delete` removes it. The final pattern cannot be removed and is reset to empty.
 - `Tab` in the pattern dialog opens the song page. Its entries are one-based pattern references plus 1–64 bars. Left/right, `Home`, and `End` select an entry; up/down changes bars; `[`/`]` change the referenced pattern; `Enter` selects or queues Song mode from that entry. `N`, `D`, `C`, `X`, `V`, and `Delete` insert, duplicate, copy, cut, paste, and remove song entries. The final song entry resets to `P001 × 1` instead of being removed.
-- The dialog marks the currently playing pattern with `▶`, the next queued pattern with `⏭`, and empty patterns with a muted style. The pattern strip scrolls horizontally when necessary.
+- The dialog marks the currently playing pattern with `▶`, the next queued pattern with `⏭`, and empty patterns with a muted style. Ordinary unselected pattern and song entries use the terminal's default foreground so they remain visible on light and dark themes. The pattern strip scrolls horizontally when necessary.
 - Pattern insertion, deletion, and replacement rebase active and queued playback indexes so queued playback continues to refer to the same pattern where possible.
 
 ### 2.3 Drum events
@@ -532,7 +532,7 @@ Bass and Lead notes with slide are underlined.
 
 The selected track's first-line title cell is highlighted with the same cyan background, black text, and bold styling as the selected step. The selected cell and currently playing cell have independent styling. The selected step is also marked with `▾` in the step header; active lanes are marked with `▶`, while mute, event type, and lock state remain text-visible. If selection and playback refer to the same cell, the combined style must still communicate both states. The grid emphasizes the first header of each four-step group, with the existing divider separating 16-step banks.
 
-Populated step cells, including ties, use a muted dark-gray background when they are neither selected nor currently playing. Cursor and playhead backgrounds take precedence over this populated-step tint, while the event text and the legend keep occupancy discernible.
+Populated step cells, including ties, use a muted dark-gray background with an explicit light foreground when they are neither selected nor currently playing, so event text remains readable on light and dark terminal themes. Cursor and playhead backgrounds take precedence over this populated-step tint, while the event text and the legend keep occupancy discernible.
 
 Each pitched row includes its current input octave in the track label (for example, `Bass O3`).
 

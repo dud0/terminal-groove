@@ -447,6 +447,82 @@ fn song_page_renders_transport_progress_and_inline_controls() {
 }
 
 #[test]
+fn pattern_dialog_uses_default_foreground_for_unselected_entries() {
+    let mut project = Project::new();
+    project.patterns.push(project.patterns[0].clone());
+    project.patterns[1].tracks[0].steps[0] = Some(StepEvent::Trigger {
+        accent: false,
+        recipe: crate::model::DrumRecipeSlot::ONE,
+        condition: Default::default(),
+        retrigger_count: 1,
+        microtiming: Microtiming::ZERO,
+        locks: Default::default(),
+    });
+    project.patterns[0].tracks[0].steps[0] = project.patterns[1].tracks[0].steps[0];
+    let mut app = App::new(project, None);
+    app.mode = Mode::PatternDialog;
+    app.pattern_cursor = 1;
+
+    let backend = TestBackend::new(120, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+
+    let row = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .nth(1)
+        .expect("pattern dialog title should be visible");
+    let first_entry = row
+        .iter()
+        .position(|cell| cell.symbol() == "1")
+        .expect("first pattern number should be visible");
+    assert_eq!(row[first_entry].fg, Color::Reset);
+}
+
+#[test]
+fn song_page_uses_default_foreground_for_unselected_entries() {
+    let mut project = Project::new();
+    project.patterns.push(project.patterns[0].clone());
+    project.song = vec![
+        crate::model::SongEntry {
+            pattern: 1,
+            bars: 2,
+        },
+        crate::model::SongEntry {
+            pattern: 2,
+            bars: 3,
+        },
+    ];
+    let mut app = App::new(project, None);
+    app.mode = Mode::PatternDialog;
+    app.pattern_page = PatternPage::Song;
+    app.song_cursor = 1;
+
+    let backend = TestBackend::new(120, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+
+    let row = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .find(|row| row.iter().any(|cell| cell.symbol() == "P"))
+        .expect("song entries should be visible");
+    let first_pattern = row
+        .iter()
+        .position(|cell| cell.symbol() == "P")
+        .expect("first song pattern should be visible");
+    assert_eq!(row[first_pattern].fg, Color::Reset);
+}
+
+#[test]
 fn generator_dialog_field_arrows_clamp_and_values_change_horizontally() {
     assert_eq!(move_generator_field(0, true), 0);
     assert_eq!(move_generator_field(0, false), 1);
@@ -2905,6 +2981,7 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
         .iter()
         .position(|cell| cell.symbol() == "x")
         .expect("populated trigger should be visible");
+    assert_eq!(kick_row[populated_column].fg, Color::White);
     assert_eq!(kick_row[populated_column].bg, Color::DarkGray);
     assert_eq!(kick_row[populated_column + 3].symbol(), "·");
     assert_ne!(kick_row[populated_column + 3].bg, Color::DarkGray);

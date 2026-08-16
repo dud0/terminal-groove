@@ -2506,7 +2506,10 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                         .fg(Color::Black)
                         .bg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
-                    (false, false, true) => Style::default().bg(Color::DarkGray),
+                    // Do not rely on the terminal's default foreground here:
+                    // light themes commonly make that black, which is hard to
+                    // read on the occupied-cell tint.
+                    (false, false, true) => Style::default().fg(Color::White).bg(Color::DarkGray),
                     (false, false, false) => Style::default(),
                 };
                 if matches!(

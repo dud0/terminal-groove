@@ -750,14 +750,20 @@ pub(super) fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) 
                 (false, true) => "⏭ ",
                 (false, false) => "  ",
             };
-            let base = if empty { Color::DarkGray } else { Color::White };
+            let base = if empty {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                // Leave ordinary entries on the terminal default foreground
+                // so they remain visible in both light and dark themes.
+                Style::default()
+            };
             let style = if cursor {
                 Style::default()
                     .fg(Color::Black)
                     .bg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(base)
+                base
             };
             let marker_style = if cursor {
                 style
@@ -848,7 +854,9 @@ fn render_song_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
                     .bg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                // Use the terminal default foreground for light/dark theme
+                // compatibility instead of hard-coding white.
+                Style::default()
             };
             let marker_style = if cursor {
                 style
