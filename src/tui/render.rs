@@ -1794,22 +1794,19 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                         || a.parameter_recipe == recipe)
         );
         let group_color = descriptor.group.color(theme);
-        let block = if active {
-            Block::default().style(theme.selected())
-        } else {
-            Block::default()
+        let content = Rect {
+            x: slot.x + 1,
+            y: slot.y,
+            // Keep the odd-width fader/text centered in the visual card. With
+            // a ten-column slot, an eight-column inset is mathematically
+            // centered but makes Ratatui's odd-width content appear one cell
+            // to the right of the background.
+            width: slot.width.saturating_sub(1),
+            height: slot.height,
         };
-        let content = if active {
-            block.inner(slot)
-        } else {
-            Rect {
-                x: slot.x + 1,
-                y: slot.y,
-                width: slot.width.saturating_sub(2),
-                height: slot.height,
-            }
-        };
-        f.render_widget(block, slot);
+        if active {
+            f.render_widget(Block::default().style(theme.selected()), content);
+        }
         if t.kind == TrackKind::Fm
             && let Some((operator, crate::model::FmOperatorField::Level)) =
                 descriptor.id.fm_operator_field()

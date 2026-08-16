@@ -1896,6 +1896,35 @@ fn active_parameter_gets_a_visible_highlight_and_physical_readout() {
     let screen = rendered(&app, 120, 34);
     assert!(!screen.contains("║"));
     assert!(screen.contains("Hz · BASE"));
+
+    let backend = TestBackend::new(120, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+    let selected_background = super::theme::Theme::new(app.theme_profile)
+        .selected()
+        .bg
+        .unwrap();
+    let value_row = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .skip(17)
+        .find(|row| row.iter().any(|cell| cell.bg == selected_background))
+        .expect("active parameter value should be visible");
+    let selected_columns = value_row
+        .iter()
+        .enumerate()
+        .filter_map(|(column, cell)| (cell.bg == selected_background).then_some(column))
+        .collect::<Vec<_>>();
+    assert_eq!(selected_columns.len(), 9);
+    assert!(
+        selected_columns
+            .windows(2)
+            .all(|columns| columns[1] == columns[0] + 1)
+    );
 }
 
 #[test]
