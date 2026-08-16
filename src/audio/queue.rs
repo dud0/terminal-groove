@@ -113,7 +113,7 @@ impl Audio {
         pattern_map: PatternIndexMap,
         song_map: SongIndexMap,
     ) -> Result<(), QueueFull> {
-        let next = self.snapshot_project.updated(project, impact);
+        let next = self.snapshot_project.updated(project, impact, pattern_map);
         let command = AudioCommand::ReplaceProject {
             project: Box::new(next.clone()),
             smoothing,

@@ -251,19 +251,22 @@ impl Renderer {
         // envelope is idle there is no signal to render, so avoid running
         // oscillators and filters for those voices on every callback sample.
         if v.is_idle() {
-            v.voicing_pan_offset = 0.0;
-            match v.kind {
-                SynthVoiceKind::Bass => {
-                    v.bass_filter.reset();
-                    v.bass_filter_envelope.reset();
-                    v.bass_accent_envelope.reset();
+            if !v.idle_cleanup_done {
+                v.voicing_pan_offset = 0.0;
+                match v.kind {
+                    SynthVoiceKind::Bass => {
+                        v.bass_filter.reset();
+                        v.bass_filter_envelope.reset();
+                        v.bass_accent_envelope.reset();
+                    }
+                    SynthVoiceKind::Chord => {
+                        v.chord_filter.reset();
+                        v.chord_highpass.clear_state();
+                    }
+                    SynthVoiceKind::Lead => v.lead_filter.reset(),
+                    SynthVoiceKind::Fm => v.fm_filter.clear_state(),
                 }
-                SynthVoiceKind::Chord => {
-                    v.chord_filter.reset();
-                    v.chord_highpass.clear_state();
-                }
-                SynthVoiceKind::Lead => v.lead_filter.reset(),
-                SynthVoiceKind::Fm => v.fm_filter.clear_state(),
+                v.idle_cleanup_done = true;
             }
             return (0.0, 0.0, 0.0);
         }

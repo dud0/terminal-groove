@@ -672,6 +672,7 @@ impl Renderer {
             voice,
             ParameterSmoothing::Default.samples(sr),
         );
+        voice.idle_cleanup_done = false;
         let gain = if voice.kind == SynthVoiceKind::Bass {
             1.0
         } else if trigger.accent {
@@ -1076,6 +1077,21 @@ impl Renderer {
                 arpeggio,
                 self.locks_at(track, step),
             ),
+            Some(StepEvent::LeadNote {
+                degree,
+                octave,
+                accent,
+                slide,
+                ..
+            }) => (
+                degree,
+                octave,
+                accent,
+                slide,
+                None,
+                ArpeggioConfig::default(),
+                self.locks_at(track, step),
+            ),
             Some(StepEvent::Tie { .. }) => {
                 let Some(source) =
                     crate::model::tie_source(&t.steps[..t.step_count as usize], step)
@@ -1112,6 +1128,21 @@ impl Renderer {
                         false,
                         chord_shape,
                         arpeggio,
+                        self.locks_at(track, step),
+                    ),
+                    Some(StepEvent::LeadNote {
+                        degree,
+                        octave,
+                        accent,
+                        slide,
+                        ..
+                    }) => (
+                        degree,
+                        octave,
+                        accent,
+                        slide,
+                        None,
+                        ArpeggioConfig::default(),
                         self.locks_at(track, step),
                     ),
                     _ => return,

@@ -81,6 +81,13 @@ impl PatternIndexMap {
             usize::from(mapped).min(next_count - 1)
         }
     }
+
+    pub(crate) fn map_existing(self, index: usize, next_count: usize) -> Option<usize> {
+        let mapped = self.forward.get(index).copied()?;
+        (mapped != u8::MAX)
+            .then_some(usize::from(mapped))
+            .filter(|mapped| *mapped < next_count)
+    }
 }
 
 /// Deterministic old-song-entry-index to new-song-entry-index transform.
@@ -2548,6 +2555,27 @@ pub fn tie_source(steps: &[Step], at: usize) -> Option<usize> {
     }
     None
 }
+
+/// Resolve the parameter locks that apply at a step, including locks inherited
+/// through a note followed by zero or more ties.
+pub fn effective_event_locks(steps: &[Step], at: usize) -> Option<ParameterLocks> {
+    let event = steps.get(at)?.as_ref()?;
+    let StepEvent::Tie { .. } = event else {
+        return Some(*event.locks());
+    };
+    let source = tie_source(steps, at)?;
+    let mut locks = *steps.get(source)?.as_ref()?.locks();
+    let mut index = (source + 1) % steps.len();
+    while index != at {
+        if let Some(StepEvent::Tie { locks: tie_locks }) = steps[index] {
+            locks.overlay(tie_locks);
+        }
+        index = (index + 1) % steps.len();
+    }
+    locks.overlay(*event.locks());
+    Some(locks)
+}
+
 fn validate_ties(track: usize, steps: &[Step]) -> Result<(), ValidationError> {
     let ties = steps
         .iter()

@@ -4,8 +4,7 @@ use super::{
 };
 use crate::dsp::Lfo;
 use crate::model::{
-    MAX_STEP_COUNT, ParameterId, ParameterLocks, PatternIndexMap, SongIndexMap, StepEvent,
-    TriggerCondition,
+    MAX_STEP_COUNT, ParameterId, ParameterLocks, PatternIndexMap, SongIndexMap, TriggerCondition,
 };
 use std::sync::atomic::Ordering;
 
@@ -456,36 +455,7 @@ impl Renderer {
 
     pub(super) fn locks_at(&self, track: usize, step: usize) -> ParameterLocks {
         let t = self.project.patterns[self.active_pattern].tracks[track];
-        let Some(event) = t.steps[step] else {
-            return ParameterLocks::default();
-        };
-        let mut locks = *event.locks();
-        if let StepEvent::Tie { .. } = event {
-            if let Some(source) = crate::model::tie_source(&t.steps[..t.step_count as usize], step)
-            {
-                if let Some(
-                    StepEvent::Note {
-                        locks: source_locks,
-                        ..
-                    }
-                    | StepEvent::BassNote {
-                        locks: source_locks,
-                        ..
-                    },
-                ) = t.steps[source]
-                {
-                    locks = source_locks;
-                    let mut i = (source + 1) % t.step_count as usize;
-                    while i != step {
-                        if let Some(StepEvent::Tie { locks: tie_locks }) = t.steps[i] {
-                            locks.overlay(tie_locks);
-                        }
-                        i = (i + 1) % t.step_count as usize;
-                    }
-                    locks.overlay(*event.locks());
-                }
-            }
-        }
-        locks
+        crate::model::effective_event_locks(&t.steps[..t.step_count as usize], step)
+            .unwrap_or_default()
     }
 }

@@ -1010,10 +1010,6 @@ pub(super) enum ValueOrigin {
     Lock,
 }
 
-pub(super) fn lock_has_parameter(event: &StepEvent, parameter: ParameterId) -> bool {
-    event.locks().get(parameter).is_some()
-}
-
 pub(super) fn displayed_parameter(
     a: &App,
     track: usize,
@@ -1058,9 +1054,8 @@ pub(super) fn displayed_parameter_for_recipe(
     let locked = a
         .editor
         .active_steps(track)
-        .and_then(|steps| steps.get(step))
-        .and_then(Option::as_ref)
-        .is_some_and(|event| lock_has_parameter(event, parameter));
+        .and_then(|steps| crate::model::effective_event_locks(steps, step))
+        .is_some_and(|locks| locks.get(parameter).is_some());
     if recipe_parameter && selected_drum_recipe(a, track) != recipe {
         return Some((base, ValueOrigin::Base));
     }
@@ -2530,6 +2525,11 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                         ..
                     }
                     | StepEvent::Note {
+                        condition,
+                        retrigger_count,
+                        ..
+                    }
+                    | StepEvent::LeadNote {
                         condition,
                         retrigger_count,
                         ..

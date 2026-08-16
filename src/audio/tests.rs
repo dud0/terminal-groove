@@ -537,6 +537,7 @@ mod tests {
                 tracks: 1,
                 ..Default::default()
             },
+            PatternIndexMap::identity(),
         );
         assert!(Arc::ptr_eq(&base.patterns.0[0], &track_update.patterns.0[0]));
         assert!(Arc::ptr_eq(&base.patterns.0[1], &track_update.patterns.0[1]));
@@ -556,6 +557,7 @@ mod tests {
                 sequences: vec![(0, 0)],
                 ..Default::default()
             },
+            PatternIndexMap::identity(),
         );
         let full = AudioProject::from_project(&project);
         assert!(!Arc::ptr_eq(
@@ -568,6 +570,84 @@ mod tests {
         ));
         assert_eq!(sequence_update.patterns[0], full.patterns[0]);
         assert_eq!(sequence_update.patterns[1], full.patterns[1]);
+    }
+
+    #[test]
+    fn structural_snapshots_reuse_only_patterns_that_survive_rebasing() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        project.patterns.push(project.patterns[0].clone());
+        let base = AudioProject::from_project(&project);
+
+        let mut inserted = project.clone();
+        inserted.patterns.insert(1, inserted.patterns[0].clone());
+        let inserted_update = base.updated(
+            &inserted,
+            &crate::reducer::EditImpact {
+                patterns_structural: true,
+                ..Default::default()
+            },
+            PatternIndexMap::insert(0),
+        );
+        let inserted_full = AudioProject::from_project(&inserted);
+        assert!(Arc::ptr_eq(&base.patterns.0[0], &inserted_update.patterns.0[0]));
+        assert!(!Arc::ptr_eq(&base.patterns.0[0], &inserted_update.patterns.0[1]));
+        assert!(Arc::ptr_eq(&base.patterns.0[1], &inserted_update.patterns.0[2]));
+        assert!(Arc::ptr_eq(&base.patterns.0[2], &inserted_update.patterns.0[3]));
+        assert_eq!(inserted_update.patterns[1], inserted_full.patterns[1]);
+
+        let mut deleted = project.clone();
+        deleted.patterns.remove(1);
+        let deleted_update = base.updated(
+            &deleted,
+            &crate::reducer::EditImpact {
+                patterns_structural: true,
+                ..Default::default()
+            },
+            PatternIndexMap::delete(1),
+        );
+        assert!(Arc::ptr_eq(&base.patterns.0[0], &deleted_update.patterns.0[0]));
+        assert!(Arc::ptr_eq(&base.patterns.0[2], &deleted_update.patterns.0[1]));
+        assert_eq!(
+            deleted_update.patterns[0],
+            AudioProject::from_project(&deleted).patterns[0]
+        );
+        assert_eq!(
+            deleted_update.patterns[1],
+            AudioProject::from_project(&deleted).patterns[1]
+        );
+    }
+
+    #[test]
+    fn lead_audition_uses_direct_and_tied_note_data_and_locks() {
+        let mut project = Project::new();
+        project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[0] = Some(StepEvent::LeadNote {
+            degree: 7,
+            octave: 5,
+            accent: true,
+            slide: true,
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::ZERO,
+            locks: parameter_locks([(ParameterId::Level, 20)]),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        let lead = LEAD_TRACK_INDEX - SYNTH_TRACK_START;
+        renderer.audition_once(LEAD_TRACK_INDEX, 0);
+        assert_eq!(renderer.preview[lead].locks.percent(ParameterId::Level), Percent::new(20));
+        assert!(renderer.preview[lead].active);
+        assert!(renderer.preview[lead].slide_armed);
+        let direct_frequency = renderer.preview[lead].freq.value();
+
+        project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[1] = Some(StepEvent::Tie {
+            locks: parameter_locks([(ParameterId::Level, 30)]),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
+        renderer.audition_once(LEAD_TRACK_INDEX, 1);
+        assert!((renderer.preview[lead].freq.value() - direct_frequency).abs() < 0.01);
+        assert_eq!(renderer.preview[lead].locks.percent(ParameterId::Level), Percent::new(30));
     }
 
     #[test]

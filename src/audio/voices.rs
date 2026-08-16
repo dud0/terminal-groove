@@ -57,6 +57,7 @@ pub(super) struct SynthVoice {
     pub(super) filter_env_percent: Smoother,
     pub(super) locks: ParameterLocks,
     pub(super) active: bool,
+    pub(super) idle_cleanup_done: bool,
     pub(super) remaining: u32,
     pub(super) accent_gain: Smoother,
     pub(super) accent_filter: Smoother,
@@ -558,6 +559,7 @@ impl SynthVoice {
             filter_env_percent: Smoother::new(25.0),
             locks: ParameterLocks::default(),
             active: false,
+            idle_cleanup_done: true,
             remaining: 0,
             accent_gain: Smoother::new(1.0),
             accent_filter: Smoother::new(0.0),
@@ -628,6 +630,7 @@ impl SynthVoice {
     pub(super) fn reset_to_idle(&mut self) {
         self.env.reset();
         self.active = false;
+        self.idle_cleanup_done = true;
         self.remaining = 0;
         self.chord_filter.reset();
         self.lead_filter.reset();

@@ -162,7 +162,12 @@ impl AudioProject {
         }
     }
 
-    fn updated(&self, project: &Project, impact: &crate::reducer::EditImpact) -> Self {
+    fn updated(
+        &self,
+        project: &Project,
+        impact: &crate::reducer::EditImpact,
+        pattern_map: PatternIndexMap,
+    ) -> Self {
         let mut tracks = self.tracks;
         for (track, target) in tracks.iter_mut().enumerate() {
             if impact.track_changed(track) {
@@ -171,10 +176,27 @@ impl AudioProject {
         }
         let patterns =
             if impact.patterns_structural || self.patterns.len() != project.patterns.len() {
-                (0..project.patterns.len())
-                    .map(|pattern| Self::pattern_from_project(project, pattern))
-                    .collect::<Vec<_>>()
-                    .into()
+                if pattern_map.is_identity() {
+                    (0..project.patterns.len())
+                        .map(|pattern| Self::pattern_from_project(project, pattern))
+                        .collect::<Vec<_>>()
+                        .into()
+                } else {
+                    let mut patterns = vec![None; project.patterns.len()];
+                    for (old, pattern) in self.patterns.0.iter().enumerate() {
+                        if let Some(next) = pattern_map.map_existing(old, project.patterns.len()) {
+                            patterns[next] = Some(pattern.clone());
+                        }
+                    }
+                    patterns
+                        .into_iter()
+                        .enumerate()
+                        .map(|(pattern, previous)| {
+                            previous.unwrap_or_else(|| Self::pattern_from_project(project, pattern))
+                        })
+                        .collect::<Vec<_>>()
+                        .into()
+                }
             } else if impact.sequences.is_empty() {
                 self.patterns.clone()
             } else {

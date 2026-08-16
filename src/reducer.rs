@@ -387,15 +387,15 @@ fn read_parameter(
     if scope == Scope::Base {
         return Ok(base);
     }
-    let event = track
+    track
         .steps
         .get(step)
         .ok_or(EditError::InvalidStep)?
         .as_ref()
         .ok_or(EditError::EmptyLock)?;
-    Ok(track
-        .effective_parameter(parameter, *event.locks())
-        .unwrap_or(base))
+    let locks =
+        crate::model::effective_event_locks(track.steps, step).ok_or(EditError::EmptyLock)?;
+    Ok(track.effective_parameter(parameter, locks).unwrap_or(base))
 }
 
 fn write_parameter(
@@ -1870,7 +1870,9 @@ impl Editor {
         if event.drum_recipe() != Some(recipe) {
             return Err(EditError::InvalidDrumRecipe);
         }
-        Ok(event.locks().get(parameter).unwrap_or(base))
+        let locks =
+            crate::model::effective_event_locks(track.steps, step).ok_or(EditError::EmptyLock)?;
+        Ok(locks.get(parameter).unwrap_or(base))
     }
 
     pub fn parameter_value(
@@ -2677,6 +2679,49 @@ mod tests {
                 .locks()
                 .percent(ParameterId::Tune)
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn tied_lock_reads_follow_the_source_and_intermediate_overrides() {
+        let value = |n| ParameterValue::Percent(Percent::new(n).unwrap());
+        let mut project = Project::new();
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::Note {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            chord_shape: None,
+            arpeggio: Default::default(),
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::ZERO,
+            locks: ParameterLocks::from_pairs([
+                (ParameterId::Level, value(50)),
+                (ParameterId::Cutoff, value(60)),
+            ]),
+        });
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Tie {
+            locks: ParameterLocks::from_pairs([(ParameterId::Level, value(30))]),
+        });
+        project.patterns[0].tracks[SYNTH_TRACK_START].steps[2] = Some(StepEvent::Tie {
+            locks: Default::default(),
+        });
+        let mut editor = Editor::new(project);
+
+        assert_eq!(
+            editor.parameter_value(SYNTH_TRACK_START, 2, Scope::Lock, ParameterId::Level),
+            Ok(value(30))
+        );
+        assert_eq!(
+            editor.parameter_value(SYNTH_TRACK_START, 2, Scope::Lock, ParameterId::Cutoff),
+            Ok(value(60))
+        );
+        editor
+            .clear_parameter_lock(SYNTH_TRACK_START, 1, ParameterId::Level)
+            .unwrap();
+        assert_eq!(
+            editor.parameter_value(SYNTH_TRACK_START, 2, Scope::Lock, ParameterId::Level),
+            Ok(value(50))
         );
     }
 

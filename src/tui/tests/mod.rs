@@ -1732,6 +1732,59 @@ fn lock_scope_labels_explicit_and_inherited_values() {
         displayed_parameter(&app, SYNTH_TRACK_START, 0, ParameterId::Level).unwrap();
     assert_eq!(cutoff_origin, ValueOrigin::Lock);
     assert_eq!(level_origin, ValueOrigin::Base);
+
+    app.editor.project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Tie {
+        locks: Default::default(),
+    });
+    app.step = 1;
+    let (inherited_value, inherited_origin) =
+        displayed_parameter(&app, SYNTH_TRACK_START, 1, ParameterId::Cutoff).unwrap();
+    assert_eq!(
+        inherited_value,
+        ParameterValue::Percent(Percent::new(50).unwrap())
+    );
+    assert_eq!(inherited_origin, ValueOrigin::Lock);
+}
+
+#[test]
+fn lead_condition_and_retrigger_are_highlighted_in_the_sequencer_grid() {
+    let mut project = Project::new();
+    project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[0] = Some(StepEvent::LeadNote {
+        degree: 1,
+        octave: 3,
+        accent: false,
+        slide: false,
+        condition: TriggerCondition::Cycle {
+            position: 1,
+            length: 2,
+        },
+        retrigger_count: 2,
+        microtiming: Microtiming::ZERO,
+        locks: Default::default(),
+    });
+    let app = App::new(project, None);
+    let backend = TestBackend::new(120, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+    let lead_row = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .find(|row| {
+            row.iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .contains("Lead")
+        })
+        .expect("Lead row should be visible");
+    assert!(
+        lead_row
+            .iter()
+            .any(|cell| cell.fg == Color::Magenta && cell.modifier.contains(Modifier::BOLD))
+    );
 }
 
 #[test]
