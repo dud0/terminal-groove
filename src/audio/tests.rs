@@ -195,6 +195,110 @@ mod tests {
     }
 
     #[test]
+    fn zero_attack_synth_starts_from_silence() {
+        for track in [
+            SYNTH_TRACK_START,
+            CHORD_TRACK_INDEX,
+            LEAD_TRACK_INDEX,
+            FM_TRACK_INDEX,
+        ] {
+            let mut project = Project::new();
+            match &mut project.tracks[track].instrument {
+                Instrument::Bass(_) => {}
+                Instrument::Chord(parameters) => parameters.attack = Percent::ZERO,
+                Instrument::Lead(parameters) => parameters.attack = Percent::ZERO,
+                Instrument::Fm(parameters) => parameters.attack = Percent::ZERO,
+                _ => unreachable!(),
+            }
+            let audio = AudioProject::from_project(&project);
+            let mut voice = SynthVoice::new(8_000.0);
+            Renderer::configure_synth_voice(
+                &audio,
+                8_000.0,
+                track,
+                SynthTrigger {
+                    degree: 1,
+                    octave: 3,
+                    accent: false,
+                    slide: false,
+                    chord_shape: None,
+                    arpeggio: Default::default(),
+                },
+                ParameterLocks::default(),
+                &mut voice,
+            );
+
+            let first = Renderer::render_synth(
+                &mut voice,
+                8_000.0,
+                &[0.0; ParameterId::ALL.len()],
+            )
+            .0;
+            assert_eq!(first, 0.0, "track {track} did not start at silence");
+
+            let mut peak: f32 = 0.0;
+            for _ in 0..256 {
+                peak = peak.max(
+                    Renderer::render_synth(
+                        &mut voice,
+                        8_000.0,
+                        &[0.0; ParameterId::ALL.len()],
+                    )
+                    .0
+                    .abs(),
+                );
+            }
+            assert!(peak > 0.001, "track {track} never became audible");
+        }
+    }
+
+    #[test]
+    fn hard_mono_retrigger_is_continuous() {
+        let mut project = Project::new();
+        if let Instrument::Lead(parameters) = &mut project.tracks[LEAD_TRACK_INDEX].instrument {
+            parameters.attack = Percent::new(50).unwrap();
+        }
+        let audio = AudioProject::from_project(&project);
+        let mut voice = SynthVoice::new(8_000.0);
+        let first_trigger = SynthTrigger {
+            degree: 1,
+            octave: 3,
+            accent: false,
+            slide: false,
+            chord_shape: None,
+            arpeggio: Default::default(),
+        };
+        Renderer::configure_synth_voice(
+            &audio,
+            8_000.0,
+            LEAD_TRACK_INDEX,
+            first_trigger,
+            ParameterLocks::default(),
+            &mut voice,
+        );
+        let offsets = [0.0; ParameterId::ALL.len()];
+        let mut previous = 0.0;
+        for _ in 0..256 {
+            previous = Renderer::render_synth(&mut voice, 8_000.0, &offsets).0;
+        }
+
+        Renderer::configure_synth_voice(
+            &audio,
+            8_000.0,
+            LEAD_TRACK_INDEX,
+            SynthTrigger {
+                degree: 5,
+                ..first_trigger
+            },
+            ParameterLocks::default(),
+            &mut voice,
+        );
+        let first_after_retrigger = Renderer::render_synth(&mut voice, 8_000.0, &offsets).0;
+        assert_eq!(first_after_retrigger, previous);
+        assert_eq!(voice.env.stage, crate::dsp::EnvStage::Attack);
+    }
+
+    #[test]
     fn stream_failure_marks_audio_stopped_and_queues_error() {
         let status = AudioStatus::default();
         let (mut producer, mut consumer) = RingBuffer::new(2);

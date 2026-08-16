@@ -268,14 +268,16 @@ impl Renderer {
                 }
                 v.idle_cleanup_done = true;
             }
+            v.declick.reset();
             return (0.0, 0.0, 0.0);
         }
-        match v.kind {
+        let (output, delay_send, reverb_send) = match v.kind {
             SynthVoiceKind::Bass => Self::render_bass(v, sr, offsets),
             SynthVoiceKind::Chord => Self::render_chord(v, sr, offsets),
             SynthVoiceKind::Lead => Self::render_lead(v, sr, offsets),
             SynthVoiceKind::Fm => Self::render_fm(v, sr, offsets),
-        }
+        };
+        (v.process_output(output), delay_send, reverb_send)
     }
 
     fn advance_voice_gate(v: &mut SynthVoice) {

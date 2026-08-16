@@ -1208,6 +1208,54 @@ impl PolyBlepOsc {
     }
 }
 
+/// A short, allocation-free output transition used to hide discontinuities
+/// when a voice starts or changes its source while already audible.
+pub struct DeClickRamp {
+    total_samples: u32,
+    remaining: u32,
+    start: f32,
+    last: f32,
+}
+
+impl DeClickRamp {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            total_samples: (sample_rate.max(1.0) * 0.003).round().max(2.0) as u32,
+            remaining: 0,
+            start: 0.0,
+            last: 0.0,
+        }
+    }
+
+    pub fn begin(&mut self) {
+        self.start = self.last;
+        self.remaining = self.total_samples;
+    }
+
+    pub fn process(&mut self, target: f32) -> f32 {
+        let target = finite_or_zero(target);
+        if self.remaining == 0 {
+            self.last = target;
+            return target;
+        }
+
+        let intervals = self.total_samples.saturating_sub(1).max(1);
+        let completed = self.total_samples - self.remaining;
+        let progress = (completed as f32 / intervals as f32).clamp(0.0, 1.0);
+        let smooth = progress * progress * (3.0 - 2.0 * progress);
+        let output = finite_or_zero(self.start + (target - self.start) * smooth);
+        self.remaining -= 1;
+        self.last = output;
+        output
+    }
+
+    pub fn reset(&mut self) {
+        self.remaining = 0;
+        self.start = 0.0;
+        self.last = 0.0;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnvStage {
     Idle,
@@ -1287,8 +1335,9 @@ impl Adsr {
         self.sustain_percent.set(s as f32, samples);
         self.release_percent.set(r as f32, samples);
     }
-    pub fn gate_on(&mut self) {
-        self.stage = EnvStage::Attack
+    pub fn retrigger(&mut self) {
+        self.value = 0.0;
+        self.stage = EnvStage::Attack;
     }
     pub fn gate_off(&mut self) {
         if self.stage != EnvStage::Idle {
@@ -1463,7 +1512,8 @@ impl BassVcaEnvelope {
         }
     }
 
-    pub fn gate_on(&mut self) {
+    pub fn retrigger(&mut self) {
+        self.value = 0.0;
         self.gate = true;
     }
 

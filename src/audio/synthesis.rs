@@ -646,6 +646,7 @@ impl Renderer {
         let legato_slide = bass_track && voice.active && voice.slide_armed;
         let lead_track = matches!(project.tracks[track].instrument, Instrument::Lead(_));
         let lead_legato = lead_track && voice.active && voice.slide_armed;
+        let hard_retrigger = !legato_slide && !lead_legato;
         let lead_time = match project.tracks[track].instrument {
             Instrument::Lead(p) => voice
                 .locks
@@ -698,13 +699,16 @@ impl Renderer {
         if voice.kind == SynthVoiceKind::Bass {
             voice.bass_accent_envelope.trigger(trigger.accent);
             if !legato_slide {
-                voice.bass_vca.gate_on();
+                voice.bass_vca.retrigger();
                 voice
                     .bass_filter_envelope
                     .trigger(voice.bass_decay_percent.value());
             }
-        } else if !legato_slide && !lead_legato {
-            voice.env.gate_on();
+        } else if hard_retrigger {
+            voice.env.retrigger();
+        }
+        if hard_retrigger {
+            voice.begin_note_transition();
         }
         voice.slide_armed =
             matches!(voice.kind, SynthVoiceKind::Bass | SynthVoiceKind::Lead) && trigger.slide;

@@ -18,6 +18,22 @@ mod tests {
     }
 
     #[test]
+    fn declick_ramp_is_continuous_and_reaches_the_new_output() {
+        let mut ramp = DeClickRamp::new(1_000.0);
+        assert_eq!(ramp.process(0.25), 0.25);
+
+        ramp.begin();
+        assert_eq!(ramp.process(-0.75), 0.25);
+        assert!(ramp.process(-0.75).is_finite());
+        assert_eq!(ramp.process(-0.75), -0.75);
+        assert_eq!(ramp.process(-0.5), -0.5);
+
+        ramp.begin();
+        assert_eq!(ramp.process(f32::NAN), -0.5);
+        assert!(ramp.process(f32::NAN).is_finite());
+    }
+
+    #[test]
     fn voice_local_noise_is_deterministic_finite_and_seeded() {
         let mut first = NoiseSource::new(0x1234_5678);
         let mut second = NoiseSource::new(0x1234_5678);
@@ -1045,7 +1061,7 @@ mod tests {
     fn bass_vca_holds_after_its_independent_filter_contour_has_decayed() {
         let mut vca = BassVcaEnvelope::new(8_000.0);
         let mut contour = BassFilterEnvelope::new(8_000.0);
-        vca.gate_on();
+        vca.retrigger();
         contour.trigger(0.0);
         for _ in 0..1_600 {
             vca.next_sample();
@@ -1061,7 +1077,7 @@ mod tests {
     #[test]
     fn bass_vca_releases_with_fixed_timing() {
         let mut vca = BassVcaEnvelope::new(8_000.0);
-        vca.gate_on();
+        vca.retrigger();
         for _ in 0..80 {
             vca.next_sample();
         }

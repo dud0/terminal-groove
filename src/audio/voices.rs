@@ -1,6 +1,7 @@
 use crate::dsp::{
     Adsr, BassAccentEnvelope, BassFilter, BassFilterEnvelope, BassVcaEnvelope, Biquad, ChordFilter,
-    LeadFilter, NoiseSource, PolyBlepOsc, Smoother, SubOscillatorMode, additive_source_gains,
+    DeClickRamp, LeadFilter, NoiseSource, PolyBlepOsc, Smoother, SubOscillatorMode,
+    additive_source_gains,
 };
 use crate::model::{
     ArpeggioConfig, ArpeggioRate, ArpeggioType, ChordShape, FmAlgorithm, ParameterLocks, Waveform,
@@ -61,6 +62,7 @@ pub(super) struct SynthVoice {
     pub(super) remaining: u32,
     pub(super) accent_gain: Smoother,
     pub(super) accent_filter: Smoother,
+    pub(super) declick: DeClickRamp,
     pub(super) slide_armed: bool,
     pub(super) kind: SynthVoiceKind,
     pub(super) level: Smoother,
@@ -563,6 +565,7 @@ impl SynthVoice {
             remaining: 0,
             accent_gain: Smoother::new(1.0),
             accent_filter: Smoother::new(0.0),
+            declick: DeClickRamp::new(sr),
             slide_armed: false,
             kind: SynthVoiceKind::Bass,
             level: Smoother::new(0.0),
@@ -627,8 +630,17 @@ impl SynthVoice {
         }
     }
 
+    pub(super) fn begin_note_transition(&mut self) {
+        self.declick.begin();
+    }
+
+    pub(super) fn process_output(&mut self, output: f32) -> f32 {
+        self.declick.process(output)
+    }
+
     pub(super) fn reset_to_idle(&mut self) {
         self.env.reset();
+        self.declick.reset();
         self.active = false;
         self.idle_cleanup_done = true;
         self.remaining = 0;
