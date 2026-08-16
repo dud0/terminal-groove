@@ -2488,25 +2488,26 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                     cells.push(ratatui::widgets::Cell::from("   "));
                     continue;
                 }
-                // Beat starts are called out in the header, avoiding a filled
-                // background that can overwhelm the grid on light themes.
-                let mut style = Style::default();
+                // Beat starts are called out in the header; occupancy is shown
+                // with a muted tint while cursor and playhead styles take precedence.
                 let selected = a.row == ti + 1 && a.step == step;
                 let playing = a.playheads[ti] == Some(step);
-                style = match (selected, playing) {
-                    (true, true) => Style::default()
+                let populated = steps[step].is_some();
+                let mut style = match (selected, playing, populated) {
+                    (true, true, _) => Style::default()
                         .fg(Color::Black)
                         .bg(Color::LightMagenta)
                         .add_modifier(Modifier::BOLD),
-                    (true, false) => Style::default()
+                    (true, false, _) => Style::default()
                         .fg(Color::Black)
                         .bg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
-                    (false, true) => Style::default()
+                    (false, true, _) => Style::default()
                         .fg(Color::Black)
                         .bg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
-                    (false, false) => style,
+                    (false, false, true) => Style::default().bg(Color::DarkGray),
+                    (false, false, false) => Style::default(),
                 };
                 if matches!(
                     steps[step],
@@ -2632,7 +2633,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             .header(Row::new(header_cells))
             .block(
                 Block::bordered().title(pattern_title).title_bottom(
-                    "▾ cursor  ▶ active lane  · empty  x/X hit/accent  + condition/retrigger  Dᴼ note  */# lock  underline slide  ─ tie",
+                    "▾ cursor  ▶ active lane  · empty  ▰ populated  x/X hit/accent  + condition/retrigger  Dᴼ note  */# lock  underline slide  ─ tie",
                 ),
             ),
         chunks[2],

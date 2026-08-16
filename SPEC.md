@@ -532,6 +532,8 @@ Bass and Lead notes with slide are underlined.
 
 The selected track's first-line title cell is highlighted with the same cyan background, black text, and bold styling as the selected step. The selected cell and currently playing cell have independent styling. The selected step is also marked with `▾` in the step header; active lanes are marked with `▶`, while mute, event type, and lock state remain text-visible. If selection and playback refer to the same cell, the combined style must still communicate both states. The grid emphasizes the first header of each four-step group, with the existing divider separating 16-step banks.
 
+Populated step cells, including ties, use a muted dark-gray background when they are neither selected nor currently playing. Cursor and playhead backgrounds take precedence over this populated-step tint, while the event text and the legend keep occupancy discernible.
+
 Each pitched row includes its current input octave in the track label (for example, `Bass O3`).
 
 The sequencer grid uses 32 fixed-width cells per physical line with a visible divider after each 16-step bank. Steps 33 through 64 use a continuation line. Cells beyond a track's length are blank and cannot be selected. The detail panel is only as tall as its faders or global cards require, and all remaining vertical space is assigned to the sequencer. When expanded track blocks still exceed the pattern panel height, the panel scrolls by complete track blocks to keep the selected track visible. Wider terminals do not stretch individual step cells.

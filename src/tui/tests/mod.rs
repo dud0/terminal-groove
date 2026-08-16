@@ -2877,6 +2877,84 @@ fn sixty_four_step_track_renders_as_two_compact_rows_without_shortcut_hints() {
 }
 
 #[test]
+fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
+    let mut project = Project::new();
+    project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+        accent: false,
+        recipe: crate::model::DrumRecipeSlot::ONE,
+        condition: Default::default(),
+        retrigger_count: 1,
+        microtiming: Microtiming::ZERO,
+        locks: Default::default(),
+    });
+    let mut app = App::new(project, None);
+    let backend = TestBackend::new(120, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+    let kick_row = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .expect("Kick row should be visible");
+    let populated_column = kick_row
+        .iter()
+        .position(|cell| cell.symbol() == "x")
+        .expect("populated trigger should be visible");
+    assert_eq!(kick_row[populated_column].bg, Color::DarkGray);
+    assert_eq!(kick_row[populated_column + 3].symbol(), "·");
+    assert_ne!(kick_row[populated_column + 3].bg, Color::DarkGray);
+    assert!(rendered(&app, 120, 34).contains("▰ populated"));
+
+    app.row = 1;
+    app.step = 0;
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+    let kick_row = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .expect("Kick row should be visible");
+    let cursor_cell = &kick_row[populated_column];
+    assert_eq!(cursor_cell.fg, Color::Black);
+    assert_eq!(cursor_cell.bg, Color::Cyan);
+
+    app.row = 0;
+    app.playheads[0] = Some(0);
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+    let kick_row = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .expect("Kick row should be visible");
+    assert_eq!(kick_row[populated_column].bg, Color::Yellow);
+
+    app.row = 1;
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+    let kick_row = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(120)
+        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .expect("Kick row should be visible");
+    assert_eq!(kick_row[populated_column].bg, Color::LightMagenta);
+}
+
+#[test]
 fn selected_track_title_uses_the_selected_step_highlight() {
     let mut app = App::new(Project::new(), None);
     app.row = 1;
