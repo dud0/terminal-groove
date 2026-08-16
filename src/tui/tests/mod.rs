@@ -1889,12 +1889,12 @@ fn lock_values_remain_displayed_after_track_navigation() {
 }
 
 #[test]
-fn active_parameter_gets_a_visible_fader_outline_and_physical_readout() {
+fn active_parameter_gets_a_visible_highlight_and_physical_readout() {
     let mut app = App::new(Project::new(), None);
     app.row = SYNTH_TRACK_START + 1;
     app.mode = Mode::ParameterEdit(ParameterId::Cutoff);
     let screen = rendered(&app, 120, 34);
-    assert!(screen.contains("║"));
+    assert!(!screen.contains("║"));
     assert!(screen.contains("Hz · BASE"));
 }
 

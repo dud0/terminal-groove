@@ -1795,15 +1795,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         );
         let group_color = descriptor.group.color(theme);
         let block = if active {
-            Block::default()
-                .borders(Borders::LEFT | Borders::RIGHT)
-                .border_type(BorderType::Double)
-                .border_style(
-                    Style::default()
-                        .fg(theme.accent(3))
-                        .add_modifier(Modifier::BOLD),
-                )
-                .style(theme.selected())
+            Block::default().style(theme.selected())
         } else {
             Block::default()
         };
