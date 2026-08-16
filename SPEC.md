@@ -540,6 +540,8 @@ The sequencer grid uses 32 fixed-width cells per physical line with a visible di
 
 When the terminal is smaller than `120x34`, replace the main layout with the current size, required size, quit/help/recording keys, and the active `● REC` or `WAV FINALIZING` state. The project and audio engine remain active so resizing restores the normal view.
 
+The interface uses an explicit rendering theme selected by `--theme dark`, `--theme light`, or `--theme high-contrast`; `dark` is the default. Theme selection is a UI preference and is not persisted in project files. Occupied step cells retain a fixed-width background rectangle in every theme, with an explicit foreground/background pair. Selected, playing, and selected-plus-playing cells use distinct explicit pairs. Important state remains text- or modifier-visible so color is supplementary rather than the only signal. Theme colors are centralized and profile-specific; ordinary terminal content is not allowed to depend on a terminal's default foreground when it is rendered over a tinted cell.
+
 ### 6.2 Modes and overlays
 
 The current mode is always named on screen. Modes are:
@@ -698,7 +700,7 @@ The Rust model must validate these domain concepts rather than untyped maps. The
 ## 9. Command-line interface
 
 ```text
-terminal-groove [PROJECT] [--audio-device <exact-name>] [--audio-buffer <frames>]
+terminal-groove [PROJECT] [--audio-device <exact-name>] [--audio-buffer <frames>] [--theme <dark|light|high-contrast>]
 terminal-groove --list-audio-devices
 terminal-groove --help
 terminal-groove --version

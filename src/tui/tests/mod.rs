@@ -1856,11 +1856,10 @@ fn lead_condition_and_retrigger_are_highlighted_in_the_sequencer_grid() {
                 .contains("Lead")
         })
         .expect("Lead row should be visible");
-    assert!(
-        lead_row
-            .iter()
-            .any(|cell| cell.fg == Color::Magenta && cell.modifier.contains(Modifier::BOLD))
-    );
+    assert!(lead_row.iter().any(|cell| {
+        cell.fg == super::theme::Theme::new(app.theme_profile).accent(2)
+            && cell.modifier.contains(Modifier::BOLD)
+    }));
 }
 
 #[test]
@@ -2031,14 +2030,12 @@ fn lock_parameter_editing_has_a_prominent_banner() {
     terminal
         .draw(|frame| draw_with_device(frame, &app, "null"))
         .unwrap();
-    assert!(
-        terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .any(|cell| { cell.fg == Color::Black && cell.bg == Color::LightYellow })
-    );
+    assert!(terminal.backend().buffer().content.iter().any(|cell| {
+        let style = super::theme::Theme::new(app.theme_profile).warning();
+        cell.fg == style.fg.unwrap()
+            && cell.bg == style.bg.unwrap()
+            && cell.modifier.contains(Modifier::BOLD)
+    }));
 }
 
 #[test]
@@ -2075,14 +2072,9 @@ fn locked_badge_uses_a_distinct_color() {
     terminal
         .draw(|frame| draw_with_device(frame, &app, "null"))
         .unwrap();
-    assert!(
-        terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .any(|cell| cell.symbol() == "L" && cell.fg == Color::LightMagenta)
-    );
+    assert!(terminal.backend().buffer().content.iter().any(|cell| {
+        cell.symbol() == "L" && cell.fg == super::theme::Theme::new(app.theme_profile).lock()
+    }));
 }
 
 #[test]
@@ -2119,7 +2111,11 @@ fn global_cards_show_all_local_shortcuts() {
             .iter()
             .enumerate()
             .any(|(index, cell)| {
-                index / 120 >= 14 && cell.modifier.contains(Modifier::REVERSED)
+                let style = super::theme::Theme::new(app.theme_profile).selected();
+                index / 120 >= 14
+                    && cell.fg == style.fg.unwrap()
+                    && cell.bg == style.bg.unwrap()
+                    && cell.modifier.contains(Modifier::BOLD)
             })
     );
 }
@@ -2145,30 +2141,31 @@ fn global_cards_use_semantic_groups_and_track_card_geometry() {
         .draw(|frame| draw_with_device(frame, &app, "null"))
         .unwrap();
     let group_heading = &terminal.backend().buffer().content[17 * 120..18 * 120];
+    let theme = super::theme::Theme::new(app.theme_profile);
     assert!(
         group_heading[10..20]
             .iter()
-            .any(|cell| cell.symbol() == "C" && cell.fg == Color::Cyan)
+            .any(|cell| cell.symbol() == "C" && cell.fg == theme.accent(0))
     );
     assert!(
         group_heading[20..40]
             .iter()
-            .any(|cell| cell.symbol() == "D" && cell.fg == Color::LightBlue)
+            .any(|cell| cell.symbol() == "D" && cell.fg == theme.accent(7))
     );
     assert!(
         group_heading[40..80]
             .iter()
-            .any(|cell| cell.symbol() == "R" && cell.fg == Color::Magenta)
+            .any(|cell| cell.symbol() == "R" && cell.fg == theme.accent(2))
     );
     assert!(
         group_heading[80..90]
             .iter()
-            .any(|cell| cell.symbol() == "D" && cell.fg == Color::Red)
+            .any(|cell| cell.symbol() == "D" && cell.fg == theme.accent(4))
     );
     assert!(
         group_heading[90..110]
             .iter()
-            .any(|cell| cell.symbol() == "S" && cell.fg == Color::Green)
+            .any(|cell| cell.symbol() == "S" && cell.fg == theme.accent(1))
     );
 }
 
@@ -2981,10 +2978,12 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
         .iter()
         .position(|cell| cell.symbol() == "x")
         .expect("populated trigger should be visible");
-    assert_eq!(kick_row[populated_column].fg, Color::White);
-    assert_eq!(kick_row[populated_column].bg, Color::DarkGray);
+    let theme = super::theme::Theme::new(app.theme_profile);
+    let occupied = theme.occupied();
+    assert_eq!(kick_row[populated_column].fg, occupied.fg.unwrap());
+    assert_eq!(kick_row[populated_column].bg, occupied.bg.unwrap());
     assert_eq!(kick_row[populated_column + 3].symbol(), "·");
-    assert_ne!(kick_row[populated_column + 3].bg, Color::DarkGray);
+    assert_ne!(kick_row[populated_column + 3].bg, occupied.bg.unwrap());
     assert!(rendered(&app, 120, 34).contains("▰ populated"));
 
     app.row = 1;
@@ -3000,8 +2999,9 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
         .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick row should be visible");
     let cursor_cell = &kick_row[populated_column];
-    assert_eq!(cursor_cell.fg, Color::Black);
-    assert_eq!(cursor_cell.bg, Color::Cyan);
+    let selected = theme.selected();
+    assert_eq!(cursor_cell.fg, selected.fg.unwrap());
+    assert_eq!(cursor_cell.bg, selected.bg.unwrap());
 
     app.row = 0;
     app.playheads[0] = Some(0);
@@ -3015,7 +3015,7 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
         .chunks(120)
         .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick row should be visible");
-    assert_eq!(kick_row[populated_column].bg, Color::Yellow);
+    assert_eq!(kick_row[populated_column].bg, theme.playing().bg.unwrap());
 
     app.row = 1;
     terminal
@@ -3028,7 +3028,51 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
         .chunks(120)
         .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick row should be visible");
-    assert_eq!(kick_row[populated_column].bg, Color::LightMagenta);
+    assert_eq!(
+        kick_row[populated_column].bg,
+        theme.selected_playing().bg.unwrap()
+    );
+}
+
+#[test]
+fn theme_profiles_keep_occupied_step_rectangles_readable() {
+    let mut project = Project::new();
+    project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+        accent: false,
+        recipe: crate::model::DrumRecipeSlot::ONE,
+        condition: Default::default(),
+        retrigger_count: 1,
+        microtiming: Microtiming::ZERO,
+        locks: Default::default(),
+    });
+
+    for profile in [
+        super::theme::ThemeProfile::Dark,
+        super::theme::ThemeProfile::Light,
+        super::theme::ThemeProfile::HighContrast,
+    ] {
+        let app = App::new_with_theme(project.clone(), None, profile);
+        let backend = TestBackend::new(120, 34);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_with_device(frame, &app, "null"))
+            .unwrap();
+        let kick_row = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(120)
+            .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+            .expect("Kick row should be visible");
+        let populated_column = kick_row
+            .iter()
+            .position(|cell| cell.symbol() == "x")
+            .expect("populated trigger should be visible");
+        let style = super::theme::Theme::new(profile).occupied();
+        assert_eq!(kick_row[populated_column].fg, style.fg.unwrap());
+        assert_eq!(kick_row[populated_column].bg, style.bg.unwrap());
+        assert!(kick_row[populated_column].modifier.contains(Modifier::BOLD));
+    }
 }
 
 #[test]
@@ -3056,9 +3100,14 @@ fn selected_track_title_uses_the_selected_step_highlight() {
         .chunks(120)
         .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick track row should be visible");
-    assert!(kick_title[3..7].iter().all(|cell| cell.fg == Color::Black
-        && cell.bg == Color::Cyan
-        && cell.modifier.contains(Modifier::BOLD)));
+    let selected = super::theme::Theme::new(app.theme_profile).selected_track();
+    assert!(
+        kick_title[3..7]
+            .iter()
+            .all(|cell| cell.fg == selected.fg.unwrap()
+                && cell.bg == selected.bg.unwrap()
+                && cell.modifier.contains(Modifier::BOLD))
+    );
 
     app.row = 2;
     terminal
@@ -3071,7 +3120,11 @@ fn selected_track_title_uses_the_selected_step_highlight() {
         .chunks(120)
         .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick track row should be visible");
-    assert!(kick_title[3..7].iter().all(|cell| cell.bg != Color::Cyan));
+    assert!(
+        kick_title[3..7]
+            .iter()
+            .all(|cell| cell.bg != selected.bg.unwrap())
+    );
 }
 
 #[test]

@@ -1,4 +1,5 @@
 use super::render::ValueOrigin;
+use super::theme::ThemeProfile;
 use crate::tui::DIRECT_PARAMETER_RAMP;
 use crate::{
     audio::RecordingState,
@@ -290,6 +291,7 @@ pub struct App {
     pub(super) max_callback_load_per_mille: u64,
     pub(super) recording_state: RecordingState,
     pub(super) fader_animations: Vec<FaderAnimation>,
+    pub(super) theme_profile: ThemeProfile,
 }
 
 #[derive(Clone, Copy)]
@@ -319,6 +321,14 @@ impl FaderAnimation {
 }
 impl App {
     pub fn new(project: Project, path: Option<PathBuf>) -> Self {
+        Self::new_with_theme(project, path, ThemeProfile::default())
+    }
+
+    pub fn new_with_theme(
+        project: Project,
+        path: Option<PathBuf>,
+        theme_profile: ThemeProfile,
+    ) -> Self {
         Self {
             editor: Editor::new(project),
             row: 0,
@@ -355,6 +365,7 @@ impl App {
             max_callback_load_per_mille: 0,
             recording_state: RecordingState::Idle,
             fader_animations: Vec::new(),
+            theme_profile,
         }
     }
     pub(super) fn start_fader_animation(

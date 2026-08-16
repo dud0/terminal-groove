@@ -56,14 +56,21 @@ mod input;
 mod overlays;
 mod render;
 mod state;
+mod theme;
 
 pub use state::App;
+pub use theme::ThemeProfile;
 
 pub fn project_with_default_presets() -> Project {
     controller::project_with_default_presets().0
 }
 
-pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result<()> {
+pub fn run(
+    project: Project,
+    path: Option<PathBuf>,
+    audio: &mut Audio,
+    theme: ThemeProfile,
+) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
     let old_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -72,7 +79,7 @@ pub fn run(project: Project, path: Option<PathBuf>, audio: &mut Audio) -> Result
         old_hook(info)
     }));
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-    let mut app = App::new(project, path);
+    let mut app = App::new_with_theme(project, path, theme);
     let mut redraw = true;
     while !app.quit {
         audio.reap_retired();

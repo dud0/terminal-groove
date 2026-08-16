@@ -1,3 +1,4 @@
+use super::theme::Theme;
 use crate::model::GlobalParameterId;
 use ratatui::style::Color;
 
@@ -21,13 +22,13 @@ impl GlobalParameterGroup {
         }
     }
 
-    pub(super) fn color(self) -> Color {
+    pub(super) fn color(self, theme: Theme) -> Color {
         match self {
-            Self::Clock => Color::Cyan,
-            Self::Delay => Color::LightBlue,
-            Self::Reverb => Color::Magenta,
-            Self::Ducking => Color::Red,
-            Self::Scale => Color::Green,
+            Self::Clock => theme.accent(0),
+            Self::Delay => theme.accent(7),
+            Self::Reverb => theme.accent(2),
+            Self::Ducking => theme.accent(4),
+            Self::Scale => theme.accent(1),
         }
     }
 }

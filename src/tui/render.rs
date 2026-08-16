@@ -13,6 +13,7 @@ use super::{
     controls::{GLOBAL_CONTROLS, global_control},
     input::parameter_supports_direct_percentage,
     state::{App, DefaultPresetAction, Mode, ParameterBank},
+    theme::Theme,
 };
 use crate::tui::DIRECT_PERCENTAGE_HINT;
 use crate::{
@@ -316,6 +317,7 @@ pub(super) struct ParameterDescriptor {
 struct ParameterCardRender {
     active: bool,
     group_color: Color,
+    theme: Theme,
     style: Style,
     segment_count: u16,
     show_shortcut: bool,
@@ -349,17 +351,17 @@ impl ParameterGroup {
         }
     }
 
-    pub(super) fn color(self) -> Color {
+    pub(super) fn color(self, theme: Theme) -> Color {
         match self {
-            Self::Mixer => Color::Cyan,
-            Self::Instrument => Color::Green,
-            Self::Filter => Color::Magenta,
-            Self::Envelope => Color::Yellow,
-            Self::Distortion => Color::Red,
-            Self::BitCrusher => Color::LightMagenta,
-            Self::Phaser => Color::Blue,
-            Self::Flanger => Color::LightBlue,
-            Self::Chorus => Color::LightGreen,
+            Self::Mixer => theme.accent(0),
+            Self::Instrument => theme.accent(1),
+            Self::Filter => theme.accent(2),
+            Self::Envelope => theme.accent(3),
+            Self::Distortion => theme.accent(4),
+            Self::BitCrusher => theme.accent(5),
+            Self::Phaser => theme.accent(6),
+            Self::Flanger => theme.accent(7),
+            Self::Chorus => theme.accent(8),
         }
     }
 }
@@ -1450,6 +1452,7 @@ pub(super) fn global_control_text(g: &crate::model::Globals) -> Vec<String> {
 }
 
 pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
+    let theme = Theme::new(a.theme_profile);
     let panel = Block::bordered().title("Global detail");
     let inner = panel.inner(area);
     f.render_widget(panel, area);
@@ -1486,7 +1489,7 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
             group.label(),
             group_area,
             Style::default()
-                .fg(group.color())
+                .fg(group.color(theme))
                 .add_modifier(Modifier::BOLD),
         );
         group_start = group_end;
@@ -1509,10 +1512,10 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
                 .border_type(BorderType::Double)
                 .border_style(
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme.accent(3))
                         .add_modifier(Modifier::BOLD),
                 )
-                .style(Style::default().reversed())
+                .style(theme.selected())
         } else {
             Block::default()
         };
@@ -1527,12 +1530,9 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
             }
         };
         f.render_widget(block, slot);
-        let group_color = control.group.color();
+        let group_color = control.group.color(theme);
         let style = if active {
-            Style::default()
-                .fg(group_color)
-                .reversed()
-                .add_modifier(Modifier::BOLD)
+            theme.selected()
         } else {
             Style::default()
                 .fg(group_color)
@@ -1553,7 +1553,7 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
                 let segment_style = if active || is_filled {
                     style
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(theme.disabled())
                 };
                 render_centered(
                     f,
@@ -1577,6 +1577,7 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
                 &choices,
                 selected,
                 style,
+                theme,
             );
         } else {
             render_centered(
@@ -1613,6 +1614,7 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
 }
 
 pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usize) {
+    let theme = Theme::new(a.theme_profile);
     let t = &a.editor.project.tracks[track];
     let parameter_editing = matches!(a.mode, Mode::ParameterEdit(_));
     let lock_editing = a.scope == Scope::Lock && parameter_editing;
@@ -1656,33 +1658,24 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             if t.muted { "on" } else { "off" }
         )
     };
-    let selected_tab_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD)
-        .add_modifier(Modifier::REVERSED);
-    let inactive_tab_style = Style::default().fg(Color::DarkGray);
+    let selected_tab_style = theme.selected();
+    let inactive_tab_style = Style::default().fg(theme.muted());
     let editing_badge = if lock_editing {
-        Span::styled(
-            " LOCK PARAMETER EDITING ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::LightYellow)
-                .add_modifier(Modifier::BOLD),
-        )
+        Span::styled(" LOCK PARAMETER EDITING ", theme.warning())
     } else if parameter_editing {
         Span::styled(
             " PARAMETER EDITING ",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.accent(3))
                 .add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::styled(" TRACK DETAIL ", Style::default().fg(Color::DarkGray))
+        Span::styled(" TRACK DETAIL ", Style::default().fg(theme.muted()))
     };
     let panel = Block::bordered()
         .border_style(if lock_editing {
             Style::default()
-                .fg(Color::LightMagenta)
+                .fg(theme.lock())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -1767,9 +1760,9 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             group_area,
             Style::default()
                 .fg(if group_enabled {
-                    group.color()
+                    group.color(theme)
                 } else {
-                    Color::DarkGray
+                    theme.disabled()
                 })
                 .add_modifier(Modifier::BOLD),
         );
@@ -1800,17 +1793,17 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                     && (!is_recipe_parameter(t.kind, descriptor.id)
                         || a.parameter_recipe == recipe)
         );
-        let group_color = descriptor.group.color();
+        let group_color = descriptor.group.color(theme);
         let block = if active {
             Block::default()
                 .borders(Borders::LEFT | Borders::RIGHT)
                 .border_type(BorderType::Double)
                 .border_style(
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme.accent(3))
                         .add_modifier(Modifier::BOLD),
                 )
-                .style(Style::default().reversed())
+                .style(theme.selected())
         } else {
             Block::default()
         };
@@ -1835,10 +1828,10 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         let style = if active {
             Style::default()
                 .fg(group_color)
-                .reversed()
+                .bg(theme.selected().bg.unwrap_or(Color::Reset))
                 .add_modifier(Modifier::BOLD)
         } else if !enabled {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.disabled())
         } else {
             Style::default()
                 .fg(group_color)
@@ -1853,6 +1846,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 ParameterCardRender {
                     active,
                     group_color,
+                    theme,
                     style,
                     segment_count,
                     show_shortcut: !compact,
@@ -1884,7 +1878,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         if compact {
             let origin_style = if origin == ValueOrigin::Lock {
                 Style::default()
-                    .fg(Color::LightMagenta)
+                    .fg(theme.lock())
                     .add_modifier(Modifier::BOLD)
             } else {
                 style
@@ -1896,7 +1890,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                     Span::styled(
                         if has_lfo { "~" } else { "" },
                         Style::default()
-                            .fg(Color::LightCyan)
+                            .fg(theme.accent(0))
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]))
@@ -1985,10 +1979,10 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             let segment_style = if active {
                 Style::default()
                     .fg(group_color)
-                    .reversed()
+                    .bg(theme.selected().bg.unwrap_or(Color::Reset))
                     .add_modifier(Modifier::BOLD)
             } else if symbol == "···" {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme.disabled())
             } else {
                 Style::default()
                     .fg(group_color)
@@ -2028,24 +2022,20 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             }
         };
         let shortcut_style = if active {
-            Style::default()
-                .fg(group_color)
-                .reversed()
-                .add_modifier(Modifier::BOLD)
+            theme.selected()
         } else {
             Style::default()
                 .fg(group_color)
                 .add_modifier(Modifier::BOLD)
         };
         let origin_style = if origin == ValueOrigin::Lock {
-            Style::default()
-                .fg(Color::LightMagenta)
-                .add_modifier(Modifier::BOLD)
-                .add_modifier(if active {
-                    Modifier::REVERSED
-                } else {
-                    Modifier::empty()
-                })
+            if active {
+                theme.selected()
+            } else {
+                Style::default()
+                    .fg(theme.lock())
+                    .add_modifier(Modifier::BOLD)
+            }
         } else {
             shortcut_style
         };
@@ -2056,7 +2046,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
                 Span::styled(
                     if has_lfo { "~" } else { "" },
                     Style::default()
-                        .fg(Color::LightCyan)
+                        .fg(theme.accent(0))
                         .add_modifier(Modifier::BOLD),
                 ),
             ]))
@@ -2078,14 +2068,12 @@ fn render_fm_operator_summary(
     compact: bool,
 ) {
     use crate::model::FmOperatorField;
+    let theme = Theme::new(a.theme_profile);
     let style = if active {
-        Style::default()
-            .fg(Color::LightCyan)
-            .reversed()
-            .add_modifier(Modifier::BOLD)
+        theme.selected()
     } else {
         Style::default()
-            .fg(Color::LightCyan)
+            .fg(theme.accent(0))
             .add_modifier(Modifier::BOLD)
     };
     let value = |field| {
@@ -2214,12 +2202,9 @@ fn render_pitch_lfo_card(
             }
         });
         let segment_style = if render.active {
-            Style::default()
-                .fg(render.group_color)
-                .reversed()
-                .add_modifier(Modifier::BOLD)
+            render.theme.selected()
         } else if symbol == "···" {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(render.theme.disabled())
         } else {
             Style::default()
                 .fg(render.group_color)
@@ -2242,10 +2227,7 @@ fn render_pitch_lfo_card(
         return;
     }
     let shortcut_style = if render.active {
-        Style::default()
-            .fg(render.group_color)
-            .reversed()
-            .add_modifier(Modifier::BOLD)
+        render.theme.selected()
     } else {
         Style::default()
             .fg(render.group_color)
@@ -2258,7 +2240,7 @@ fn render_pitch_lfo_card(
             Span::styled(
                 if config.is_some() { "~" } else { "" },
                 Style::default()
-                    .fg(Color::LightCyan)
+                    .fg(render.group_color)
                     .add_modifier(Modifier::BOLD),
             ),
         ]))
@@ -2288,6 +2270,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, a: &App, audio: &Audio) {
 }
 
 pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
+    let theme = Theme::new(a.theme_profile);
     let area = f.area();
     if area.width < 120 || area.height < 34 {
         let help_hint = if help_available(&a.mode) {
@@ -2358,29 +2341,11 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         )
     };
     let mut header_spans = vec![
-        Span::styled(
-            " terminal-groove ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(" terminal-groove ", theme.header()),
         match a.recording_state {
             RecordingState::Idle => Span::raw(""),
-            RecordingState::Recording => Span::styled(
-                " ● REC ",
-                Style::default()
-                    .fg(Color::White)
-                    .bg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            RecordingState::Finalizing => Span::styled(
-                " WAV FINALIZING ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            RecordingState::Recording => Span::styled(" ● REC ", theme.recording()),
+            RecordingState::Finalizing => Span::styled(" WAV FINALIZING ", theme.warning()),
         },
         Span::raw(format!(
             " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
@@ -2394,10 +2359,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 a.callback_overruns,
                 a.max_callback_load_per_mille.div_ceil(10)
             ),
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::LightYellow)
-                .add_modifier(Modifier::BOLD),
+            theme.warning(),
         ));
     }
     let header = Line::from(header_spans);
@@ -2411,7 +2373,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             Span::styled(
                 format!(" {s} "),
                 if a.row == 0 && a.global == i {
-                    Style::default().reversed()
+                    theme.selected()
                 } else {
                     Style::default()
                 },
@@ -2466,10 +2428,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             cells.push(ratatui::widgets::Cell::from(format!("{lane_marker} ")));
             cells.push(if line_index == 0 {
                 let style = if a.row == ti + 1 {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
+                    theme.selected_track()
                 } else {
                     Style::default()
                 };
@@ -2494,22 +2453,13 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 let playing = a.playheads[ti] == Some(step);
                 let populated = steps[step].is_some();
                 let mut style = match (selected, playing, populated) {
-                    (true, true, _) => Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::LightMagenta)
-                        .add_modifier(Modifier::BOLD),
-                    (true, false, _) => Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                    (false, true, _) => Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    (true, true, _) => theme.selected_playing(),
+                    (true, false, _) => theme.selected(),
+                    (false, true, _) => theme.playing(),
                     // Do not rely on the terminal's default foreground here:
                     // light themes commonly make that black, which is hard to
                     // read on the occupied-cell tint.
-                    (false, false, true) => Style::default().fg(Color::White).bg(Color::DarkGray),
+                    (false, false, true) => theme.occupied(),
                     (false, false, false) => Style::default(),
                 };
                 if matches!(
@@ -2541,7 +2491,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 ) && !selected
                     && !playing
                 {
-                    style = style.fg(Color::Magenta).add_modifier(Modifier::BOLD);
+                    style = style.fg(theme.accent(2)).add_modifier(Modifier::BOLD);
                 }
                 cells.push(
                     ratatui::widgets::Cell::from(step_cell(steps[step].as_ref())).style(style),
@@ -2575,7 +2525,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         };
         let style = if (n - 1) % 4 == 0 {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.accent(0))
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -2592,7 +2542,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         };
         let style = if (n - 1) % 4 == 0 {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.accent(0))
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -2663,13 +2613,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             _ => unreachable!(),
         };
         Line::from(vec![
-            Span::styled(
-                " LOCK PARAMETER EDITING ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::LightYellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(" LOCK PARAMETER EDITING ", theme.warning()),
             Span::raw(format!(" ({parameter}) | {}", a.status)),
         ])
     } else {
@@ -2777,6 +2721,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                     config,
                     *field,
                     a.editor.project.globals.tempo_bpm,
+                    theme,
                 );
             }
         }
@@ -2823,11 +2768,11 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             )
         }
         Mode::ProjectBrowser { entries, selected } => {
-            render_project_browser(f, area, entries, *selected);
+            render_project_browser(f, area, entries, *selected, theme);
         }
         Mode::PresetBrowser {
             entries, selected, ..
-        } => render_preset_browser(f, area, entries, *selected),
+        } => render_preset_browser(f, area, entries, *selected, theme),
         Mode::PresetDialog {
             track,
             selected,
@@ -2838,6 +2783,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             &a.editor.project.tracks[*track].name,
             *selected,
             *has_default,
+            theme,
         ),
         Mode::FileInput(_, input) => {
             let directory_path = project_directory().ok();

@@ -4,6 +4,7 @@ use super::{
         App, ChordField, GeneratorDialog, LfoField, PatternPage, PresetAction, SidechainField,
         TriggerField,
     },
+    theme::Theme,
 };
 use crate::{
     generator::Target as GeneratorTarget,
@@ -15,7 +16,7 @@ use crate::{
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
@@ -29,6 +30,7 @@ pub(super) fn render_fm_operator_popup(
     selected_operator: usize,
     selected_field: FmOperatorField,
 ) {
+    let theme = Theme::new(a.theme_profile);
     let popup_area = compact_popup_rect(area, 116, 28);
     f.render_widget(Clear, popup_area);
     let track = a.row.saturating_sub(1);
@@ -56,7 +58,7 @@ pub(super) fn render_fm_operator_popup(
         algorithm.diagram(),
         Rect { height: 1, ..inner },
         Style::default()
-            .fg(Color::LightCyan)
+            .fg(theme.accent(0))
             .add_modifier(Modifier::BOLD),
     );
     let overview = Rect {
@@ -78,6 +80,7 @@ pub(super) fn render_fm_operator_popup(
             operator,
             selected_operator,
             selected_field,
+            theme,
         );
     }
     let footer_height = 2.min(inner.height);
@@ -92,7 +95,15 @@ pub(super) fn render_fm_operator_popup(
             .saturating_sub(detail_y)
             .saturating_sub(footer_height),
     };
-    render_fm_operator_detail(f, detail, a, track, selected_operator, selected_field);
+    render_fm_operator_detail(
+        f,
+        detail,
+        a,
+        track,
+        selected_operator,
+        selected_field,
+        theme,
+    );
     f.render_widget(
         Paragraph::new(vec![
             Line::from("[←/→] operator  [Tab/BackTab] field  [↑/↓] adjust  [Shift+↑/↓] ±10%  [[/]] algorithm"),
@@ -117,12 +128,13 @@ fn render_fm_operator_column(
     operator: usize,
     selected_operator: usize,
     selected_field: FmOperatorField,
+    theme: Theme,
 ) {
     let active = operator == selected_operator;
     let accent = if active {
-        Color::Yellow
+        theme.accent(3)
     } else {
-        Color::LightCyan
+        theme.accent(0)
     };
     let block = Block::bordered()
         .border_type(if active {
@@ -161,6 +173,17 @@ fn render_fm_operator_column(
             if lfo { "~" } else { "" },
         );
         let selected = active && field == selected_field;
+        let style = if selected {
+            theme.selected()
+        } else {
+            Style::default()
+                .fg(if origin == ValueOrigin::Lock {
+                    theme.lock()
+                } else {
+                    accent
+                })
+                .add_modifier(Modifier::BOLD)
+        };
         render_centered(
             f,
             &text,
@@ -169,17 +192,7 @@ fn render_fm_operator_column(
                 height: 1,
                 ..inner
             },
-            Style::default()
-                .fg(if origin == ValueOrigin::Lock {
-                    Color::LightMagenta
-                } else {
-                    accent
-                })
-                .add_modifier(if selected {
-                    Modifier::REVERSED | Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
+            style,
         );
     }
 }
@@ -191,6 +204,7 @@ fn render_fm_operator_detail(
     track: usize,
     operator: usize,
     field: FmOperatorField,
+    theme: Theme,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -206,12 +220,12 @@ fn render_fm_operator_detail(
     };
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(Style::default().fg(theme.accent(3)))
         .title(format!("OP{} {label}", operator + 1));
     let inner = block.inner(area);
     f.render_widget(block, area);
     let style = Style::default()
-        .fg(Color::LightCyan)
+        .fg(theme.accent(0))
         .add_modifier(Modifier::BOLD);
     match value {
         ParameterValue::FmRatio(value) => {
@@ -220,9 +234,9 @@ fn render_fm_operator_detail(
                 .iter()
                 .position(|ratio| *ratio == value)
                 .unwrap_or(0);
-            render_lfo_selector(f, inner, &choices, selected, style);
+            render_lfo_selector(f, inner, &choices, selected, style, theme);
         }
-        ParameterValue::Percent(value) => render_lfo_fader(f, inner, value.get(), style),
+        ParameterValue::Percent(value) => render_lfo_fader(f, inner, value.get(), style, theme),
         _ => {}
     }
 }
@@ -233,6 +247,7 @@ pub(super) fn render_trigger_popup(
     a: &App,
     field: TriggerField,
 ) {
+    let theme = Theme::new(a.theme_profile);
     let track = a.row.saturating_sub(1);
     let Ok(condition) = a.editor.trigger_condition_value(track, a.step) else {
         return;
@@ -267,6 +282,7 @@ pub(super) fn render_trigger_popup(
         "Microtime",
         microtiming.get(),
         field == TriggerField::Microtiming,
+        theme,
     );
     let mode_choices = ["Always", "Cycle", "Chance"];
     let mode_index = match condition {
@@ -282,6 +298,7 @@ pub(super) fn render_trigger_popup(
         mode_index,
         field == TriggerField::Mode,
         false,
+        theme,
     );
 
     let phase_choices = (1..=cycle_length)
@@ -295,6 +312,7 @@ pub(super) fn render_trigger_popup(
         usize::from(cycle_position - 1),
         field == TriggerField::CyclePosition,
         !matches!(condition, TriggerCondition::Cycle { .. }),
+        theme,
     );
 
     let length_choices = ["2", "3", "4"];
@@ -306,6 +324,7 @@ pub(super) fn render_trigger_popup(
         usize::from(cycle_length - 2),
         field == TriggerField::CycleLength,
         !matches!(condition, TriggerCondition::Cycle { .. }),
+        theme,
     );
 
     render_trigger_fader(
@@ -315,6 +334,7 @@ pub(super) fn render_trigger_popup(
         chance,
         field == TriggerField::Chance,
         !matches!(condition, TriggerCondition::Chance { .. }),
+        theme,
     );
 
     let retrigger_choices = ["1", "2", "3", "4"];
@@ -326,6 +346,7 @@ pub(super) fn render_trigger_popup(
         usize::from(count - 1),
         field == TriggerField::Retrigger,
         false,
+        theme,
     );
     f.render_widget(
         Paragraph::new(vec![
@@ -348,6 +369,7 @@ pub(super) fn render_sidechain_popup(
     a: &App,
     selected: SidechainField,
 ) {
+    let theme = Theme::new(a.theme_profile);
     let popup_area = sidechain_popup_rect(area);
     f.render_widget(Clear, popup_area);
     let panel = Block::bordered().title("Ducking · Kick → Bass / Chord / Lead");
@@ -390,7 +412,7 @@ pub(super) fn render_sidechain_popup(
             ),
         };
         let (content, style) =
-            render_trigger_card(f, columns[index], label, selected == *field, false);
+            render_trigger_card(f, columns[index], label, selected == *field, false, theme);
         f.render_widget(
             Paragraph::new(value)
                 .alignment(Alignment::Center)
@@ -419,17 +441,15 @@ fn render_trigger_card(
     label: &str,
     active: bool,
     disabled: bool,
+    theme: Theme,
 ) -> (Rect, Style) {
     let accent = if disabled {
-        Color::DarkGray
+        theme.disabled()
     } else {
-        Color::LightCyan
+        theme.accent(0)
     };
     let style = if active {
-        Style::default()
-            .fg(accent)
-            .reversed()
-            .add_modifier(Modifier::BOLD)
+        theme.selected()
     } else {
         Style::default().fg(accent).add_modifier(Modifier::BOLD)
     };
@@ -438,10 +458,10 @@ fn render_trigger_card(
             .border_type(BorderType::Double)
             .border_style(
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.accent(3))
                     .add_modifier(Modifier::BOLD),
             )
-            .style(Style::default().reversed())
+            .style(theme.selected())
     } else {
         Block::bordered().border_style(Style::default().fg(accent))
     })
@@ -451,6 +471,7 @@ fn render_trigger_card(
     (content, style)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_trigger_selector<T: AsRef<str>>(
     f: &mut ratatui::Frame,
     area: Rect,
@@ -459,9 +480,10 @@ fn render_trigger_selector<T: AsRef<str>>(
     selected: usize,
     active: bool,
     disabled: bool,
+    theme: Theme,
 ) {
-    let (content, style) = render_trigger_card(f, area, label, active, disabled);
-    render_lfo_selector(f, content, choices, selected, style);
+    let (content, style) = render_trigger_card(f, area, label, active, disabled, theme);
+    render_lfo_selector(f, content, choices, selected, style, theme);
 }
 
 fn render_trigger_fader(
@@ -471,8 +493,9 @@ fn render_trigger_fader(
     value: u8,
     active: bool,
     disabled: bool,
+    theme: Theme,
 ) {
-    let (content, style) = render_trigger_card(f, area, label, active, disabled);
+    let (content, style) = render_trigger_card(f, area, label, active, disabled, theme);
     render_centered(
         f,
         &format!("{value}%"),
@@ -491,6 +514,7 @@ fn render_trigger_fader(
         },
         value,
         style,
+        theme,
     );
 }
 
@@ -500,8 +524,9 @@ fn render_trigger_signed_fader(
     label: &str,
     value: i8,
     active: bool,
+    theme: Theme,
 ) {
-    let (content, style) = render_trigger_card(f, area, label, active, false);
+    let (content, style) = render_trigger_card(f, area, label, active, false, theme);
     render_centered(
         f,
         &if value > 0 {
@@ -554,7 +579,7 @@ fn render_trigger_signed_fader(
             if filled {
                 style
             } else {
-                lfo_inactive_style(style)
+                lfo_inactive_style(style, theme)
             },
         );
     }
@@ -566,6 +591,7 @@ pub(super) fn render_chord_popup(
     selected: ChordShape,
     a: &App,
 ) {
+    let theme = Theme::new(a.theme_profile);
     let step = a.step;
     let popup_area = lfo_popup_rect(area);
     f.render_widget(Clear, popup_area);
@@ -609,6 +635,7 @@ pub(super) fn render_chord_popup(
             *field,
             a.chord_field == *field,
             !config.enabled && matches!(field, ChordField::Type | ChordField::Rate),
+            theme,
         );
     }
     f.render_widget(
@@ -626,6 +653,7 @@ pub(super) fn render_chord_popup(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_chord_control(
     f: &mut ratatui::Frame,
     area: Rect,
@@ -634,17 +662,15 @@ pub(super) fn render_chord_control(
     field: ChordField,
     active: bool,
     disabled: bool,
+    theme: Theme,
 ) {
     let accent = if disabled {
-        Color::DarkGray
+        theme.disabled()
     } else {
-        Color::LightCyan
+        theme.accent(0)
     };
     let style = if active {
-        Style::default()
-            .fg(if disabled { Color::DarkGray } else { accent })
-            .reversed()
-            .add_modifier(Modifier::BOLD)
+        theme.selected()
     } else {
         Style::default().fg(accent).add_modifier(Modifier::BOLD)
     };
@@ -659,10 +685,10 @@ pub(super) fn render_chord_control(
             .border_type(BorderType::Double)
             .border_style(
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.accent(3))
                     .add_modifier(Modifier::BOLD),
             )
-            .style(Style::default().reversed())
+            .style(theme.selected())
     } else {
         Block::bordered().border_style(Style::default().fg(accent))
     })
@@ -685,16 +711,16 @@ pub(super) fn render_chord_control(
                 .iter()
                 .position(|value| *value == shape)
                 .unwrap_or(0);
-            render_lfo_selector(f, content, &choices, current, style);
+            render_lfo_selector(f, content, &choices, current, style, theme);
         }
-        ChordField::Arp => render_lfo_switch(f, content, "ON", "OFF", config.enabled, style),
+        ChordField::Arp => render_lfo_switch(f, content, "ON", "OFF", config.enabled, style, theme),
         ChordField::Type => {
             let choices = ArpeggioType::ALL.map(|value| value.to_string());
             let current = ArpeggioType::ALL
                 .iter()
                 .position(|value| *value == config.r#type)
                 .unwrap_or(0);
-            render_lfo_selector(f, content, &choices, current, style);
+            render_lfo_selector(f, content, &choices, current, style, theme);
         }
         ChordField::Rate => {
             let choices = ArpeggioRate::ALL.map(|value| value.to_string());
@@ -702,14 +728,15 @@ pub(super) fn render_chord_control(
                 .iter()
                 .position(|value| *value == config.rate)
                 .unwrap_or(0);
-            render_lfo_selector(f, content, &choices, current, style);
+            render_lfo_selector(f, content, &choices, current, style, theme);
         }
     }
 }
 
 pub(super) fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
+    let theme = Theme::new(a.theme_profile);
     if a.pattern_page == PatternPage::Song {
-        render_song_popup(f, area, a);
+        render_song_popup(f, area, a, theme);
         return;
     }
     let height = 7.min(area.height.saturating_sub(4));
@@ -751,29 +778,22 @@ pub(super) fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) 
                 (false, false) => "  ",
             };
             let base = if empty {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme.disabled())
             } else {
                 // Leave ordinary entries on the terminal default foreground
                 // so they remain visible in both light and dark themes.
                 Style::default()
             };
-            let style = if cursor {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                base
-            };
+            let style = if cursor { theme.playing() } else { base };
             let marker_style = if cursor {
                 style
             } else if active {
                 Style::default()
-                    .fg(Color::LightGreen)
+                    .fg(theme.accent(1))
                     .add_modifier(Modifier::BOLD)
             } else if queued {
                 Style::default()
-                    .fg(Color::LightYellow)
+                    .fg(theme.accent(3))
                     .add_modifier(Modifier::BOLD)
             } else {
                 style
@@ -807,7 +827,7 @@ pub(super) fn render_pattern_popup(f: &mut ratatui::Frame, area: Rect, a: &App) 
     );
 }
 
-fn render_song_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
+fn render_song_popup(f: &mut ratatui::Frame, area: Rect, a: &App, theme: Theme) {
     let height = 8.min(area.height.saturating_sub(4));
     let width = area.width.saturating_sub(8).max(24);
     let popup_area = Rect {
@@ -849,10 +869,7 @@ fn render_song_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
                 (false, false) => "  ",
             };
             let style = if cursor {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                theme.playing()
             } else {
                 // Use the terminal default foreground for light/dark theme
                 // compatibility instead of hard-coding white.
@@ -862,11 +879,11 @@ fn render_song_popup(f: &mut ratatui::Frame, area: Rect, a: &App) {
                 style
             } else if active {
                 Style::default()
-                    .fg(Color::LightGreen)
+                    .fg(theme.accent(1))
                     .add_modifier(Modifier::BOLD)
             } else if queued {
                 Style::default()
-                    .fg(Color::LightYellow)
+                    .fg(theme.accent(3))
                     .add_modifier(Modifier::BOLD)
             } else {
                 style
@@ -913,6 +930,7 @@ pub(super) fn render_generator_popup(
     dialog: &GeneratorDialog,
     a: &App,
 ) {
+    let theme = Theme::new(a.theme_profile);
     let target = match dialog.target {
         GeneratorTarget::WholePattern => "Whole pattern".to_string(),
         GeneratorTarget::Track(track) => format!(
@@ -956,13 +974,13 @@ pub(super) fn render_generator_popup(
             let marker = if active { "> " } else { "  " };
             let style = if !applicable {
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme.disabled())
                     .add_modifier(Modifier::DIM)
             } else if active {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.selected().fg.unwrap_or(theme.accent(3)))
+                    .bg(theme.selected().bg.unwrap_or(theme.accent(3)))
                     .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::REVERSED)
             } else {
                 Style::default()
             };
@@ -1001,6 +1019,7 @@ pub(super) fn render_lfo_popup(
     config: LfoConfig,
     selected: LfoField,
     tempo_bpm: u16,
+    theme: Theme,
 ) {
     let popup_area = lfo_popup_rect(area);
     f.render_widget(Clear, popup_area);
@@ -1025,6 +1044,7 @@ pub(super) fn render_lfo_popup(
             *field,
             selected == *field,
             tempo_bpm,
+            theme,
         );
     }
 
@@ -1046,6 +1066,7 @@ pub(super) fn render_lfo_popup(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_lfo_control(
     f: &mut ratatui::Frame,
     area: Rect,
@@ -1054,13 +1075,11 @@ pub(super) fn render_lfo_control(
     field: LfoField,
     active: bool,
     tempo_bpm: u16,
+    theme: Theme,
 ) {
-    let accent = Color::LightCyan;
+    let accent = theme.accent(0);
     let style = if active {
-        Style::default()
-            .fg(accent)
-            .reversed()
-            .add_modifier(Modifier::BOLD)
+        theme.selected()
     } else {
         Style::default().fg(accent).add_modifier(Modifier::BOLD)
     };
@@ -1078,10 +1097,10 @@ pub(super) fn render_lfo_control(
             .border_type(BorderType::Double)
             .border_style(
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.accent(3))
                     .add_modifier(Modifier::BOLD),
             )
-            .style(Style::default().reversed())
+            .style(theme.selected())
     } else {
         Block::bordered().border_style(Style::default().fg(accent))
     })
@@ -1093,18 +1112,26 @@ pub(super) fn render_lfo_control(
     }
 
     match field {
-        LfoField::Enabled => render_lfo_switch(f, content, "ON", "OFF", config.enabled, style),
+        LfoField::Enabled => {
+            render_lfo_switch(f, content, "ON", "OFF", config.enabled, style, theme)
+        }
         LfoField::Waveform => {
             let choices = ["Sine", "Triangle", "Square", "Saw", "Sample & hold"];
             let current = LfoWaveform::ALL
                 .iter()
                 .position(|waveform| *waveform == config.waveform)
                 .unwrap();
-            render_lfo_selector(f, content, &choices, current, style);
+            render_lfo_selector(f, content, &choices, current, style, theme);
         }
-        LfoField::TriggerReset => {
-            render_lfo_switch(f, content, "ON", "OFF", config.reset_on_trigger, style)
-        }
+        LfoField::TriggerReset => render_lfo_switch(
+            f,
+            content,
+            "ON",
+            "OFF",
+            config.reset_on_trigger,
+            style,
+            theme,
+        ),
         LfoField::StartPhase => {
             render_centered(
                 f,
@@ -1128,6 +1155,7 @@ pub(super) fn render_lfo_control(
                 },
                 config.start_phase.get(),
                 style,
+                theme,
             );
         }
         LfoField::RateMode => render_lfo_switch(
@@ -1137,6 +1165,7 @@ pub(super) fn render_lfo_control(
             "FREE",
             matches!(config.rate, LfoRate::Synced { .. }),
             style,
+            theme,
         ),
         LfoField::Rate => match config.rate {
             LfoRate::Synced { division } => {
@@ -1154,6 +1183,7 @@ pub(super) fn render_lfo_control(
                     &choices,
                     current,
                     style,
+                    theme,
                 );
                 render_centered(
                     f,
@@ -1185,6 +1215,7 @@ pub(super) fn render_lfo_control(
                     },
                     rate_percent.get(),
                     style,
+                    theme,
                 );
                 render_centered(
                     f,
@@ -1226,12 +1257,19 @@ pub(super) fn render_lfo_control(
                 },
                 config.depth.get(),
                 style,
+                theme,
             );
         }
     }
 }
 
-pub(super) fn render_lfo_fader(f: &mut ratatui::Frame, area: Rect, value: u8, active_style: Style) {
+pub(super) fn render_lfo_fader(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    value: u8,
+    active_style: Style,
+    theme: Theme,
+) {
     let height = area.height.min(10);
     let start_y = area.y + area.height.saturating_sub(height) / 2;
     let filled = fader_segments(value);
@@ -1240,7 +1278,7 @@ pub(super) fn render_lfo_fader(f: &mut ratatui::Frame, area: Rect, value: u8, ac
         let style = if is_filled {
             active_style
         } else {
-            lfo_inactive_style(active_style)
+            lfo_inactive_style(active_style, theme)
         };
         render_centered(
             f,
@@ -1263,6 +1301,7 @@ pub(super) fn render_lfo_switch(
     bottom: &str,
     top_selected: bool,
     style: Style,
+    theme: Theme,
 ) {
     if area.height == 0 {
         return;
@@ -1276,7 +1315,7 @@ pub(super) fn render_lfo_switch(
         if top_selected {
             style
         } else {
-            lfo_inactive_style(style)
+            lfo_inactive_style(style, theme)
         },
     );
     for y in top_y + 1..bottom_y {
@@ -1289,7 +1328,7 @@ pub(super) fn render_lfo_switch(
                 width: area.width,
                 height: 1,
             },
-            lfo_inactive_style(style),
+            lfo_inactive_style(style, theme),
         );
     }
     if area.height > 1 {
@@ -1302,7 +1341,7 @@ pub(super) fn render_lfo_switch(
                 ..area
             },
             if top_selected {
-                lfo_inactive_style(style)
+                lfo_inactive_style(style, theme)
             } else {
                 style
             },
@@ -1316,6 +1355,7 @@ pub(super) fn render_lfo_selector<T: AsRef<str>>(
     choices: &[T],
     selected: usize,
     style: Style,
+    theme: Theme,
 ) {
     if area.height == 0 || choices.is_empty() {
         return;
@@ -1336,7 +1376,7 @@ pub(super) fn render_lfo_selector<T: AsRef<str>>(
         let choice_style = if index == selected {
             style
         } else {
-            lfo_inactive_style(style)
+            lfo_inactive_style(style, theme)
         };
         render_centered(
             f,
@@ -1352,11 +1392,11 @@ pub(super) fn render_lfo_selector<T: AsRef<str>>(
     }
 }
 
-pub(super) fn lfo_inactive_style(active_style: Style) -> Style {
-    if active_style.add_modifier.contains(Modifier::REVERSED) {
+pub(super) fn lfo_inactive_style(active_style: Style, theme: Theme) -> Style {
+    if active_style.bg.is_some() {
         active_style
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.disabled())
     }
 }
 
@@ -1379,6 +1419,7 @@ pub(super) fn render_project_browser(
     area: Rect,
     entries: &[PathBuf],
     selected: usize,
+    theme: Theme,
 ) {
     render_file_browser(
         f,
@@ -1387,6 +1428,7 @@ pub(super) fn render_project_browser(
         selected,
         "Open project",
         "No projects in your Terminal Groove Projects folder",
+        theme,
     );
 }
 
@@ -1395,6 +1437,7 @@ pub(super) fn render_preset_browser(
     area: Rect,
     entries: &[super::state::PresetBrowserEntry],
     selected: usize,
+    theme: Theme,
 ) {
     use super::state::PresetBrowserEntry;
     let popup_area = compact_popup_rect(area, 68, 24);
@@ -1410,12 +1453,12 @@ pub(super) fn render_preset_browser(
                 Line::styled(
                     "User",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.accent(0))
                         .add_modifier(Modifier::BOLD),
                 ),
                 Line::styled(
                     "  No user presets for this track kind",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.disabled()),
                 ),
             ]),
             inner,
@@ -1433,7 +1476,7 @@ pub(super) fn render_preset_browser(
                     lines.push(Line::styled(
                         "Built-in",
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme.accent(3))
                             .add_modifier(Modifier::BOLD),
                     ));
                     built = true;
@@ -1444,7 +1487,7 @@ pub(super) fn render_preset_browser(
                 lines.push(Line::styled(
                     format!("{} {name}", if index == selected { "▶" } else { " " }),
                     if index == selected {
-                        Style::default().add_modifier(Modifier::REVERSED)
+                        theme.selected()
                     } else {
                         Style::default()
                     },
@@ -1455,7 +1498,7 @@ pub(super) fn render_preset_browser(
                     lines.push(Line::styled(
                         "User",
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(theme.accent(0))
                             .add_modifier(Modifier::BOLD),
                     ));
                     user = true;
@@ -1467,7 +1510,7 @@ pub(super) fn render_preset_browser(
                 lines.push(Line::styled(
                     format!("{} {name}", if index == selected { "▶" } else { " " }),
                     if index == selected {
-                        Style::default().add_modifier(Modifier::REVERSED)
+                        theme.selected()
                     } else {
                         Style::default()
                     },
@@ -1479,12 +1522,12 @@ pub(super) fn render_preset_browser(
         lines.push(Line::styled(
             "User",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.accent(0))
                 .add_modifier(Modifier::BOLD),
         ));
         lines.push(Line::styled(
             "  No user presets",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.disabled()),
         ));
     }
     let description = match entries.get(selected) {
@@ -1505,8 +1548,11 @@ pub(super) fn render_preset_browser(
     );
     if let Some(description) = description {
         f.render_widget(
-            Paragraph::new(Line::styled(description, Style::default().fg(Color::Gray)))
-                .wrap(Wrap { trim: true }),
+            Paragraph::new(Line::styled(
+                description,
+                Style::default().fg(theme.muted()),
+            ))
+            .wrap(Wrap { trim: true }),
             Rect {
                 y: inner.y.saturating_add(list_height),
                 height: description_rows,
@@ -1522,6 +1568,7 @@ pub(super) fn render_preset_dialog(
     track_name: &str,
     selected: PresetAction,
     has_default: bool,
+    theme: Theme,
 ) {
     let popup_area = compact_popup_rect(area, 48, 9);
     f.render_widget(Clear, popup_area);
@@ -1539,9 +1586,9 @@ pub(super) fn render_preset_dialog(
             let marker = if active { "▶ " } else { "  " };
             let suffix = if disabled { " (unavailable)" } else { "" };
             let style = if disabled {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme.disabled())
             } else if active {
-                Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+                theme.selected()
             } else {
                 Style::default()
             };
@@ -1561,6 +1608,7 @@ fn render_file_browser(
     selected: usize,
     title: &str,
     empty_message: &str,
+    theme: Theme,
 ) {
     let popup_area = project_browser_popup_rect(area, entries.len());
     f.render_widget(Clear, popup_area);
@@ -1571,7 +1619,10 @@ fn render_file_browser(
     f.render_widget(block, popup_area);
 
     if entries.is_empty() {
-        f.render_widget(Paragraph::new(empty_message), inner);
+        f.render_widget(
+            Paragraph::new(empty_message).style(Style::default().fg(theme.muted())),
+            inner,
+        );
         return;
     }
 
@@ -1591,7 +1642,7 @@ fn render_file_browser(
                 .unwrap_or_else(|| "<unnamed>".into());
             let marker = if index == selected { "▶ " } else { "  " };
             let style = if index == selected {
-                Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+                theme.selected()
             } else {
                 Style::default()
             };

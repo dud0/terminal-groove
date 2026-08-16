@@ -18,6 +18,8 @@ struct Cli {
     list_audio_devices: bool,
     #[arg(long, value_name = "FRAMES")]
     audio_buffer: Option<u32>,
+    #[arg(long, value_enum, default_value_t = tui::ThemeProfile::Dark)]
+    theme: tui::ThemeProfile,
 }
 
 fn main() -> Result<()> {
@@ -40,5 +42,5 @@ fn main() -> Result<()> {
                 audio::default_audio_log_path().display()
             )
         })?;
-    tui::run(project, cli.project, &mut audio)
+    tui::run(project, cli.project, &mut audio, cli.theme)
 }
