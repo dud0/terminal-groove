@@ -3032,6 +3032,14 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
 }
 
 #[test]
+fn sequencer_legend_keeps_slide_and_tie_hints_at_minimum_size() {
+    let app = App::new(Project::new(), None);
+    let screen = rendered(&app, 120, 34);
+
+    assert!(screen.contains("underline slide  ─ tie"));
+}
+
+#[test]
 fn selected_track_title_uses_the_selected_step_highlight() {
     let mut app = App::new(Project::new(), None);
     app.row = 1;

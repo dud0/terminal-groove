@@ -2636,7 +2636,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             .header(Row::new(header_cells))
             .block(
                 Block::bordered().title(pattern_title).title_bottom(
-                    "▾ cursor  ▶ active lane  · empty  ▰ populated  x/X hit/accent  + condition/retrigger  Dᴼ note  */# lock  underline slide  ─ tie",
+                    "▾ cursor  ▶ active  · empty  ▰ populated  x/X hit/accent  + cond/retrig  Dᴼ note  */# lock  underline slide  ─ tie",
                 ),
             ),
         chunks[2],
