@@ -509,7 +509,7 @@ Adding or replacing a trigger or note automatically auditions it while transport
 
 ### 6.1 Layout
 
-At `120x34` or larger, the normal screen contains:
+At `120x34` or larger, the standard screen contains:
 
 1. Header: one metadata-only line containing the application name, a text-visible `● REC` badge while recording or `WAV FINALIZING` while a take is being closed, project filename or `Untitled`, dirty marker, audio device/status, transport state, pattern state, and tempo. If the current audio stream has had callback deadline overruns, the header also shows a text-visible warning badge with the cumulative count and maximum callback load percentage. Persistent command shortcut hints are not shown there; the `?` overlay contains the complete key map.
 2. Global row: all ten global controls and current values; their local shortcuts are shown in the detail cards.
@@ -540,9 +540,11 @@ Populated step cells, including ties, use a muted dark-gray background with an e
 
 Each pitched row includes its current input octave in the track label (for example, `Bass O3`).
 
-The sequencer grid uses 32 fixed-width cells per physical line with a visible divider after each 16-step bank. Steps 33 through 64 use a continuation line. Cells beyond a track's length are blank and cannot be selected. The detail panel is only as tall as its faders or global cards require, and all remaining vertical space is assigned to the sequencer. When expanded track blocks still exceed the pattern panel height, the panel scrolls by complete track blocks to keep the selected track visible. Wider terminals do not stretch individual step cells.
+The standard sequencer grid uses 32 fixed-width cells per physical line with a visible divider after each 16-step bank. Steps 33 through 64 use a continuation line. Cells beyond a track's length are blank and cannot be selected. The detail panel is only as tall as its faders or global cards require, and all remaining vertical space is assigned to the sequencer. When expanded track blocks still exceed the pattern panel height, the panel scrolls by complete track blocks to keep the selected track visible. Wider terminals do not stretch individual step cells.
 
-When the terminal is smaller than `120x34`, replace the main layout with the current size, required size, quit/help/recording keys, and the active `● REC` or `WAV FINALIZING` state. The project and audio engine remain active so resizing restores the normal view.
+At widths from `100` through `119` columns, the normal screen remains fully interactive in a narrow layout. Each physical sequencer line contains one 16-step bank with the same fixed-width event cells; additional banks use continuation lines within the track block. Up/Down navigation follows these 16-step physical rows, while bank navigation remains 16 steps. Header, global-row, status, legends, and card labels use compact text while retaining recording, transport, pattern, tempo, selection, and audio-status indicators. The detail panel and overlays shrink or wrap to the available width. At `100x34` or larger, all project and audio behavior remains active.
+
+When the terminal is smaller than `100x34`, replace the main layout with the current size, required size, quit/help/recording keys, and the active `● REC` or `WAV FINALIZING` state. The project and audio engine remain active so resizing restores the normal view.
 
 The interface uses an explicit rendering theme selected by `--theme dark`, `--theme light`, or `--theme high-contrast`; `dark` is the default. Theme selection is a UI preference and is not persisted in project files. Occupied step cells retain a fixed-width background rectangle in every theme, with an explicit foreground/background pair. Selected, playing, and selected-plus-playing cells use distinct explicit pairs. Important state remains text- or modifier-visible so color is supplementary rather than the only signal. Theme colors are centralized and profile-specific; ordinary terminal content is not allowed to depend on a terminal's default foreground when it is rendered over a tinted cell.
 
@@ -813,7 +815,7 @@ Round-trip default and populated version-24 projects, including Chord/FM voicing
 
 ### 12.3 TUI tests
 
-Use Ratatui `TestBackend` at `120x34` and larger to cover fixed-width grids, continuation rows, scrolling, navigation, length/doubling controls, small terminals, faders, switches, readouts, shortcuts, cursor/playhead styling, non-color indicators, BASE/LOCK scope, parameter precedence, event articulation, LFO/pitch-LFO/Voicing/FM-operator editors, dialogs, confirmations, help, and terminal restoration.
+Use Ratatui `TestBackend` at `100x34`, `120x34`, and larger to cover the narrow two-bank grid, standard fixed-width grids, continuation rows, scrolling, width-aware navigation, length/doubling controls, small terminals, faders, switches, readouts, shortcuts, cursor/playhead styling, non-color indicators, BASE/LOCK scope, parameter precedence, event articulation, LFO/pitch-LFO/Voicing/FM-operator editors, dialogs, confirmations, help, and terminal restoration.
 
 ### 12.4 DSP tests
 
@@ -821,7 +823,7 @@ Cover all eight FM routings, carrier normalization, operator ratio/index/feedbac
 
 ### 12.5 Manual acceptance scenarios
 
-1. Start an untitled project in a `120x34` terminal; navigate every row, enter events, and verify visible state, local shortcuts, playhead/cursor styling, and small-terminal behavior.
+1. Start an untitled project in `120x34` and `100x34` terminals; navigate every row, enter events, and verify standard and narrow grid state, local shortcuts, playhead/cursor styling, and small-terminal behavior.
 2. Build a drum loop; edit all drum parameters, accents, mute, sends, conditions, retriggers, swing, probability, and locks while stopped and playing. Verify 0% suppresses drums and retriggers, 100% preserves behavior, conditions are evaluated first, and pitched probability failures release active voices while ties remain held.
 3. Enter Bass, Chord, Lead, and FM notes with octave changes, accents, ordinary and wrapped ties; verify gates, releases, inherited locks, FM's lack of slide, Chord/FM voicings and arpeggiation, automatic FM stereo placement, and the Bass/Lead glide behavior.
 4. Edit all eight FM algorithms and four operator columns at BASE and LOCK scope, then edit synced/free LFOs and all track effects including bit-crusher depth/rate and flanger center delay/depth; verify route/role labels, faders, readouts, badges, modulation centers, smoothing, and next-pass live updates.

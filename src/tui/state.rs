@@ -12,6 +12,27 @@ use crate::{
 };
 use std::{path::PathBuf, time::Instant};
 
+pub(super) const NARROW_MIN_WIDTH: u16 = 100;
+pub(super) const STANDARD_MIN_WIDTH: u16 = 120;
+pub(super) const MIN_TERMINAL_HEIGHT: u16 = 34;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TerminalLayout {
+    Standard,
+    Narrow,
+    TooSmall,
+}
+
+pub(super) fn terminal_layout(width: u16, height: u16) -> TerminalLayout {
+    if height < MIN_TERMINAL_HEIGHT || width < NARROW_MIN_WIDTH {
+        TerminalLayout::TooSmall
+    } else if width < STANDARD_MIN_WIDTH {
+        TerminalLayout::Narrow
+    } else {
+        TerminalLayout::Standard
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
     Navigation,
@@ -298,6 +319,8 @@ pub struct App {
     pub(super) recording_state: RecordingState,
     pub(super) fader_animations: Vec<FaderAnimation>,
     pub(super) theme_profile: ThemeProfile,
+    terminal_width: u16,
+    terminal_height: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -373,6 +396,24 @@ impl App {
             recording_state: RecordingState::Idle,
             fader_animations: Vec::new(),
             theme_profile,
+            terminal_width: STANDARD_MIN_WIDTH,
+            terminal_height: MIN_TERMINAL_HEIGHT,
+        }
+    }
+
+    pub(super) fn set_terminal_size(&mut self, width: u16, height: u16) {
+        self.terminal_width = width;
+        self.terminal_height = height;
+    }
+
+    pub(super) fn terminal_layout(&self) -> TerminalLayout {
+        terminal_layout(self.terminal_width, self.terminal_height)
+    }
+
+    pub(super) fn grid_row_size(&self) -> usize {
+        match self.terminal_layout() {
+            TerminalLayout::Narrow => crate::model::STEP_BANK_SIZE,
+            TerminalLayout::Standard | TerminalLayout::TooSmall => crate::model::STEP_ROW_SIZE,
         }
     }
     pub(super) fn start_fader_animation(

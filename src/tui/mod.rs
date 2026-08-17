@@ -80,6 +80,8 @@ pub fn run(
     }));
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut app = App::new_with_theme(project, path, theme);
+    let initial_size = terminal.size()?;
+    app.set_terminal_size(initial_size.width, initial_size.height);
     let mut redraw = true;
     while !app.quit {
         audio.reap_retired();
@@ -101,7 +103,10 @@ pub fn run(
                         redraw = true;
                     }
                 }
-                Event::Resize(_, _) => redraw = true,
+                Event::Resize(width, height) => {
+                    app.set_terminal_size(width, height);
+                    redraw = true;
+                }
                 _ => {}
             }
         }

@@ -12,7 +12,7 @@ use super::{
     },
     controls::{GLOBAL_CONTROLS, global_control},
     input::parameter_supports_direct_percentage,
-    state::{App, DefaultPresetAction, Mode, ParameterBank},
+    state::{App, DefaultPresetAction, Mode, ParameterBank, TerminalLayout, terminal_layout},
     theme::Theme,
 };
 use crate::tui::DIRECT_PERCENTAGE_HINT;
@@ -1455,6 +1455,33 @@ pub(super) fn global_control_text(g: &crate::model::Globals) -> Vec<String> {
         .collect()
 }
 
+fn narrow_global_control_text(g: &crate::model::Globals) -> Vec<String> {
+    GLOBAL_CONTROLS
+        .iter()
+        .map(|control| {
+            let value = match control.id {
+                GlobalParameterId::Tempo => format!("{}", g.tempo_bpm),
+                GlobalParameterId::DelayDivision => g.delay_division.to_string(),
+                GlobalParameterId::DelayFeedback => format!("{}%", g.delay_feedback.get()),
+                GlobalParameterId::ReverbTime => format!("{:.1}s", g.reverb_time_seconds),
+                GlobalParameterId::ReverbTone => format!("{}%", g.reverb_tone.get()),
+                GlobalParameterId::ReverbPreDelay => format!("{}ms", g.reverb_pre_delay_ms),
+                GlobalParameterId::ReverbReturn => format!("{}%", g.reverb_return.get()),
+                GlobalParameterId::Ducking => {
+                    if g.sidechain.depth == crate::model::Percent::ZERO {
+                        "off".into()
+                    } else {
+                        format!("{}%", g.sidechain.depth.get())
+                    }
+                }
+                GlobalParameterId::Key => g.key.to_string(),
+                GlobalParameterId::Scale => g.scale.to_string(),
+            };
+            format!("{}{}", control.shortcut, value)
+        })
+        .collect()
+}
+
 pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
     let theme = Theme::new(a.theme_profile);
     let panel = Block::bordered().title("Global detail");
@@ -2250,6 +2277,18 @@ pub(super) fn render_centered(f: &mut ratatui::Frame, text: &str, area: Rect, st
     );
 }
 
+fn truncate_to_width(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_owned();
+    }
+    if width <= 1 {
+        return "…".chars().take(width).collect();
+    }
+    let mut result = text.chars().take(width - 1).collect::<String>();
+    result.push('…');
+    result
+}
+
 pub(super) fn draw(f: &mut ratatui::Frame, a: &App, audio: &Audio) {
     draw_with_device(f, a, &audio.device_name);
 }
@@ -2257,7 +2296,8 @@ pub(super) fn draw(f: &mut ratatui::Frame, a: &App, audio: &Audio) {
 pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &str) {
     let theme = Theme::new(a.theme_profile);
     let area = f.area();
-    if area.width < 120 || area.height < 34 {
+    let layout = terminal_layout(area.width, area.height);
+    if layout == TerminalLayout::TooSmall {
         let help_hint = if help_available(&a.mode) {
             "  [?] Help"
         } else {
@@ -2270,7 +2310,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         };
         f.render_widget(
             Paragraph::new(format!(
-                "terminal-groove needs 120x34\nCurrent: {}x{}\n[Ctrl+Q] Quit  [Ctrl+R] Record WAV{help_hint}{recording}",
+                "terminal-groove needs 100x34\nCurrent: {}x{}\n[Ctrl+Q] Quit  [Ctrl+R] Record WAV{help_hint}{recording}",
                 area.width, area.height,
             ))
             .block(Block::bordered().title("Terminal too small")),
@@ -2343,18 +2383,38 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             RecordingState::Recording => Span::styled(" ● REC ", theme.recording()),
             RecordingState::Finalizing => Span::styled(" WAV FINALIZING ", theme.warning()),
         },
-        Span::raw(format!(
-            " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
-            device_name, a.editor.project.globals.tempo_bpm
-        )),
+        Span::raw(if layout == TerminalLayout::Narrow {
+            format!(
+                " {}{} A:{} {} {} {}BPM",
+                truncate_to_width(file, 12),
+                dirty,
+                truncate_to_width(device_name, 10),
+                transport,
+                truncate_to_width(&pattern_state, 14),
+                a.editor.project.globals.tempo_bpm,
+            )
+        } else {
+            format!(
+                " {file}{dirty} | audio: {} | {transport} | {pattern_state} | {} BPM",
+                device_name, a.editor.project.globals.tempo_bpm
+            )
+        }),
     ];
     if a.callback_overruns > 0 {
         header_spans.push(Span::styled(
-            format!(
-                " | ⚠ audio overload: {}, max {}%",
-                a.callback_overruns,
-                a.max_callback_load_per_mille.div_ceil(10)
-            ),
+            if layout == TerminalLayout::Narrow {
+                format!(
+                    " !audio {}/{}%",
+                    a.callback_overruns,
+                    a.max_callback_load_per_mille.div_ceil(10)
+                )
+            } else {
+                format!(
+                    " | ⚠ audio overload: {}, max {}%",
+                    a.callback_overruns,
+                    a.max_callback_load_per_mille.div_ceil(10)
+                )
+            },
             theme.warning(),
         ));
     }
@@ -2362,7 +2422,12 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     f.render_widget(Paragraph::new(header), chunks[0]);
     let g = &a.editor.project.globals;
     let globals = global_control_text(g);
-    let line = globals
+    let global_text = if layout == TerminalLayout::Narrow {
+        narrow_global_control_text(g)
+    } else {
+        globals
+    };
+    let line = global_text
         .iter()
         .enumerate()
         .map(|(i, s)| {
@@ -2381,10 +2446,15 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         chunks[1],
     );
     let available_rows = chunks[2].height.saturating_sub(3) as usize;
+    let grid_row_size = if layout == TerminalLayout::Narrow {
+        STEP_BANK_SIZE
+    } else {
+        STEP_ROW_SIZE
+    };
     let heights = a.editor.project.patterns[a.editor.pattern()]
         .tracks
         .iter()
-        .map(|track| track.steps.len().div_ceil(STEP_ROW_SIZE))
+        .map(|track| track.steps.len().div_ceil(grid_row_size))
         .collect::<Vec<_>>();
     let selected_track = a.row.saturating_sub(1).min(TRACK_COUNT - 1);
     let mut first_track = selected_track;
@@ -2409,8 +2479,8 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         let steps = a.editor.active_steps(ti).unwrap();
         let length = steps.len();
         for line_index in 0..track_height {
-            let line_start = line_index * STEP_ROW_SIZE;
-            let line_end = (line_start + STEP_ROW_SIZE).min(length);
+            let line_start = line_index * grid_row_size;
+            let line_end = (line_start + grid_row_size).min(length);
             let mut cells: Vec<ratatui::widgets::Cell> = Vec::with_capacity(37);
             let lane_marker = if line_index == 0 && track.muted {
                 "M"
@@ -2434,8 +2504,8 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             });
             cells.push(format!(" {:02}–{:02}", line_start + 1, line_end).into());
             cells.push(ratatui::widgets::Cell::from("│"));
-            for slot in 0..STEP_ROW_SIZE {
-                if slot == STEP_BANK_SIZE {
+            for slot in 0..grid_row_size {
+                if layout != TerminalLayout::Narrow && slot == STEP_BANK_SIZE {
                     cells.push(ratatui::widgets::Cell::from("│"));
                 }
                 let step = line_start + slot;
@@ -2503,16 +2573,18 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         Constraint::Length(1),
     ];
     widths.extend((0..STEP_BANK_SIZE).map(|_| Constraint::Length(3)));
-    widths.push(Constraint::Length(1));
-    widths.extend((0..STEP_BANK_SIZE).map(|_| Constraint::Length(3)));
+    if layout != TerminalLayout::Narrow {
+        widths.push(Constraint::Length(1));
+        widths.extend((0..STEP_BANK_SIZE).map(|_| Constraint::Length(3)));
+    }
     let mut header_cells = vec![
         ratatui::widgets::Cell::from(" "),
         ratatui::widgets::Cell::from("Track"),
         ratatui::widgets::Cell::from(" Steps"),
         ratatui::widgets::Cell::from("│"),
     ];
-    let selected_column = (a.row > 0).then_some(a.step % STEP_ROW_SIZE);
-    header_cells.extend((1..=STEP_BANK_SIZE).map(|n| {
+    let selected_column = (a.row > 0).then_some(a.step % grid_row_size);
+    header_cells.extend((1..=grid_row_size).map(|n| {
         let selected = selected_column == Some(n - 1);
         let label = if selected {
             format!("▾{n:02}")
@@ -2528,23 +2600,25 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         };
         ratatui::widgets::Cell::from(label).style(style)
     }));
-    header_cells.push(ratatui::widgets::Cell::from("│"));
-    header_cells.extend(((STEP_BANK_SIZE + 1)..=STEP_ROW_SIZE).map(|n| {
-        let selected = selected_column == Some(n - 1);
-        let label = if selected {
-            format!("▾{n:02}")
-        } else {
-            format!(" {n:02}")
-        };
-        let style = if (n - 1) % 4 == 0 {
-            Style::default()
-                .fg(theme.accent(0))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        ratatui::widgets::Cell::from(label).style(style)
-    }));
+    if layout != TerminalLayout::Narrow {
+        header_cells.push(ratatui::widgets::Cell::from("│"));
+        header_cells.extend(((STEP_BANK_SIZE + 1)..=STEP_ROW_SIZE).map(|n| {
+            let selected = selected_column == Some(n - 1);
+            let label = if selected {
+                format!("▾{n:02}")
+            } else {
+                format!(" {n:02}")
+            };
+            let style = if (n - 1) % 4 == 0 {
+                Style::default()
+                    .fg(theme.accent(0))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ratatui::widgets::Cell::from(label).style(style)
+        }));
+    }
     let trigger_summary = if a.row > 0 {
         let track = a.row - 1;
         a.editor.active_steps(track).unwrap()[a.step]
@@ -2582,7 +2656,11 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             .header(Row::new(header_cells))
             .block(
                 Block::bordered().title(pattern_title).title_bottom(
-                    "▾ cursor  ▶ active  · empty  ▰ populated  x/X hit/accent  + cond/retrig  Dᴼ note  */# lock  underline slide  ─ tie",
+                    if layout == TerminalLayout::Narrow {
+                        "▾ cursor  ▶ active  · empty  ▰ populated  x/X hit  Dᴼ note  */# lock  ─ tie"
+                    } else {
+                        "▾ cursor  ▶ active  · empty  ▰ populated  x/X hit/accent  + cond/retrig  Dᴼ note  */# lock  underline slide  ─ tie"
+                    },
                 ),
             ),
         chunks[2],

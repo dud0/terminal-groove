@@ -25,8 +25,8 @@ use crate::{
     model::{
         ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, DRUM_TRACK_COUNT, DrumRecipeSlot,
         FmAlgorithm, FmOperatorField, FmRatio, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
-        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, STEP_ROW_SIZE,
-        StepEvent, TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
+        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, StepEvent,
+        TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
     },
     reducer::{Editor, Scope},
 };
@@ -1097,19 +1097,20 @@ pub(super) fn move_step_vertical(a: &mut App, down: bool) {
     }
 
     let track = a.row - 1;
-    let step_row = a.step / STEP_ROW_SIZE;
-    let column = a.step % STEP_ROW_SIZE;
+    let row_size = a.grid_row_size();
+    let step_row = a.step / row_size;
+    let column = a.step % row_size;
     let length = a.editor.active_steps(track).unwrap().len();
     if down {
-        if step_row + 1 < length.div_ceil(STEP_ROW_SIZE) {
-            a.step = ((step_row + 1) * STEP_ROW_SIZE + column).min(length - 1);
+        if step_row + 1 < length.div_ceil(row_size) {
+            a.step = ((step_row + 1) * row_size + column).min(length - 1);
         } else if track + 1 < TRACK_COUNT {
             let destination = track + 1;
             a.row = destination + 1;
             a.step = column.min(a.editor.active_steps(destination).unwrap().len() - 1);
         }
     } else if step_row > 0 {
-        a.step -= STEP_ROW_SIZE;
+        a.step -= row_size;
     } else if track == 0 {
         a.row = 0;
         a.scope = Scope::Base;
@@ -1117,8 +1118,8 @@ pub(super) fn move_step_vertical(a: &mut App, down: bool) {
         let destination = track - 1;
         let destination_length = a.editor.active_steps(destination).unwrap().len();
         a.row = destination + 1;
-        a.step = ((destination_length - 1) / STEP_ROW_SIZE * STEP_ROW_SIZE + column)
-            .min(destination_length - 1);
+        a.step =
+            ((destination_length - 1) / row_size * row_size + column).min(destination_length - 1);
     }
 }
 
@@ -1140,7 +1141,7 @@ pub(super) fn move_track_vertical(a: &mut App, down: bool) {
     }) else {
         return;
     };
-    let column = a.step % STEP_ROW_SIZE;
+    let column = a.step % a.grid_row_size();
     a.row = destination + 1;
     a.step = column.min(a.editor.active_steps(destination).unwrap().len() - 1);
     refresh_lock_recipe(a);

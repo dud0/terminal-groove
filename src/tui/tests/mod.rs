@@ -1564,9 +1564,9 @@ fn effects_tab_is_textually_selected_in_compact_track_detail() {
 #[test]
 fn small_terminal_replaces_main_layout() {
     let app = App::new(Project::new(), None);
-    let screen = rendered(&app, 119, 34);
-    assert!(screen.contains("terminal-groove needs 120x34"));
-    assert!(screen.contains("Current: 119x34"));
+    let screen = rendered(&app, 99, 34);
+    assert!(screen.contains("terminal-groove needs 100x34"));
+    assert!(screen.contains("Current: 99x34"));
     assert!(screen.contains("[?] Help"));
 
     let mut modal = App::new(Project::new(), None);
@@ -1574,8 +1574,60 @@ fn small_terminal_replaces_main_layout() {
         input: String::new(),
         return_to_global_parameter: false,
     };
-    let modal_screen = rendered(&modal, 119, 34);
+    let modal_screen = rendered(&modal, 99, 34);
     assert!(!modal_screen.contains("[?] Help"));
+}
+
+#[test]
+fn narrow_terminal_renders_each_step_bank_on_its_own_line() {
+    let mut project = Project::new();
+    project.patterns[0].tracks[0].steps.resize(64, None);
+    let mut app = App::new(project, None);
+    app.row = 1;
+    for width in [100, 110, 119] {
+        let screen = rendered(&app, width, 34);
+
+        assert!(!screen.contains("Terminal too small"));
+        assert!(screen.contains("01–16"));
+        assert!(screen.contains("17–32"));
+        assert!(screen.contains("33–48"));
+        assert!(screen.contains("49–64"));
+        assert!(screen.contains("t120"));
+        assert!(screen.contains("A:null"));
+    }
+}
+
+#[test]
+fn narrow_terminal_renders_editors_without_falling_back() {
+    let mut app = App::new(Project::new(), None);
+    app.row = 1;
+    for mode in [
+        Mode::ParameterEdit(ParameterId::Level),
+        Mode::TriggerEdit {
+            field: TriggerField::CycleLength,
+        },
+        Mode::SwingEdit,
+        Mode::TrackProbabilityEdit,
+    ] {
+        app.mode = mode;
+        assert!(!rendered(&app, 100, 34).contains("Terminal too small"));
+    }
+}
+
+#[test]
+fn narrow_terminal_vertical_navigation_uses_sixteen_step_rows() {
+    let mut project = Project::new();
+    project.patterns[0].tracks[0].steps.resize(64, None);
+    let mut app = App::new(project, None);
+    app.set_terminal_size(100, 34);
+    app.row = 1;
+
+    move_step_vertical(&mut app, true);
+    assert_eq!(app.step, 16);
+    move_step_vertical(&mut app, true);
+    assert_eq!(app.step, 32);
+    move_step_vertical(&mut app, false);
+    assert_eq!(app.step, 16);
 }
 
 #[test]
