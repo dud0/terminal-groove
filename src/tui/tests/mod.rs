@@ -1615,6 +1615,29 @@ fn narrow_terminal_renders_editors_without_falling_back() {
 }
 
 #[test]
+fn narrow_parameter_cards_keep_labels_and_origin_badges() {
+    let mut project = Project::new();
+    let lead = &mut project.tracks[LEAD_TRACK_INDEX];
+    if let crate::model::Instrument::Lead(parameters) = &mut lead.instrument {
+        parameters.filter_envelope = Percent::new(100).unwrap();
+    }
+    lead.lfos
+        .set(ParameterId::FilterEnvelope, Some(LfoConfig::default()));
+
+    let mut app = App::new(project, None);
+    app.row = LEAD_TRACK_INDEX + 1;
+    app.remembered_parameters[LEAD_TRACK_INDEX][ParameterBank::Params.index()] =
+        Some(ParameterFocus {
+            parameter: ParameterId::FilterEnvelope,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+        });
+
+    let screen = rendered(&app, 100, 34);
+    assert!(screen.contains("F.Env"));
+    assert!(screen.contains("100%B~"));
+}
+
+#[test]
 fn narrow_terminal_vertical_navigation_uses_sixteen_step_rows() {
     let mut project = Project::new();
     project.patterns[0].tracks[0].steps.resize(64, None);
@@ -3730,8 +3753,11 @@ fn theme_profiles_keep_occupied_step_rectangles_readable() {
 fn sequencer_legend_keeps_slide_and_tie_hints_at_minimum_size() {
     let app = App::new(Project::new(), None);
     let screen = rendered(&app, 120, 34);
+    let narrow = rendered(&app, 100, 34);
 
     assert!(screen.contains("underline slide  ─ tie"));
+    assert!(narrow.contains("+ cond/retrig"));
+    assert!(narrow.contains("underline slide"));
 }
 
 #[test]

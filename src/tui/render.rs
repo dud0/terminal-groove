@@ -1642,7 +1642,67 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
     }
 }
 
-pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App, track: usize) {
+fn parameter_card_is_active(
+    a: &App,
+    kind: TrackKind,
+    parameter: ParameterId,
+    recipe: crate::model::DrumRecipeSlot,
+) -> bool {
+    matches!(
+        a.mode,
+        Mode::ParameterEdit(active)
+            if active == parameter
+                && (!is_recipe_parameter(kind, parameter) || a.parameter_recipe == recipe)
+    ) || matches!(
+        a.mode,
+        Mode::LfoEdit { parameter: active, .. }
+            if active == parameter
+                && (!is_recipe_parameter(kind, parameter) || a.parameter_recipe == recipe)
+    )
+}
+
+fn narrow_parameter_label(descriptor: &ParameterDescriptor) -> &str {
+    match descriptor.label {
+        "Filt Env" => "F.Env",
+        "Sub mode" => "Sub",
+        label => label,
+    }
+}
+
+fn narrow_parameter_value_label(value: ParameterValue) -> String {
+    match value {
+        ParameterValue::LeadSubMode(mode) => match mode {
+            crate::model::LeadSubMode::OneOctaveSquare => "1SQ".into(),
+            crate::model::LeadSubMode::TwoOctaveSquare => "2SQ".into(),
+            crate::model::LeadSubMode::TwoOctaveNarrowPulse => "2NP".into(),
+        },
+        ParameterValue::FmAlgorithm(mode) => match mode {
+            FmAlgorithm::Cascade => "C".into(),
+            FmAlgorithm::SplitStack => "SS".into(),
+            FmAlgorithm::Converge => "CV".into(),
+            FmAlgorithm::Pairs => "P".into(),
+            FmAlgorithm::FanIn => "FI".into(),
+            FmAlgorithm::FanOut => "FO".into(),
+            FmAlgorithm::Mixed => "M".into(),
+            FmAlgorithm::Additive => "A".into(),
+        },
+        ParameterValue::Percent(value) => format!("{}%", value.get()),
+        ParameterValue::Waveform(Waveform::Square) => "SQR".into(),
+        ParameterValue::Waveform(Waveform::Saw) => "SAW".into(),
+        ParameterValue::Chorus(ChorusMode::Off) => "OFF".into(),
+        ParameterValue::Chorus(ChorusMode::I) => "I".into(),
+        ParameterValue::Chorus(ChorusMode::Ii) => "II".into(),
+        ParameterValue::FmRatio(value) => format!("{}:1", value),
+    }
+}
+
+pub(super) fn render_parameter_bank(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    a: &App,
+    track: usize,
+    narrow: bool,
+) {
     let theme = Theme::new(a.theme_profile);
     let t = &a.editor.project.tracks[track];
     let parameter_editing = matches!(a.mode, Mode::ParameterEdit(_));
@@ -1744,8 +1804,44 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         );
     let inner = panel.inner(area);
     f.render_widget(panel, area);
-    let slot_width = (inner.width / descriptors.len() as u16).min(10);
-    let bank_width = slot_width.saturating_mul(descriptors.len() as u16);
+    let slot_width = if narrow {
+        8.min(inner.width.max(1))
+    } else {
+        (inner.width / descriptors.len() as u16).min(10)
+    };
+    let visible_count = if narrow {
+        (inner.width / slot_width).max(1) as usize
+    } else {
+        descriptors.len()
+    }
+    .min(descriptors.len());
+    let focused_index = descriptors
+        .iter()
+        .enumerate()
+        .position(|(index, descriptor)| {
+            parameter_card_is_active(a, t.kind, descriptor.id, parameter_recipe(t.kind, index))
+        })
+        .or_else(|| {
+            a.remembered_parameters[track][a.parameter_bank.index()].and_then(|focus| {
+                descriptors
+                    .iter()
+                    .enumerate()
+                    .position(|(index, descriptor)| {
+                        descriptor.id == focus.parameter
+                            && parameter_recipe(t.kind, index) == focus.recipe
+                    })
+            })
+        })
+        .unwrap_or(0);
+    let visible_start = if narrow {
+        focused_index
+            .saturating_sub(visible_count / 2)
+            .min(descriptors.len().saturating_sub(visible_count))
+    } else {
+        0
+    };
+    let visible_end = visible_start + visible_count;
+    let bank_width = slot_width.saturating_mul(visible_count as u16);
     let bank = Rect {
         x: inner.x + inner.width.saturating_sub(bank_width) / 2,
         y: inner.y + 1,
@@ -1753,11 +1849,11 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         height: inner.height.saturating_sub(1),
     };
 
-    let mut group_start = 0;
-    while group_start < descriptors.len() {
+    let mut group_start = visible_start;
+    while group_start < visible_end {
         let group = descriptors[group_start].group;
         let group_recipe = parameter_recipe(t.kind, group_start);
-        let group_end = descriptors[group_start..]
+        let group_end = descriptors[group_start..visible_end]
             .iter()
             .enumerate()
             .position(|(offset, descriptor)| {
@@ -1768,7 +1864,7 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             .map(|offset| group_start + offset)
             .unwrap_or(descriptors.len());
         let group_area = Rect {
-            x: bank.x + slot_width * group_start as u16,
+            x: bank.x + slot_width * (group_start - visible_start) as u16,
             y: inner.y,
             width: slot_width * (group_end - group_start) as u16,
             height: 1,
@@ -1798,30 +1894,23 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
         group_start = group_end;
     }
 
-    for (index, descriptor) in descriptors.iter().enumerate() {
+    for (index, descriptor) in descriptors
+        .iter()
+        .enumerate()
+        .skip(visible_start)
+        .take(visible_count)
+    {
         let recipe = parameter_recipe(t.kind, index);
         let enabled = a.scope == Scope::Base
             || !is_recipe_parameter(t.kind, descriptor.id)
             || selected_drum_recipe(a, track) == recipe;
         let slot = Rect {
-            x: bank.x + slot_width * index as u16,
+            x: bank.x + slot_width * (index - visible_start) as u16,
             y: bank.y,
             width: slot_width,
             height: bank.height,
         };
-        let active = matches!(
-            a.mode,
-            Mode::ParameterEdit(parameter)
-                if parameter == descriptor.id
-                    && (!is_recipe_parameter(t.kind, descriptor.id)
-                        || a.parameter_recipe == recipe)
-        ) || matches!(
-            a.mode,
-            Mode::LfoEdit { parameter, .. }
-                if parameter == descriptor.id
-                    && (!is_recipe_parameter(t.kind, descriptor.id)
-                        || a.parameter_recipe == recipe)
-        );
+        let active = parameter_card_is_active(a, t.kind, descriptor.id, recipe);
         let group_color = descriptor.group.color(theme);
         let content = Rect {
             x: slot.x + 1,
@@ -1884,6 +1973,11 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             ParameterValue::LeadSubMode(value) => format!("{value:?}"),
             ParameterValue::FmAlgorithm(value) => value.to_string(),
             ParameterValue::FmRatio(value) => format!("{value}:1"),
+        };
+        let value_label = if narrow {
+            narrow_parameter_value_label(value)
+        } else {
+            value_label
         };
         let has_lfo = t.lfos.get(descriptor.id).is_some();
         let compact_origin = match origin {
@@ -2008,7 +2102,16 @@ pub(super) fn render_parameter_bank(f: &mut ratatui::Frame, area: Rect, a: &App,
             width: content.width,
             height: 1,
         };
-        render_centered(f, descriptor.label, label_area, style);
+        render_centered(
+            f,
+            if narrow {
+                narrow_parameter_label(descriptor)
+            } else {
+                descriptor.label
+            },
+            label_area,
+            style,
+        );
         if compact {
             continue;
         }
@@ -2657,7 +2760,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             .block(
                 Block::bordered().title(pattern_title).title_bottom(
                     if layout == TerminalLayout::Narrow {
-                        "▾ cursor  ▶ active  · empty  ▰ populated  x/X hit  Dᴼ note  */# lock  ─ tie"
+                        "▾ cursor ▶ active · empty ▰ populated x/X hit + cond/retrig Dᴼ note */# lock underline slide ─ tie"
                     } else {
                         "▾ cursor  ▶ active  · empty  ▰ populated  x/X hit/accent  + cond/retrig  Dᴼ note  */# lock  underline slide  ─ tie"
                     },
@@ -2669,7 +2772,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         render_global_cards(f, chunks[3], a);
     } else {
         let track = a.row - 1;
-        render_parameter_bank(f, chunks[3], a, track);
+        render_parameter_bank(f, chunks[3], a, track, layout == TerminalLayout::Narrow);
     }
     let lock_editing = a.scope == Scope::Lock
         && matches!(
