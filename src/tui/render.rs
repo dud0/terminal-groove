@@ -29,7 +29,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Row, Table},
+    widgets::{Block, Paragraph, Row, Table},
 };
 
 pub(super) fn scope_name(scope: Scope) -> &'static str {
@@ -57,6 +57,9 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::TriggerEdit { .. } => "Trigger editor".into(),
         Mode::SwingEdit => "Track swing edit".into(),
         Mode::TrackProbabilityEdit => "Track probability edit".into(),
+        Mode::GlobalParameterEdit(id) => {
+            format!("Global parameter edit ({})", global_name(*id))
+        }
         Mode::GlobalEdit(id) => format!("Global edit ({})", global_name(*id)),
         Mode::SidechainEdit { .. } => "Ducking editor".into(),
         Mode::TempoInput(_) => "Tempo numeric input".into(),
@@ -88,6 +91,7 @@ pub(super) fn help_available(mode: &Mode) -> bool {
             | Mode::TriggerEdit { .. }
             | Mode::SwingEdit
             | Mode::TrackProbabilityEdit
+            | Mode::GlobalParameterEdit(_)
     )
 }
 
@@ -1460,6 +1464,14 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
         return;
     }
     let g = &a.editor.project.globals;
+    let compact = !matches!(
+        a.mode,
+        Mode::GlobalParameterEdit(_)
+            | Mode::GlobalEdit(_)
+            | Mode::TempoInput(_)
+            | Mode::SidechainEdit { .. }
+    );
+    let segment_count: u16 = if compact { 5 } else { 10 };
 
     let slot_width = (inner.width / GLOBAL_CONTROLS.len() as u16).min(10);
     let bank_width = slot_width.saturating_mul(GLOBAL_CONTROLS.len() as u16);
@@ -1503,33 +1515,18 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
             width: slot_width,
             height: bank.height,
         };
-        let active = matches!(&a.mode, Mode::GlobalEdit(active_id) if *active_id == id)
-            || matches!(&a.mode, Mode::TempoInput(_) if id == GlobalParameterId::Tempo)
-            || matches!(&a.mode, Mode::SidechainEdit { .. } if id == GlobalParameterId::Ducking);
-        let block = if active {
-            Block::default()
-                .borders(Borders::LEFT | Borders::RIGHT)
-                .border_type(BorderType::Double)
-                .border_style(
-                    Style::default()
-                        .fg(theme.accent(3))
-                        .add_modifier(Modifier::BOLD),
-                )
-                .style(theme.selected())
-        } else {
-            Block::default()
+        let active = a.row == 0 && a.global == index;
+        let content = Rect {
+            x: slot.x + 1,
+            y: slot.y,
+            // Match track-card geometry so the odd-width fader/text stays
+            // visually centered inside a ten-column slot.
+            width: slot.width.saturating_sub(1),
+            height: slot.height,
         };
-        let content = if active {
-            block.inner(slot)
-        } else {
-            Rect {
-                x: slot.x + 1,
-                y: slot.y,
-                width: slot.width.saturating_sub(2),
-                height: slot.height,
-            }
-        };
-        f.render_widget(block, slot);
+        if active {
+            f.render_widget(Block::default().style(theme.selected()), content);
+        }
         let group_color = control.group.color(theme);
         let style = if active {
             theme.selected()
@@ -1539,6 +1536,8 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
                 .add_modifier(Modifier::BOLD)
         };
         if let Some(filled) = global_fader_segments(g, id) {
+            let filled =
+                ((filled * usize::from(segment_count) + 5) / 10).min(usize::from(segment_count));
             render_centered(
                 f,
                 &global_value_text(g, id),
@@ -1548,8 +1547,9 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
                 },
                 style,
             );
-            for segment in 0..10 {
-                let is_filled = usize::from(segment) >= 10usize.saturating_sub(filled);
+            for segment in 0..segment_count {
+                let is_filled =
+                    usize::from(segment) >= usize::from(segment_count).saturating_sub(filled);
                 let segment_style = if active || is_filled {
                     style
                 } else {
@@ -1571,7 +1571,7 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
             render_lfo_selector(
                 f,
                 Rect {
-                    height: 11,
+                    height: segment_count,
                     ..content
                 },
                 &choices,
@@ -1594,22 +1594,24 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
             f,
             control.detail_label,
             Rect {
-                y: content.y + 11,
+                y: content.y + 1 + segment_count,
                 height: 1,
                 ..content
             },
             style,
         );
-        render_centered(
-            f,
-            &format!("[{}]", global_shortcut_text(id)),
-            Rect {
-                y: content.y + 12,
-                height: 1,
-                ..content
-            },
-            style,
-        );
+        if !compact {
+            render_centered(
+                f,
+                &format!("[{}]", global_shortcut_text(id)),
+                Rect {
+                    y: content.y + 2 + segment_count,
+                    height: 1,
+                    ..content
+                },
+                style,
+            );
+        }
     }
 }
 
@@ -2276,12 +2278,23 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         );
         return;
     }
-    let details_height =
-        if a.row > 0 && !matches!(a.mode, Mode::ParameterEdit(_) | Mode::ChordEdit { .. }) {
-            10
-        } else {
+    let details_height = if a.row == 0 {
+        if matches!(
+            a.mode,
+            Mode::GlobalParameterEdit(_)
+                | Mode::GlobalEdit(_)
+                | Mode::TempoInput(_)
+                | Mode::SidechainEdit { .. }
+        ) {
             16
-        };
+        } else {
+            10
+        }
+    } else if matches!(a.mode, Mode::ParameterEdit(_) | Mode::ChordEdit { .. }) {
+        16
+    } else {
+        10
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -2635,6 +2648,10 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
     } else if matches!(a.mode, Mode::ChordEdit { .. }) {
         status_lines.push(Line::from(
             "Voicing · [←/→] field  [↑/↓] adjust  [PageUp/Down] step  [1–8] note  [ / ] octave  [Enter/Esc] finish",
+        ));
+    } else if matches!(a.mode, Mode::GlobalParameterEdit(_)) {
+        status_lines.push(Line::from(
+            "[↑/↓] adjust  [←/→] select another control  [Enter/Esc/Tab] finish",
         ));
     } else if matches!(a.mode, Mode::GlobalEdit(_) | Mode::TempoInput(_)) {
         status_lines.push(Line::from(

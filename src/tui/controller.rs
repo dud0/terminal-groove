@@ -868,6 +868,7 @@ pub(super) fn global_shortcut(c: char) -> Option<GlobalParameterId> {
         .map(|control| control.id)
 }
 pub(super) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
+    a.global = id as usize;
     a.mode = if id == GlobalParameterId::Tempo {
         Mode::TempoInput(String::new())
     } else if id == GlobalParameterId::Ducking {
@@ -878,6 +879,28 @@ pub(super) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
         Mode::GlobalEdit(id)
     };
     a.status = format!("Editing {}", global_name(id));
+}
+
+pub(super) fn enter_global_parameter_mode(a: &mut App, id: GlobalParameterId) {
+    a.global = id as usize;
+    a.mode = Mode::GlobalParameterEdit(id);
+    a.status = format!("Editing {}", global_name(id));
+}
+
+pub(super) fn move_global_parameter_editor(a: &mut App, forward: bool) {
+    let next = if forward {
+        (a.global + 1) % GLOBAL_CONTROLS.len()
+    } else {
+        (a.global + GLOBAL_CONTROLS.len() - 1) % GLOBAL_CONTROLS.len()
+    };
+    a.editor.end_coalescing();
+    enter_global_parameter_mode(a, global_id(next));
+}
+
+pub(super) fn finish_global_parameter_edit(a: &mut App) {
+    a.editor.end_coalescing();
+    a.mode = Mode::Navigation;
+    a.status = "Global parameter editing finished".into();
 }
 
 pub(super) fn move_global_editor(a: &mut App, forward: bool) {
@@ -918,6 +941,145 @@ pub(super) fn edit_global<F: FnOnce(&mut crate::model::Globals)>(
         a.status = format!("{} updated", global_name(id))
     }
 }
+
+fn adjust_global_parameter(
+    a: &mut App,
+    audio: &mut Audio,
+    id: GlobalParameterId,
+    direction: i16,
+    shifted: bool,
+) {
+    // Selectors are rendered top-to-bottom, so Up selects the previous value
+    // while faders and numeric controls increase on Up.
+    let selector_direction = -i32::from(direction);
+    match id {
+        GlobalParameterId::Tempo => {
+            let amount = if shifted { 5 } else { 1 };
+            edit_global(a, audio, id, move |g| {
+                g.tempo_bpm = (g.tempo_bpm as i16 + direction * amount).clamp(40, 240) as u16
+            });
+        }
+        GlobalParameterId::DelayDivision => edit_global(a, audio, id, move |g| {
+            let i = DelayDivision::ALL
+                .iter()
+                .position(|x| *x == g.delay_division)
+                .unwrap_or_default() as i32;
+            let last = DelayDivision::ALL.len().saturating_sub(1) as i32;
+            g.delay_division = DelayDivision::ALL[(i + selector_direction).clamp(0, last) as usize]
+        }),
+        GlobalParameterId::DelayFeedback => {
+            let amount = if shifted { 10 } else { 1 };
+            edit_global(a, audio, id, move |g| {
+                g.delay_feedback = Percent::new(
+                    (g.delay_feedback.get() as i16 + direction * amount).clamp(0, 95) as u8,
+                )
+                .unwrap()
+            });
+        }
+        GlobalParameterId::ReverbTime => {
+            let amount = if shifted { 1.0 } else { 0.1 };
+            edit_global(a, audio, id, move |g| {
+                g.reverb_time_seconds = ((g.reverb_time_seconds + direction as f32 * amount) * 10.0)
+                    .round()
+                    .clamp(2.0, 100.0)
+                    / 10.0
+            });
+        }
+        GlobalParameterId::ReverbTone => {
+            let amount = if shifted { 10 } else { 1 };
+            edit_global(a, audio, id, move |g| {
+                g.reverb_tone = g.reverb_tone.saturating_add(direction * amount)
+            });
+        }
+        GlobalParameterId::ReverbPreDelay => {
+            let amount = if shifted { 10 } else { 1 };
+            edit_global(a, audio, id, move |g| {
+                g.reverb_pre_delay_ms =
+                    (g.reverb_pre_delay_ms as i16 + direction * amount).clamp(0, 200) as u16
+            });
+        }
+        GlobalParameterId::ReverbReturn => {
+            let amount = if shifted { 10 } else { 1 };
+            edit_global(a, audio, id, move |g| {
+                g.reverb_return = g.reverb_return.saturating_add(direction * amount)
+            });
+        }
+        GlobalParameterId::Ducking => {
+            let amount = if shifted { 10 } else { 1 };
+            edit_global(a, audio, id, move |g| {
+                g.sidechain.depth = g.sidechain.depth.saturating_add(direction * amount)
+            });
+        }
+        GlobalParameterId::Key => edit_global(a, audio, id, move |g| {
+            g.key = g.key.shifted(selector_direction)
+        }),
+        GlobalParameterId::Scale => edit_global(a, audio, id, move |g| {
+            g.scale = g.scale.shifted(selector_direction)
+        }),
+    }
+}
+
+fn apply_global_percentage_key(
+    a: &mut App,
+    audio: &mut Audio,
+    id: GlobalParameterId,
+    c: char,
+) -> bool {
+    let Some(value) = crate::reducer::percentage_key(c) else {
+        return false;
+    };
+    let max = match id {
+        GlobalParameterId::DelayFeedback => 95,
+        GlobalParameterId::ReverbTone
+        | GlobalParameterId::ReverbReturn
+        | GlobalParameterId::Ducking => 100,
+        _ => return false,
+    };
+    let value = Percent::new(value.get().min(max)).unwrap();
+    edit_global(a, audio, id, move |g| match id {
+        GlobalParameterId::DelayFeedback => g.delay_feedback = value,
+        GlobalParameterId::ReverbTone => g.reverb_tone = value,
+        GlobalParameterId::ReverbReturn => g.reverb_return = value,
+        GlobalParameterId::Ducking => g.sidechain.depth = value,
+        _ => unreachable!(),
+    });
+    true
+}
+
+pub(super) fn handle_global_parameter_key(
+    a: &mut App,
+    audio: &mut Audio,
+    k: KeyEvent,
+) -> Result<bool> {
+    let Mode::GlobalParameterEdit(id) = a.mode else {
+        return Ok(false);
+    };
+    match k.code {
+        KeyCode::Esc | KeyCode::Enter => finish_global_parameter_edit(a),
+        KeyCode::Left => move_global_parameter_editor(a, false),
+        KeyCode::Right => move_global_parameter_editor(a, true),
+        KeyCode::Char(c) => {
+            if let Some(next) = global_shortcut(c) {
+                enter_global_parameter_mode(a, next);
+            } else if !apply_global_percentage_key(a, audio, id, c) {
+                return Ok(false);
+            }
+        }
+        KeyCode::Up | KeyCode::Down => {
+            let direction = if k.code == KeyCode::Up { 1 } else { -1 };
+            adjust_global_parameter(
+                a,
+                audio,
+                id,
+                direction,
+                k.modifiers.contains(KeyModifiers::SHIFT),
+            );
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
 pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
     let Mode::GlobalEdit(id) = a.mode else {
         return Ok(false);

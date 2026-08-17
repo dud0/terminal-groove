@@ -1076,6 +1076,9 @@ fn pitch_lfo_card_is_visible_for_chord_lead_and_fm_only() {
 fn help_hint_is_limited_to_supported_modes() {
     assert!(help_available(&Mode::Navigation));
     assert!(help_available(&Mode::ParameterEdit(ParameterId::Level)));
+    assert!(help_available(&Mode::GlobalParameterEdit(
+        GlobalParameterId::Tempo
+    )));
     assert!(help_available(&Mode::LfoEdit {
         parameter: ParameterId::Level,
         field: LfoField::Depth,
@@ -2153,23 +2156,34 @@ fn global_cards_show_all_local_shortcuts() {
 fn global_cards_use_semantic_groups_and_track_card_geometry() {
     let app = App::new(Project::new(), None);
     let lines = rendered_lines(&app, 120, 34);
+    let heading_line = lines
+        .iter()
+        .position(|line| line.contains("CLOCK"))
+        .expect("global group headings should be visible");
 
-    assert!(lines[17].contains("CLOCK"));
-    assert!(lines[17].contains("DELAY"));
-    assert!(lines[17].contains("REVERB"));
-    assert!(lines[17].contains("DUCKING"));
-    assert!(lines[17].contains("SCALE"));
-    assert!(!lines[18].contains("┌"));
-    assert!(!lines[18].contains("┬"));
-    assert!(lines[29].contains("Tempo"));
-    assert!(lines[30].contains("[t]"));
+    assert!(lines[heading_line].contains("DELAY"));
+    assert!(lines[heading_line].contains("REVERB"));
+    assert!(lines[heading_line].contains("DUCKING"));
+    assert!(lines[heading_line].contains("SCALE"));
+    assert!(!lines[heading_line + 1].contains("┌"));
+    assert!(!lines[heading_line + 1].contains("┬"));
+    let tempo_line = lines
+        .iter()
+        .enumerate()
+        .skip(heading_line + 1)
+        .find(|(_, line)| line.contains("Tempo"))
+        .map(|(index, _)| index)
+        .expect("compact global card should show its value");
+    assert!(tempo_line > heading_line);
+    assert!(!lines.iter().any(|line| line.contains("[t]")));
 
     let backend = TestBackend::new(120, 34);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| draw_with_device(frame, &app, "null"))
         .unwrap();
-    let group_heading = &terminal.backend().buffer().content[17 * 120..18 * 120];
+    let group_heading =
+        &terminal.backend().buffer().content[heading_line * 120..(heading_line + 1) * 120];
     let theme = super::theme::Theme::new(app.theme_profile);
     assert!(
         group_heading[10..20]
@@ -2196,6 +2210,116 @@ fn global_cards_use_semantic_groups_and_track_card_geometry() {
             .iter()
             .any(|cell| cell.symbol() == "S" && cell.fg == theme.accent(1))
     );
+}
+
+#[test]
+fn global_parameter_tab_mode_compacts_and_synchronizes_controls() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.global = GlobalParameterId::DelayFeedback as usize;
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 8);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(
+        app.mode,
+        Mode::GlobalParameterEdit(GlobalParameterId::DelayFeedback)
+    );
+    assert_eq!(app.global, GlobalParameterId::DelayFeedback as usize);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.global, GlobalParameterId::ReverbTime as usize);
+    assert_eq!(
+        app.mode,
+        Mode::GlobalParameterEdit(GlobalParameterId::ReverbTime)
+    );
+
+    let expanded = rendered(&app, 120, 34);
+    for key in [
+        "[t]", "[y]", "[f]", "[r]", "[b]", "[p]", "[m]", "[d]", "[k]", "[s]",
+    ] {
+        assert!(
+            expanded.contains(key),
+            "missing expanded global shortcut {key}"
+        );
+    }
+    assert!(!expanded.contains("║"));
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.mode, Mode::Navigation);
+    let compact = rendered(&app, 120, 34);
+    assert!(!compact.contains("[t]"));
+
+    let backend = TestBackend::new(120, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+    let selected_background = super::theme::Theme::new(app.theme_profile)
+        .selected()
+        .bg
+        .unwrap();
+    assert!(terminal.backend().buffer().content.chunks(120).any(|row| {
+        let columns = row
+            .iter()
+            .enumerate()
+            .filter_map(|(column, cell)| (cell.bg == selected_background).then_some(column))
+            .collect::<Vec<_>>();
+        columns.len() == 9 && columns.windows(2).all(|pair| pair[1] == pair[0] + 1)
+    }));
+}
+
+#[test]
+fn global_parameter_mode_adjusts_tempo_and_ducking_depth() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 8);
+
+    app.global = GlobalParameterId::Tempo as usize;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )
+    .unwrap();
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.editor.project.globals.tempo_bpm, 121);
+
+    app.global = GlobalParameterId::Ducking as usize;
+    app.mode = Mode::GlobalParameterEdit(GlobalParameterId::Ducking);
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.editor.project.globals.sidechain.depth.get(), 50);
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT),
+    )
+    .unwrap();
+    assert_eq!(app.editor.project.globals.sidechain.depth.get(), 60);
 }
 
 #[test]

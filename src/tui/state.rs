@@ -35,6 +35,7 @@ pub(crate) enum Mode {
     },
     SwingEdit,
     TrackProbabilityEdit,
+    GlobalParameterEdit(GlobalParameterId),
     GlobalEdit(GlobalParameterId),
     SidechainEdit {
         field: SidechainField,

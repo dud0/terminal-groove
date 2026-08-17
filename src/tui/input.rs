@@ -1,7 +1,8 @@
 use super::{
     controller::{
-        change_octave, enter_error, enter_global_edit, global_id, global_shortcut,
-        handle_default_preset_confirm, handle_file_input, handle_global_key, handle_new_confirm,
+        change_octave, enter_error, enter_global_edit, enter_global_parameter_mode,
+        finish_global_parameter_edit, global_id, global_shortcut, handle_default_preset_confirm,
+        handle_file_input, handle_global_key, handle_global_parameter_key, handle_new_confirm,
         handle_open_confirm, handle_overwrite_confirm, handle_preset_browser, handle_preset_dialog,
         handle_preset_name_input, handle_preset_overwrite_confirm, handle_project_browser,
         handle_sidechain_key, handle_tempo_input, new_project, preset_dialog_mode,
@@ -45,6 +46,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 | Mode::TriggerEdit { .. }
                 | Mode::SwingEdit
                 | Mode::TrackProbabilityEdit
+                | Mode::GlobalParameterEdit(_)
                 | Mode::GlobalEdit(_)
                 | Mode::SidechainEdit { .. }
                 | Mode::TempoInput(_)
@@ -226,16 +228,29 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         return Ok(());
     }
     if matches!(k.code, KeyCode::Tab | KeyCode::BackTab)
-        && matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_))
+        && matches!(
+            a.mode,
+            Mode::Navigation | Mode::ParameterEdit(_) | Mode::GlobalParameterEdit(_)
+        )
     {
         if a.mode == Mode::Navigation {
-            enter_parameter_mode(a);
+            if a.row == 0 {
+                enter_global_parameter_mode(a, global_id(a.global));
+            } else {
+                enter_parameter_mode(a);
+            }
+        } else if matches!(a.mode, Mode::GlobalParameterEdit(_)) {
+            finish_global_parameter_edit(a);
         } else {
             finish_parameter_edit(a);
         }
         return Ok(());
     }
-    if matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_)) && global_jump(k) {
+    if matches!(
+        a.mode,
+        Mode::Navigation | Mode::ParameterEdit(_) | Mode::GlobalParameterEdit(_)
+    ) && global_jump(k)
+    {
         select_global(a);
         return Ok(());
     }
@@ -261,6 +276,9 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         return Ok(());
     }
     if matches!(a.mode, Mode::ParameterEdit(_)) && handle_parameter_key(a, audio, k)? {
+        return Ok(());
+    }
+    if matches!(a.mode, Mode::GlobalParameterEdit(_)) && handle_global_parameter_key(a, audio, k)? {
         return Ok(());
     }
     if matches!(a.mode, Mode::GlobalEdit(_)) && handle_global_key(a, audio, k)? {
