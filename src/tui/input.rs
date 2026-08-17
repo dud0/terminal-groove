@@ -151,6 +151,9 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     }
     if k.modifiers.contains(KeyModifiers::CONTROL) {
         match k.code {
+            KeyCode::Char('k' | 'K') if is_clear_track_shortcut(&a.mode, a.row, k) => {
+                clear_selected_track(a, audio);
+            }
             KeyCode::Char('c' | 'C')
                 if a.row > 0 && matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_)) =>
             {
@@ -1231,10 +1234,21 @@ pub(super) fn duplicate_selected_track(a: &mut App, audio: &mut Audio) {
 }
 
 pub(super) fn is_clear_track_shortcut(mode: &Mode, row: usize, k: KeyEvent) -> bool {
-    *mode == Mode::Navigation
-        && row > 0
-        && matches!(k.code, KeyCode::Backspace | KeyCode::Delete)
-        && k.modifiers.contains(KeyModifiers::SHIFT)
+    if *mode != Mode::Navigation || row == 0 {
+        return false;
+    }
+
+    match k.code {
+        KeyCode::Char('k' | 'K') => {
+            k.modifiers.contains(KeyModifiers::CONTROL)
+                && !k.modifiers.contains(KeyModifiers::SHIFT)
+        }
+        KeyCode::Delete => {
+            k.modifiers.contains(KeyModifiers::SHIFT)
+                && !k.modifiers.contains(KeyModifiers::CONTROL)
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn clear_selected_track(a: &mut App, audio: &mut Audio) {

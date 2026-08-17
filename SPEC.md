@@ -365,7 +365,7 @@ The application uses ordinary portable terminal press events. It must not requir
 - On the global row, left/right cycles through global parameters and wraps.
 - `Enter` edits the selected global control or toggles/inserts the selected track event as defined in the sequencer model.
 - `Backspace` or `Delete` clears the selected event and its locks.
-- `Shift+Delete` or `Shift+Backspace` immediately clears every event and lock from the selected track in the active pattern. It preserves the track length and all non-sequence settings, and is one undoable edit.
+- `Ctrl+K` or `Shift+Delete` immediately clears every event and lock from the selected track in the active pattern. It preserves the track length and all non-sequence settings, and is one undoable edit.
 - `l` opens numeric track-length input. Digits plus Enter set an exact length; up/down changes it by 1 and Shift+up/down by 16, clamped to 1–64. Arrow changes apply immediately and remain applied on Esc.
 - `Tab` or `Shift+Tab` enters Parameter mode for the selected track at its remembered control in the active `PARAMS` or `EFFECTS` bank, including its Hi-hat or Tom recipe card where applicable, falling back to that bank's first compatible control. On the global row it enters Global Parameter mode for the selected global control. Tab, Shift+Tab, Enter, or Esc finishes track Parameter mode and returns to Sequencer mode. In Global Parameter mode, Tab, Shift+Tab, or Esc returns to Sequencer mode; Enter opens the selected Tempo or Ducking detail editor, while Enter on another global control finishes the mode.
 - `Esc` exits overlays or Parameter/Global Parameter mode first; from Sequencer mode it returns lock scope to `BASE`.
@@ -412,7 +412,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Sequencer or Parameter mode | `Shift+1`–`Shift+0` | Jump to the corresponding track |
 | Sequencer mode Track | `l` | Edit the selected track length from 1 through 64 steps |
 | Sequencer mode Track | `Shift+D` | Double the selected track by appending an exact copy, when its length is at most 32 |
-| Sequencer mode Track | `Shift+Delete` / `Shift+Backspace` | Clear all events and locks from the selected track in the active pattern |
+| Sequencer mode Track | `Ctrl+K` / `Shift+Delete` | Clear all events and locks from the selected track in the active pattern |
 | Sequencer mode Trigger, note, or empty step | `a` | Toggle event accent, or the track's input accent default on an empty step |
 | Sequencer mode Bass/Lead note | `Shift+G` | Toggle slide |
 | Sequencer mode Trigger/note | `Shift+T` | Edit microtiming, condition, cycle/chance values, and retrigger count |

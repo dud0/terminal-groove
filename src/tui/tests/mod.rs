@@ -1663,7 +1663,7 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
     assert!(screen.contains("SEQUENCER  ↑/↓ rows"));
     assert!(screen.contains("Shift+↑/↓ tracks"));
     assert!(screen.contains("= auto-advance"));
-    assert!(screen.contains("Shift+Delete/Backspace clear selected track"));
+    assert!(screen.contains("Ctrl+K / Shift+Delete clear selected track"));
     assert!(screen.contains("EVENTS & TRACKS  m mute"));
     assert!(screen.contains("PARAMETERS  v level"));
     assert!(screen.contains("Shift+← PARAMS · Shift+→ EFFECTS"));
@@ -1685,10 +1685,12 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
 }
 
 #[test]
-fn shifted_delete_or_backspace_is_limited_to_navigation_track_rows() {
+fn track_clear_shortcuts_are_limited_to_navigation_track_rows() {
     let clear = KeyEvent::new(KeyCode::Delete, KeyModifiers::SHIFT);
     assert!(is_clear_track_shortcut(&Mode::Navigation, 1, clear));
-    let clear = KeyEvent::new(KeyCode::Backspace, KeyModifiers::SHIFT);
+    let clear = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+    assert!(is_clear_track_shortcut(&Mode::Navigation, 1, clear));
+    let clear = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::CONTROL);
     assert!(is_clear_track_shortcut(&Mode::Navigation, 1, clear));
     assert!(!is_clear_track_shortcut(&Mode::Navigation, 0, clear));
     assert!(!is_clear_track_shortcut(
@@ -1699,8 +1701,39 @@ fn shifted_delete_or_backspace_is_limited_to_navigation_track_rows() {
     assert!(!is_clear_track_shortcut(
         &Mode::Navigation,
         1,
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::SHIFT),
+    ));
+    assert!(!is_clear_track_shortcut(
+        &Mode::Navigation,
+        1,
         KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
     ));
+}
+
+#[test]
+fn ctrl_k_clears_the_selected_track() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.row = 1;
+    app.editor.toggle_event(0, 0).unwrap();
+    assert!(app.editor.active_steps(0).unwrap()[0].is_some());
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 8);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+    )
+    .unwrap();
+
+    assert!(
+        app.editor
+            .active_steps(0)
+            .unwrap()
+            .iter()
+            .all(Option::is_none)
+    );
+    assert_eq!(app.status, "Kick: cleared 1 event(s)");
 }
 
 #[test]
@@ -3818,7 +3851,7 @@ fn main_layout_hides_non_parameter_shortcut_hints() {
         "[p]",
         "[m]",
         "[o]",
-        "[Shift+Delete]",
+        "[Ctrl+K]",
         "[Shift+D]",
     ] {
         assert!(

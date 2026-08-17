@@ -104,7 +104,7 @@ PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/que
 SEQUENCER  ↑/↓ rows · Shift+↑/↓ tracks · ←/→ steps · Shift+←/→ banks · = auto-advance
            Tab params · p LOCK params · ~ global · Shift+1..0 tracks · Enter event · Del/Bksp clear · Esc BASE
            g pattern generator · o audition selected step
-           Shift+Delete/Backspace clear selected track
+           Ctrl+K / Shift+Delete clear selected track
 EVENTS & TRACKS  m mute · l length · Shift+D double
                  a accent/default · Shift+G Bass/Lead slide · Shift+T microtiming/condition/retrigger · Shift+S swing · Shift+Q probability
                  Hat 1/2 Closed/Open · Tom 1/2/3 Low/Medium/High · 0 clear recipe locks
