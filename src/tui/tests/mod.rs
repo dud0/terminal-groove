@@ -816,6 +816,216 @@ fn shifted_track_numbers_select_the_expected_track() {
 }
 
 #[test]
+fn equals_toggles_session_auto_advance() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.row = 1;
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 4);
+
+    assert!(!app.auto_advance);
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('='), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert!(app.auto_advance);
+    assert_eq!(app.status, "Auto-advance on");
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('='), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert!(!app.auto_advance);
+    assert_eq!(app.status, "Auto-advance off");
+}
+
+#[test]
+fn auto_advance_moves_after_event_entry_but_not_clearing() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.row = 1;
+    app.auto_advance = true;
+    app.playing = true;
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 8);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.step, 1);
+    assert!(app.editor.active_steps(0).unwrap()[0].is_some());
+
+    app.step = 0;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.step, 0);
+    assert!(app.editor.active_steps(0).unwrap()[0].is_none());
+
+    app.step = 15;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.step, 0);
+}
+
+#[test]
+fn auto_advance_handles_notes_ties_and_recipes() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.auto_advance = true;
+    app.playing = true;
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 16);
+
+    app.row = SYNTH_TRACK_START + 1;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.step, 1);
+    assert!(matches!(
+        app.editor.active_steps(SYNTH_TRACK_START).unwrap()[0],
+        Some(StepEvent::BassNote { degree: 4, .. })
+    ));
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.step, 2);
+    assert!(matches!(
+        app.editor.active_steps(SYNTH_TRACK_START).unwrap()[1],
+        Some(StepEvent::Tie { .. })
+    ));
+
+    app.step = 5;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.step, 5);
+    assert!(app.editor.active_steps(SYNTH_TRACK_START).unwrap()[5].is_none());
+
+    app.row = 3;
+    app.step = 0;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.step, 1);
+    assert!(app.editor.active_steps(2).unwrap()[0].is_some());
+}
+
+#[test]
+fn auto_advance_keeps_the_voicing_editor_open() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.row = CHORD_TRACK_INDEX + 1;
+    app.auto_advance = true;
+    app.playing = true;
+    open_chord_editor(&mut app);
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 8);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE),
+    )
+    .unwrap();
+
+    assert_eq!(app.step, 1);
+    assert!(matches!(app.mode, Mode::ChordEdit { .. }));
+    assert!(matches!(
+        app.editor.active_steps(CHORD_TRACK_INDEX).unwrap()[0],
+        Some(StepEvent::Note { degree: 4, .. })
+    ));
+}
+
+#[test]
+fn shifted_vertical_navigation_skips_continuation_rows() {
+    let mut project = Project::new();
+    project.patterns[0].tracks[0].steps.resize(64, None);
+    project.patterns[0].tracks[1].steps.resize(20, None);
+    project.patterns[0].tracks[2].steps.resize(40, None);
+    let mut app = App::new(project.clone(), None);
+    app.row = 1;
+    app.step = 37;
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 4);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT),
+    )
+    .unwrap();
+    assert_eq!((app.row, app.step), (2, 5));
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT),
+    )
+    .unwrap();
+    assert_eq!((app.row, app.step), (3, 5));
+
+    app.step = 19;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT),
+    )
+    .unwrap();
+    assert_eq!((app.row, app.step), (4, 15));
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT),
+    )
+    .unwrap();
+    assert_eq!((app.row, app.step), (3, 15));
+
+    app.row = 1;
+    app.step = 7;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT),
+    )
+    .unwrap();
+    assert_eq!((app.row, app.step), (1, 7));
+
+    app.row = 0;
+    app.step = 12;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT),
+    )
+    .unwrap();
+    assert_eq!((app.row, app.step), (1, 0));
+}
+
+#[test]
 fn pitched_navigation_starts_after_all_drum_rows() {
     assert!(!input::is_pitched_track_row(DRUM_TRACK_COUNT));
     assert!(input::is_pitched_track_row(DRUM_TRACK_COUNT + 1));
@@ -1330,6 +1540,8 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
 
     assert!(screen.contains("PATTERNS  Ctrl+P open dialog"));
     assert!(screen.contains("SEQUENCER  ↑/↓ rows"));
+    assert!(screen.contains("Shift+↑/↓ tracks"));
+    assert!(screen.contains("= auto-advance"));
     assert!(screen.contains("Shift+Delete/Backspace clear selected track"));
     assert!(screen.contains("EVENTS & TRACKS  m mute"));
     assert!(screen.contains("PARAMETERS  v level"));
@@ -1347,6 +1559,7 @@ fn help_overlay_groups_contextual_shortcuts_and_direct_percentage_mapping() {
 
     let minimum_screen = rendered(&app, 120, 34);
     assert!(minimum_screen.contains("GLOBAL  t tempo"));
+    assert!(minimum_screen.contains("= auto-advance"));
     assert!(minimum_screen.contains("Esc BASE"));
 }
 

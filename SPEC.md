@@ -357,8 +357,10 @@ The application uses ordinary portable terminal press events. It must not requir
 ### 5.1 Sequencer mode
 
 - Up/down moves between physically adjacent sequencer rows, preserving the selected cell's 32-column position. It moves within a track's continuation row when present and otherwise into the adjacent track; unavailable columns clamp to the destination row's final valid step. Vertical navigation clamps at the global row and final track row.
+- Shift+up/down moves directly to the previous/next logical track, skipping continuation rows. It preserves the selected column within the 32-step physical row, selects the destination track's first physical row, and clamps at the first and final tracks. Shift+down from the global row selects Track 1; Shift+up from the global row is clamped.
 - Up from Track 1's first row selects the global row; down from the global row selects Track 1 step 1. Selecting globals resets parameter scope to `BASE`; moving within or between tracks preserves it.
 - On a track, left/right moves the selected step and wraps within its current length.
+- `=` toggles a session-only auto-advance mode, initially off. When enabled, successful direct entry or replacement of a trigger, note, drum recipe, or tie advances the cursor to the next step, wrapping within the selected track. Clearing an event, repeating an unchanged value, rejected edits, and synchronization failures do not advance. Note entry in the Chord/FM Voicing editor also advances while keeping that editor open.
 - Shift+left/right moves between 16-step banks, preserving the within-bank offset when it exists and clamping within a partial final bank.
 - On the global row, left/right cycles through global parameters and wraps.
 - `Enter` edits the selected global control or toggles/inserts the selected track event as defined in the sequencer model.
@@ -400,6 +402,8 @@ The application uses ordinary portable terminal press events. It must not requir
 | Sequencer, Parameter, LFO, or Voicing editor | `?` | Open the full help overlay |
 | Sequencer or Parameter mode | `~` (`Shift+\``) | Jump to the global-controls row |
 | Sequencer mode | `Shift+Left` / `Shift+Right` | Move to the previous/next 16-step bank |
+| Sequencer mode | `Shift+Up` / `Shift+Down` | Move to the previous/next track, skipping continuation rows |
+| Sequencer mode | `=` | Toggle session-only auto-advance after successful event entry |
 | Sequencer mode Track | `p` | Enter Parameter mode in `LOCK` scope at the track's remembered parameter |
 | Parameter mode | `p` | Toggle visible `BASE`/`LOCK` scope |
 | Parameter mode | `Shift+Left` / `Shift+Right` | Select the `PARAMS` / `EFFECTS` bank and restore its remembered control, or use its first compatible control |

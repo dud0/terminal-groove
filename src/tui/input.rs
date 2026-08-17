@@ -291,6 +291,15 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         return Ok(());
     }
     match k.code {
+        KeyCode::Char('=') if k.modifiers.is_empty() => {
+            a.auto_advance = !a.auto_advance;
+            a.status = if a.auto_advance {
+                "Auto-advance on"
+            } else {
+                "Auto-advance off"
+            }
+            .into();
+        }
         KeyCode::Char('p') if a.row > 0 => enter_lock_parameter_mode(a),
         KeyCode::Char('O')
             if a.row > 0 && a.editor.project.tracks[a.row - 1].kind == TrackKind::Fm =>
@@ -319,8 +328,14 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
             });
             a.status = "Generator ready".into();
         }
+        KeyCode::Up if k.modifiers.contains(KeyModifiers::SHIFT) => {
+            move_track_vertical(a, false);
+        }
         KeyCode::Up => {
             move_step_vertical(a, false);
+        }
+        KeyCode::Down if k.modifiers.contains(KeyModifiers::SHIFT) => {
+            move_track_vertical(a, true);
         }
         KeyCode::Down => {
             move_step_vertical(a, true);
@@ -346,15 +361,17 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         KeyCode::Enter if a.row == 0 => enter_global_edit(a, global_id(a.global)),
         KeyCode::Enter if a.row > 0 => {
             let (track, step) = (a.row - 1, a.step);
-            if apply(a, audio, |e| e.toggle_event(track, step))
-                && sync_project(a, audio)
-                && !a.playing
-                && a.editor.active_steps(track).unwrap()[step].is_some()
-            {
-                let _ = audio.send(AudioCommand::AutoAudition {
-                    track: track as u8,
-                    step: step as u8,
-                });
+            if apply(a, audio, |e| e.toggle_event(track, step)) && sync_project(a, audio) {
+                let inserted = a.editor.active_steps(track).unwrap()[step].is_some();
+                if inserted && !a.playing {
+                    let _ = audio.send(AudioCommand::AutoAudition {
+                        track: track as u8,
+                        step: step as u8,
+                    });
+                }
+                if inserted {
+                    advance_after_event_entry(a);
+                }
             }
         }
         KeyCode::Backspace | KeyCode::Delete if is_clear_track_shortcut(&a.mode, a.row, k) => {
@@ -447,8 +464,11 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         KeyCode::Char(']') if is_pitched_track_row(a.row) => change_octave(a, audio, 1),
         KeyCode::Char('t') if is_pitched_track_row(a.row) => {
             let (track, step) = (a.row - 1, a.step);
-            if apply(a, audio, |e| e.toggle_tie(track, step)) {
-                sync_project(a, audio);
+            if apply(a, audio, |e| e.toggle_tie(track, step))
+                && sync_project(a, audio)
+                && a.editor.active_steps(track).unwrap()[step].is_some()
+            {
+                advance_after_event_entry(a);
             }
         }
         KeyCode::Char(c @ '1'..='8') if is_pitched_track_row(a.row) => {
@@ -558,6 +578,18 @@ pub(super) fn move_step(a: &mut App, forward: bool) {
     } else {
         (a.step + length - 1) % length
     };
+}
+
+fn advance_after_event_entry(a: &mut App) {
+    if !a.auto_advance || a.row == 0 {
+        return;
+    }
+    if matches!(a.mode, Mode::ChordEdit { .. }) {
+        move_chord_editor_step(a, true);
+    } else {
+        move_step(a, true);
+        refresh_lock_recipe(a);
+    }
 }
 
 pub(super) fn is_pitched_track_row(row: usize) -> bool {
@@ -1088,6 +1120,30 @@ pub(super) fn move_step_vertical(a: &mut App, down: bool) {
         a.step = ((destination_length - 1) / STEP_ROW_SIZE * STEP_ROW_SIZE + column)
             .min(destination_length - 1);
     }
+}
+
+pub(super) fn move_track_vertical(a: &mut App, down: bool) {
+    if a.row == 0 {
+        if down {
+            a.row = 1;
+            a.step = 0;
+            a.scope = Scope::Base;
+        }
+        return;
+    }
+
+    let track = a.row - 1;
+    let Some(destination) = (if down {
+        track.checked_add(1).filter(|&next| next < TRACK_COUNT)
+    } else {
+        track.checked_sub(1)
+    }) else {
+        return;
+    };
+    let column = a.step % STEP_ROW_SIZE;
+    a.row = destination + 1;
+    a.step = column.min(a.editor.active_steps(destination).unwrap().len() - 1);
+    refresh_lock_recipe(a);
 }
 
 pub(super) fn normalize_cursor(a: &mut App) {
@@ -1739,17 +1795,14 @@ fn refresh_chord_editor_shape(a: &mut App) {
 
 fn enter_selected_note(a: &mut App, audio: &mut Audio, degree: u8) {
     let (track, step) = (a.row - 1, a.step);
-    let chord_editor = matches!(a.mode, Mode::ChordEdit { .. });
     if apply(a, audio, |editor| editor.set_note(track, step, degree)) && sync_project(a, audio) {
-        if chord_editor {
-            refresh_chord_editor_shape(a);
-        }
         if !a.playing {
             let _ = audio.send(AudioCommand::AutoAudition {
                 track: track as u8,
                 step: step as u8,
             });
         }
+        advance_after_event_entry(a);
     }
 }
 
@@ -2654,6 +2707,9 @@ fn apply_selected_recipe(a: &mut App, audio: &mut Audio, recipe: DrumRecipeSlot)
                     track: track as u8,
                     step: step as u8,
                 });
+            }
+            if changed {
+                advance_after_event_entry(a);
             }
         }
         Ok(_) => {}

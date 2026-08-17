@@ -101,7 +101,7 @@ const HELP_TEXT: &str =
       Ctrl+Q quit · Ctrl+R record WAV · Ctrl+Z undo · Ctrl+Y redo · Ctrl+C/X/V copy/cut/paste selected step
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete/Backspace remove · Esc close
-SEQUENCER  ↑/↓ rows · ←/→ steps (global row: controls) · Shift+←/→ step bank
+SEQUENCER  ↑/↓ rows · Shift+↑/↓ tracks · ←/→ steps · Shift+←/→ banks · = auto-advance
            Tab params · p LOCK params · ~ global · Shift+1..0 tracks · Enter event · Del/Bksp clear · Esc BASE
            g pattern generator · o audition selected step
            Shift+Delete/Backspace clear selected track
