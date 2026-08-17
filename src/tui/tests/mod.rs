@@ -961,6 +961,52 @@ fn auto_advance_keeps_the_voicing_editor_open() {
 }
 
 #[test]
+fn voicing_editor_refreshes_shape_after_non_advancing_note_entry() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.editor
+        .set_chord_shape(CHORD_TRACK_INDEX, 0, ChordShape::DyadFifth)
+        .unwrap();
+    app.editor.set_note(CHORD_TRACK_INDEX, 0, 1).unwrap();
+    app.editor
+        .set_chord_shape(CHORD_TRACK_INDEX, 2, ChordShape::Single)
+        .unwrap();
+    app.editor.toggle_tie(CHORD_TRACK_INDEX, 1).unwrap();
+    app.row = CHORD_TRACK_INDEX + 1;
+    app.step = 1;
+    open_chord_editor(&mut app);
+    assert_eq!(
+        app.mode,
+        Mode::ChordEdit {
+            shape: ChordShape::DyadFifth
+        }
+    );
+
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 8);
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE),
+    )
+    .unwrap();
+
+    assert_eq!(app.step, 1);
+    assert_eq!(
+        app.mode,
+        Mode::ChordEdit {
+            shape: ChordShape::Single
+        }
+    );
+    assert!(matches!(
+        app.editor.active_steps(CHORD_TRACK_INDEX).unwrap()[1],
+        Some(StepEvent::Note {
+            chord_shape: Some(ChordShape::Single),
+            ..
+        })
+    ));
+}
+
+#[test]
 fn shifted_vertical_navigation_skips_continuation_rows() {
     let mut project = Project::new();
     project.patterns[0].tracks[0].steps.resize(64, None);

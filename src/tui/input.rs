@@ -1796,6 +1796,10 @@ fn refresh_chord_editor_shape(a: &mut App) {
 fn enter_selected_note(a: &mut App, audio: &mut Audio, degree: u8) {
     let (track, step) = (a.row - 1, a.step);
     if apply(a, audio, |editor| editor.set_note(track, step, degree)) && sync_project(a, audio) {
+        let chord_editor = matches!(a.mode, Mode::ChordEdit { .. });
+        if chord_editor {
+            refresh_chord_editor_shape(a);
+        }
         if !a.playing {
             let _ = audio.send(AudioCommand::AutoAudition {
                 track: track as u8,
