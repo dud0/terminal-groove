@@ -868,12 +868,20 @@ pub(super) fn global_shortcut(c: char) -> Option<GlobalParameterId> {
         .map(|control| control.id)
 }
 pub(super) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
+    enter_global_detail_edit(a, id, false);
+}
+
+fn enter_global_detail_edit(a: &mut App, id: GlobalParameterId, return_to_global_parameter: bool) {
     a.global = id as usize;
     a.mode = if id == GlobalParameterId::Tempo {
-        Mode::TempoInput(String::new())
+        Mode::TempoInput {
+            input: String::new(),
+            return_to_global_parameter,
+        }
     } else if id == GlobalParameterId::Ducking {
         Mode::SidechainEdit {
             field: SidechainField::Depth,
+            return_to_global_parameter,
         }
     } else {
         Mode::GlobalEdit(id)
@@ -882,6 +890,7 @@ pub(super) fn enter_global_edit(a: &mut App, id: GlobalParameterId) {
 }
 
 pub(super) fn enter_global_parameter_mode(a: &mut App, id: GlobalParameterId) {
+    a.editor.end_coalescing();
     a.global = id as usize;
     a.mode = Mode::GlobalParameterEdit(id);
     a.status = format!("Editing {}", global_name(id));
@@ -893,7 +902,6 @@ pub(super) fn move_global_parameter_editor(a: &mut App, forward: bool) {
     } else {
         (a.global + GLOBAL_CONTROLS.len() - 1) % GLOBAL_CONTROLS.len()
     };
-    a.editor.end_coalescing();
     enter_global_parameter_mode(a, global_id(next));
 }
 
@@ -1055,7 +1063,13 @@ pub(super) fn handle_global_parameter_key(
         return Ok(false);
     };
     match k.code {
-        KeyCode::Esc | KeyCode::Enter => finish_global_parameter_edit(a),
+        KeyCode::Esc => finish_global_parameter_edit(a),
+        KeyCode::Enter => match id {
+            GlobalParameterId::Tempo | GlobalParameterId::Ducking => {
+                enter_global_detail_edit(a, id, true)
+            }
+            _ => finish_global_parameter_edit(a),
+        },
         KeyCode::Left => move_global_parameter_editor(a, false),
         KeyCode::Right => move_global_parameter_editor(a, true),
         KeyCode::Char(c) => {
@@ -1209,13 +1223,21 @@ pub(super) fn handle_global_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> 
 }
 
 pub(super) fn handle_sidechain_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<bool> {
-    let Mode::SidechainEdit { field } = a.mode else {
+    let Mode::SidechainEdit {
+        field,
+        return_to_global_parameter,
+    } = a.mode
+    else {
         return Ok(false);
     };
     match k.code {
         KeyCode::Esc | KeyCode::Enter => {
             a.editor.end_coalescing();
-            a.mode = Mode::Navigation;
+            a.mode = if return_to_global_parameter {
+                Mode::GlobalParameterEdit(GlobalParameterId::Ducking)
+            } else {
+                Mode::Navigation
+            };
         }
         KeyCode::Left | KeyCode::Right => {
             let direction = if k.code == KeyCode::Right { 1 } else { -1 };
@@ -1223,6 +1245,7 @@ pub(super) fn handle_sidechain_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
             a.editor.end_coalescing();
             a.mode = Mode::SidechainEdit {
                 field: SidechainField::ALL[index],
+                return_to_global_parameter,
             };
         }
         KeyCode::Char(c) if field == SidechainField::Depth => {
@@ -1253,21 +1276,35 @@ pub(super) fn handle_sidechain_key(a: &mut App, audio: &mut Audio, k: KeyEvent) 
     Ok(true)
 }
 pub(super) fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<()> {
-    let Mode::TempoInput(mut input) = a.mode.clone() else {
+    let Mode::TempoInput {
+        mut input,
+        return_to_global_parameter,
+    } = a.mode.clone()
+    else {
         return Ok(());
     };
     match k.code {
         KeyCode::Esc => {
             a.editor.end_coalescing();
-            a.mode = Mode::Navigation
+            a.mode = if return_to_global_parameter {
+                Mode::GlobalParameterEdit(GlobalParameterId::Tempo)
+            } else {
+                Mode::Navigation
+            }
         }
         KeyCode::Backspace => {
             input.pop();
-            a.mode = Mode::TempoInput(input)
+            a.mode = Mode::TempoInput {
+                input,
+                return_to_global_parameter,
+            }
         }
         KeyCode::Char(c @ '0'..='9') if input.len() < 3 => {
             input.push(c);
-            a.mode = Mode::TempoInput(input)
+            a.mode = Mode::TempoInput {
+                input,
+                return_to_global_parameter,
+            }
         }
         KeyCode::Up | KeyCode::Down => {
             let d = if k.modifiers.contains(KeyModifiers::SHIFT) {
@@ -1280,13 +1317,19 @@ pub(super) fn handle_tempo_input(a: &mut App, audio: &mut Audio, k: KeyEvent) ->
                 g.tempo_bpm = (g.tempo_bpm as i16 + d).clamp(40, 240) as u16
             })
         }
+        KeyCode::Left if return_to_global_parameter => move_global_parameter_editor(a, false),
+        KeyCode::Right if return_to_global_parameter => move_global_parameter_editor(a, true),
         KeyCode::Left => move_global_editor(a, false),
         KeyCode::Right => move_global_editor(a, true),
         KeyCode::Enter => match input.parse::<u16>() {
             Ok(v @ 40..=240) => {
                 edit_global(a, audio, GlobalParameterId::Tempo, move |g| g.tempo_bpm = v);
                 a.editor.end_coalescing();
-                a.mode = Mode::Navigation
+                a.mode = if return_to_global_parameter {
+                    Mode::GlobalParameterEdit(GlobalParameterId::Tempo)
+                } else {
+                    Mode::Navigation
+                }
             }
             _ => a.status = "Tempo must be an integer from 40 to 240".into(),
         },

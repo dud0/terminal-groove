@@ -1088,7 +1088,10 @@ fn help_hint_is_limited_to_supported_modes() {
     }));
     assert!(!help_available(&Mode::PatternDialog));
     assert!(!help_available(&Mode::GlobalEdit(GlobalParameterId::Key)));
-    assert!(!help_available(&Mode::TempoInput(String::new())));
+    assert!(!help_available(&Mode::TempoInput {
+        input: String::new(),
+        return_to_global_parameter: false,
+    }));
 }
 
 #[test]
@@ -1311,7 +1314,10 @@ fn small_terminal_replaces_main_layout() {
     assert!(screen.contains("[?] Help"));
 
     let mut modal = App::new(Project::new(), None);
-    modal.mode = Mode::TempoInput(String::new());
+    modal.mode = Mode::TempoInput {
+        input: String::new(),
+        return_to_global_parameter: false,
+    };
     let modal_screen = rendered(&modal, 119, 34);
     assert!(!modal_screen.contains("[?] Help"));
 }
@@ -2323,6 +2329,170 @@ fn global_parameter_mode_adjusts_tempo_and_ducking_depth() {
 }
 
 #[test]
+fn global_parameter_shortcuts_end_undo_coalescing() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 16);
+    app.global = GlobalParameterId::DelayFeedback as usize;
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )
+    .unwrap();
+    let initial = app.editor.project.globals.delay_feedback;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+    )
+    .unwrap();
+    let after_first = app.editor.project.globals.delay_feedback;
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(
+        app.editor.project.globals.delay_feedback.get(),
+        after_first.get() + 1
+    );
+
+    assert!(app.editor.undo());
+    assert_eq!(
+        app.editor.project.globals.delay_feedback.get(),
+        after_first.get()
+    );
+    assert!(app.editor.undo());
+    assert_eq!(
+        app.editor.project.globals.delay_feedback.get(),
+        initial.get()
+    );
+}
+
+#[test]
+fn global_parameter_enter_opens_and_closes_detailed_editors_in_place() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 16);
+
+    app.global = GlobalParameterId::Tempo as usize;
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )
+    .unwrap();
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(
+        app.mode,
+        Mode::TempoInput {
+            input: String::new(),
+            return_to_global_parameter: true,
+        }
+    );
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(
+        app.mode,
+        Mode::GlobalParameterEdit(GlobalParameterId::Tempo)
+    );
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    for digit in ['1', '8', '0'] {
+        handle_key(
+            &mut app,
+            &mut audio,
+            KeyEvent::new(KeyCode::Char(digit), KeyModifiers::NONE),
+        )
+        .unwrap();
+    }
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(
+        app.mode,
+        Mode::GlobalParameterEdit(GlobalParameterId::Tempo)
+    );
+    assert_eq!(app.editor.project.globals.tempo_bpm, 180);
+
+    app.global = GlobalParameterId::Ducking as usize;
+    app.mode = Mode::GlobalParameterEdit(GlobalParameterId::Ducking);
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(
+        app.mode,
+        Mode::SidechainEdit {
+            field: SidechainField::Depth,
+            return_to_global_parameter: true,
+        }
+    );
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(
+        app.mode,
+        Mode::GlobalParameterEdit(GlobalParameterId::Ducking)
+    );
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(
+        app.mode,
+        Mode::GlobalParameterEdit(GlobalParameterId::Ducking)
+    );
+}
+
+#[test]
 fn global_controls_keep_related_groups_contiguous() {
     use super::controls::GlobalParameterGroup;
 
@@ -2359,6 +2529,7 @@ fn sidechain_editor_renders_off_state_and_physical_readouts() {
     let mut app = App::new(Project::new(), None);
     app.mode = Mode::SidechainEdit {
         field: SidechainField::Depth,
+        return_to_global_parameter: false,
     };
     let screen = rendered(&app, 120, 34);
     assert!(screen.contains("Ducking"));
@@ -2374,11 +2545,18 @@ fn global_shortcuts_enter_editing_for_every_control() {
     for id in GLOBAL_CONTROLS.map(|control| control.id) {
         enter_global_edit(&mut app, id);
         match id {
-            GlobalParameterId::Tempo => assert_eq!(app.mode, Mode::TempoInput(String::new())),
+            GlobalParameterId::Tempo => assert_eq!(
+                app.mode,
+                Mode::TempoInput {
+                    input: String::new(),
+                    return_to_global_parameter: false,
+                }
+            ),
             GlobalParameterId::Ducking => assert_eq!(
                 app.mode,
                 Mode::SidechainEdit {
-                    field: SidechainField::Depth
+                    field: SidechainField::Depth,
+                    return_to_global_parameter: false,
                 }
             ),
             _ => assert_eq!(app.mode, Mode::GlobalEdit(id)),
@@ -2398,7 +2576,13 @@ fn global_editor_left_and_right_cycle_controls() {
 
     move_global_editor(&mut app, true);
     assert_eq!(app.global, 0);
-    assert_eq!(app.mode, Mode::TempoInput(String::new()));
+    assert_eq!(
+        app.mode,
+        Mode::TempoInput {
+            input: String::new(),
+            return_to_global_parameter: false,
+        }
+    );
 }
 
 #[test]
@@ -2481,7 +2665,10 @@ fn input_octave_adjustment_clamps_to_supported_range() {
 fn every_overlay_mode_has_a_visible_name() {
     assert_eq!(mode_name(&Mode::Navigation), "Sequencer");
     assert_eq!(
-        mode_name(&Mode::TempoInput(String::new())),
+        mode_name(&Mode::TempoInput {
+            input: String::new(),
+            return_to_global_parameter: false,
+        }),
         "Tempo numeric input"
     );
     assert_eq!(

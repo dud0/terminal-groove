@@ -39,8 +39,12 @@ pub(crate) enum Mode {
     GlobalEdit(GlobalParameterId),
     SidechainEdit {
         field: SidechainField,
+        return_to_global_parameter: bool,
     },
-    TempoInput(String),
+    TempoInput {
+        input: String,
+        return_to_global_parameter: bool,
+    },
     TrackLengthInput(String),
     ProjectBrowser {
         entries: Vec<PathBuf>,

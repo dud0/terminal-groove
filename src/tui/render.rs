@@ -62,7 +62,7 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         }
         Mode::GlobalEdit(id) => format!("Global edit ({})", global_name(*id)),
         Mode::SidechainEdit { .. } => "Ducking editor".into(),
-        Mode::TempoInput(_) => "Tempo numeric input".into(),
+        Mode::TempoInput { .. } => "Tempo numeric input".into(),
         Mode::TrackLengthInput(_) => "Track length input".into(),
         Mode::ProjectBrowser { .. } => "Project browser".into(),
         Mode::PresetBrowser { .. } => "Preset browser".into(),
@@ -1468,7 +1468,7 @@ pub(super) fn render_global_cards(f: &mut ratatui::Frame, area: Rect, a: &App) {
         a.mode,
         Mode::GlobalParameterEdit(_)
             | Mode::GlobalEdit(_)
-            | Mode::TempoInput(_)
+            | Mode::TempoInput { .. }
             | Mode::SidechainEdit { .. }
     );
     let segment_count: u16 = if compact { 5 } else { 10 };
@@ -2283,7 +2283,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             a.mode,
             Mode::GlobalParameterEdit(_)
                 | Mode::GlobalEdit(_)
-                | Mode::TempoInput(_)
+                | Mode::TempoInput { .. }
                 | Mode::SidechainEdit { .. }
         ) {
             16
@@ -2651,9 +2651,9 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         ));
     } else if matches!(a.mode, Mode::GlobalParameterEdit(_)) {
         status_lines.push(Line::from(
-            "[↑/↓] adjust  [←/→] select another control  [Enter/Esc/Tab] finish",
+            "[↑/↓] adjust  [←/→] select another control  [Enter] open Tempo/Ducking or finish  [Esc/Tab] finish",
         ));
-    } else if matches!(a.mode, Mode::GlobalEdit(_) | Mode::TempoInput(_)) {
+    } else if matches!(a.mode, Mode::GlobalEdit(_) | Mode::TempoInput { .. }) {
         status_lines.push(Line::from(
             "[↑/↓] adjust  [←/→] select another control  [Enter/Esc] finish",
         ));
@@ -2727,7 +2727,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         }
         Mode::ChordEdit { shape } => render_chord_popup(f, chunks[3], *shape, a),
         Mode::TriggerEdit { field } => render_trigger_popup(f, area, a, *field),
-        Mode::SidechainEdit { field } => render_sidechain_popup(f, area, a, *field),
+        Mode::SidechainEdit { field, .. } => render_sidechain_popup(f, area, a, *field),
         Mode::SwingEdit => popup_at(
             f,
             swing_popup_rect(area),
@@ -2748,7 +2748,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 a.editor.project.tracks[a.row - 1].probability,
             ),
         ),
-        Mode::TempoInput(input) => popup_at(
+        Mode::TempoInput { input, .. } => popup_at(
             f,
             tempo_popup_rect(area),
             "Tempo numeric input",

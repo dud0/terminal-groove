@@ -49,7 +49,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 | Mode::GlobalParameterEdit(_)
                 | Mode::GlobalEdit(_)
                 | Mode::SidechainEdit { .. }
-                | Mode::TempoInput(_)
+                | Mode::TempoInput { .. }
                 | Mode::TrackLengthInput(_)
         )
     {
@@ -92,7 +92,7 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
         handle_preset_browser(a, audio, k);
         return Ok(());
     }
-    if matches!(a.mode, Mode::TempoInput(_)) {
+    if matches!(a.mode, Mode::TempoInput { .. }) {
         return handle_tempo_input(a, audio, k);
     }
     if matches!(a.mode, Mode::SidechainEdit { .. }) {
