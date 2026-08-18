@@ -2392,6 +2392,22 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     result
 }
 
+fn track_divider_row(layout: TerminalLayout, color: Color) -> Row<'static> {
+    let style = Style::default().fg(color).add_modifier(Modifier::DIM);
+    let mut cells = vec![
+        ratatui::widgets::Cell::from("──").style(style),
+        ratatui::widgets::Cell::from("────────────").style(style),
+        ratatui::widgets::Cell::from("──────").style(style),
+        ratatui::widgets::Cell::from("┼").style(style),
+    ];
+    cells.extend((0..STEP_BANK_SIZE).map(|_| ratatui::widgets::Cell::from("───").style(style)));
+    if layout != TerminalLayout::Narrow {
+        cells.push(ratatui::widgets::Cell::from("┼").style(style));
+        cells.extend((0..STEP_BANK_SIZE).map(|_| ratatui::widgets::Cell::from("───").style(style)));
+    }
+    Row::new(cells)
+}
+
 pub(super) fn draw(f: &mut ratatui::Frame, a: &App, audio: &Audio) {
     draw_with_device(f, a, &audio.device_name);
 }
@@ -2559,19 +2575,23 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         .iter()
         .map(|track| track.steps.len().div_ceil(grid_row_size))
         .collect::<Vec<_>>();
+    let divider_height = 1;
     let selected_track = a.row.saturating_sub(1).min(TRACK_COUNT - 1);
     let mut first_track = selected_track;
-    let mut used_rows = heights[selected_track];
-    while first_track > 0 && used_rows + heights[first_track - 1] <= available_rows {
+    let mut used_rows = divider_height + heights[selected_track];
+    while first_track > 0 && used_rows + divider_height + heights[first_track - 1] <= available_rows
+    {
         first_track -= 1;
-        used_rows += heights[first_track];
+        used_rows += divider_height + heights[first_track];
     }
     let mut last_track = selected_track + 1;
-    while last_track < TRACK_COUNT && used_rows + heights[last_track] <= available_rows {
-        used_rows += heights[last_track];
+    while last_track < TRACK_COUNT
+        && used_rows + divider_height + heights[last_track] <= available_rows
+    {
+        used_rows += divider_height + heights[last_track];
         last_track += 1;
     }
-    let mut rows = Vec::new();
+    let mut rows = vec![track_divider_row(layout, theme.track_color(first_track))];
     for (ti, &track_height) in heights
         .iter()
         .enumerate()
@@ -2581,6 +2601,8 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
         let track = &a.editor.project.tracks[ti];
         let steps = a.editor.active_steps(ti).unwrap();
         let length = steps.len();
+        let track_color = theme.track_color(ti);
+        let track_style = Style::default().fg(track_color);
         for line_index in 0..track_height {
             let line_start = line_index * grid_row_size;
             let line_end = (line_start + grid_row_size).min(length);
@@ -2594,22 +2616,30 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
             } else {
                 " "
             };
-            cells.push(ratatui::widgets::Cell::from(format!("{lane_marker} ")));
+            let marker_style = if line_index == 0 && a.row == ti + 1 {
+                theme.selected_track()
+            } else {
+                track_style
+            };
+            cells.push(ratatui::widgets::Cell::from(format!("{lane_marker} ")).style(marker_style));
             cells.push(if line_index == 0 {
                 let style = if a.row == ti + 1 {
                     theme.selected_track()
                 } else {
-                    Style::default()
+                    track_style
                 };
                 ratatui::widgets::Cell::from(track_label(track)).style(style)
             } else {
-                "↳".into()
+                ratatui::widgets::Cell::from("↳").style(track_style)
             });
-            cells.push(format!(" {:02}–{:02}", line_start + 1, line_end).into());
-            cells.push(ratatui::widgets::Cell::from("│"));
+            cells.push(
+                ratatui::widgets::Cell::from(format!(" {:02}–{:02}", line_start + 1, line_end))
+                    .style(track_style),
+            );
+            cells.push(ratatui::widgets::Cell::from("│").style(track_style));
             for slot in 0..grid_row_size {
                 if layout != TerminalLayout::Narrow && slot == STEP_BANK_SIZE {
-                    cells.push(ratatui::widgets::Cell::from("│"));
+                    cells.push(ratatui::widgets::Cell::from("│").style(track_style));
                 }
                 let step = line_start + slot;
                 if step >= length {
@@ -2628,8 +2658,8 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                     // Do not rely on the terminal's default foreground here:
                     // light themes commonly make that black, which is hard to
                     // read on the occupied-cell tint.
-                    (false, false, true) => theme.occupied(),
-                    (false, false, false) => Style::default(),
+                    (false, false, true) => theme.occupied().fg(track_color),
+                    (false, false, false) => track_style,
                 };
                 if matches!(
                     steps[step],
@@ -2667,6 +2697,9 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 );
             }
             rows.push(Row::new(cells));
+        }
+        if ti + 1 < last_track {
+            rows.push(track_divider_row(layout, theme.track_color(ti + 1)));
         }
     }
     let mut widths = vec![

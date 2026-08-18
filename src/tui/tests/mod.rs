@@ -1594,6 +1594,7 @@ fn narrow_terminal_renders_each_step_bank_on_its_own_line() {
         assert!(screen.contains("49–64"));
         assert!(screen.contains("t120"));
         assert!(screen.contains("A:null"));
+        assert!(screen.contains("┼"));
     }
 }
 
@@ -2215,7 +2216,7 @@ fn lead_condition_and_retrigger_are_highlighted_in_the_sequencer_grid() {
         locks: Default::default(),
     });
     let app = App::new(project, None);
-    let backend = TestBackend::new(120, 34);
+    let backend = TestBackend::new(120, 50);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| draw_with_device(frame, &app, "null"))
@@ -3657,6 +3658,100 @@ fn sixty_four_step_track_renders_as_two_compact_rows_without_shortcut_hints() {
 }
 
 #[test]
+fn sequencer_track_blocks_have_dividers_and_continuation_markers() {
+    let mut project = Project::new();
+    project.patterns[0].tracks[0].steps.resize(64, None);
+    let app = App::new(project, None);
+    let lines = rendered_lines(&app, 120, 50);
+
+    let kick_first = lines
+        .iter()
+        .position(|line| line.contains("Kick") && line.contains("01–32"))
+        .expect("Kick first row should be visible");
+    let kick_continuation = lines
+        .iter()
+        .position(|line| line.contains("↳") && line.contains("33–64"))
+        .expect("Kick continuation row should be visible");
+    let snare_first = lines
+        .iter()
+        .position(|line| line.contains("Snare") && line.contains("01–16"))
+        .expect("Snare row should be visible");
+
+    assert_eq!(kick_continuation, kick_first + 1);
+    assert_eq!(snare_first, kick_continuation + 2);
+    assert!(lines[kick_continuation + 1].contains('─'));
+}
+
+#[test]
+fn track_identity_colors_apply_to_labels_and_empty_step_glyphs() {
+    for profile in [
+        super::theme::ThemeProfile::Dark,
+        super::theme::ThemeProfile::Light,
+        super::theme::ThemeProfile::HighContrast,
+    ] {
+        let app = App::new_with_theme(Project::new(), None, profile);
+        let theme = super::theme::Theme::new(profile);
+        let backend = TestBackend::new(120, 50);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_with_device(frame, &app, "null"))
+            .unwrap();
+
+        for track in 0..TRACK_COUNT {
+            let label = track_label(&app.editor.project.tracks[track]);
+            let color = theme.track_color(track);
+            let row = terminal
+                .backend()
+                .buffer()
+                .content
+                .chunks(120)
+                .find(|row| {
+                    let text: String = row.iter().map(|cell| cell.symbol()).collect();
+                    text.contains(&label) && text.contains("01–16")
+                })
+                .unwrap_or_else(|| panic!("{label} row should be visible"));
+            let text: String = row.iter().map(|cell| cell.symbol()).collect();
+            let label_start = text.find(&label).expect("track label should be present");
+            assert_eq!(row[label_start].fg, color, "{label} label color");
+            assert!(
+                row.iter()
+                    .any(|cell| cell.symbol() == "·" && cell.fg == color),
+                "{label} empty-step color"
+            );
+        }
+
+        for left in 0..TRACK_COUNT {
+            for right in (left + 1)..TRACK_COUNT {
+                assert_ne!(
+                    theme.track_color(left),
+                    theme.track_color(right),
+                    "track colors must be distinct for {profile:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn divider_aware_scrolling_keeps_the_selected_track_visible() {
+    let mut app = App::new(Project::new(), None);
+    app.row = TRACK_COUNT;
+    let lines = rendered_lines(&app, 120, 34);
+
+    let lead = lines
+        .iter()
+        .position(|line| line.contains("Lead") && line.contains("01–16"))
+        .expect("Lead row should be visible near the selected track");
+    let fm = lines
+        .iter()
+        .position(|line| line.contains("FM") && line.contains("01–16"))
+        .expect("selected FM row should be visible");
+    assert_eq!(fm, lead + 2);
+    assert!(lines[lead + 1].contains('─'));
+    assert!(lines[fm - 1].contains('─'));
+}
+
+#[test]
 fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
     let mut project = Project::new();
     project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
@@ -3686,7 +3781,7 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
         .position(|cell| cell.symbol() == "x")
         .expect("populated trigger should be visible");
     let theme = super::theme::Theme::new(app.theme_profile);
-    let occupied = theme.occupied();
+    let occupied = theme.occupied().fg(theme.track_color(0));
     assert_eq!(kick_row[populated_column].fg, occupied.fg.unwrap());
     assert_eq!(kick_row[populated_column].bg, occupied.bg.unwrap());
     assert_eq!(kick_row[populated_column + 3].symbol(), "·");
@@ -3775,7 +3870,8 @@ fn theme_profiles_keep_occupied_step_rectangles_readable() {
             .iter()
             .position(|cell| cell.symbol() == "x")
             .expect("populated trigger should be visible");
-        let style = super::theme::Theme::new(profile).occupied();
+        let theme = super::theme::Theme::new(profile);
+        let style = theme.occupied().fg(theme.track_color(0));
         assert_eq!(kick_row[populated_column].fg, style.fg.unwrap());
         assert_eq!(kick_row[populated_column].bg, style.bg.unwrap());
         assert!(kick_row[populated_column].modifier.contains(Modifier::BOLD));
@@ -3832,6 +3928,42 @@ fn selected_track_title_uses_the_selected_step_highlight() {
         .expect("Kick track row should be visible");
     assert!(
         kick_title[3..7]
+            .iter()
+            .all(|cell| cell.bg != selected.bg.unwrap())
+    );
+}
+
+#[test]
+fn selected_multiline_track_highlight_only_covers_its_title_row() {
+    let mut project = Project::new();
+    project.patterns[0].tracks[0].steps.resize(64, None);
+    let mut app = App::new(project, None);
+    app.row = 1;
+    app.step = 0;
+
+    let backend = TestBackend::new(120, 50);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw_with_device(frame, &app, "null"))
+        .unwrap();
+
+    let mut rows = terminal.backend().buffer().content.chunks(120);
+    let kick_first = rows
+        .clone()
+        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .expect("Kick title row should be visible");
+    let kick_continuation = rows
+        .find(|row| row.iter().any(|cell| cell.symbol() == "↳"))
+        .expect("Kick continuation row should be visible");
+    let selected = super::theme::Theme::new(app.theme_profile).selected();
+
+    assert!(
+        kick_first[3..7]
+            .iter()
+            .all(|cell| { cell.bg == selected.bg.unwrap() && cell.fg == selected.fg.unwrap() })
+    );
+    assert!(
+        kick_continuation[3..7]
             .iter()
             .all(|cell| cell.bg != selected.bg.unwrap())
     );

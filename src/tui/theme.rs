@@ -63,6 +63,51 @@ impl Theme {
         }
     }
 
+    pub(super) fn track_color(self, index: usize) -> Color {
+        const DARK: [Color; 10] = [
+            Color::Rgb(73, 207, 220),
+            Color::Rgb(110, 214, 141),
+            Color::Rgb(239, 194, 92),
+            Color::Rgb(210, 126, 225),
+            Color::Rgb(242, 116, 104),
+            Color::Rgb(255, 153, 102),
+            Color::Rgb(128, 156, 236),
+            Color::Rgb(226, 139, 226),
+            Color::Rgb(104, 190, 232),
+            Color::Rgb(122, 217, 168),
+        ];
+        const LIGHT: [Color; 10] = [
+            Color::Rgb(0, 112, 125),
+            Color::Rgb(0, 119, 54),
+            Color::Rgb(126, 81, 0),
+            Color::Rgb(132, 35, 151),
+            Color::Rgb(168, 36, 27),
+            Color::Rgb(176, 74, 0),
+            Color::Rgb(43, 76, 163),
+            Color::Rgb(134, 35, 134),
+            Color::Rgb(0, 91, 137),
+            Color::Rgb(0, 105, 62),
+        ];
+        const HIGH_CONTRAST: [Color; 10] = [
+            Color::Cyan,
+            Color::Green,
+            Color::Yellow,
+            Color::Magenta,
+            Color::Red,
+            Color::LightRed,
+            Color::Blue,
+            Color::LightMagenta,
+            Color::LightBlue,
+            Color::LightGreen,
+        ];
+
+        match self.profile {
+            ThemeProfile::Dark => DARK[index % DARK.len()],
+            ThemeProfile::Light => LIGHT[index % LIGHT.len()],
+            ThemeProfile::HighContrast => HIGH_CONTRAST[index % HIGH_CONTRAST.len()],
+        }
+    }
+
     pub(super) fn muted(self) -> Color {
         match self.profile {
             ThemeProfile::Dark => Color::Rgb(145, 155, 170),
