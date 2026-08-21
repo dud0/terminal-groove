@@ -970,6 +970,49 @@ impl Editor {
         self.edit_delta(key, delta, f)
     }
 
+    /// Replaces one stable track slot with the factory state for another
+    /// instrument and clears that slot's sequence in every pattern.
+    pub fn assign_instrument(&mut self, track: usize, kind: TrackKind) -> Result<bool, EditError> {
+        let before_track = self
+            .project
+            .tracks
+            .get(track)
+            .cloned()
+            .ok_or(EditError::InvalidTrack)?;
+        if before_track.kind == kind {
+            return Ok(false);
+        }
+        let sequences = self
+            .project
+            .patterns
+            .iter()
+            .enumerate()
+            .map(|(pattern, value)| {
+                value
+                    .tracks
+                    .get(track)
+                    .map(|sequence| (pattern, track, sequence.steps.clone()))
+                    .ok_or(EditError::InvalidTrack)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let replacement = Project::new().tracks[kind.index()].clone();
+        self.edit_delta(
+            None,
+            ProjectDelta {
+                tracks: vec![(track, before_track)],
+                sequences,
+                ..ProjectDelta::default()
+            },
+            move |project, _| {
+                project.tracks[track] = replacement;
+                for pattern in &mut project.patterns {
+                    pattern.tracks[track].steps = vec![None; crate::model::STEP_BANK_SIZE];
+                }
+                Ok(())
+            },
+        )
+    }
+
     fn edit_active_track<F>(
         &mut self,
         track: usize,
@@ -1983,6 +2026,55 @@ mod tests {
         assert!(!e.is_dirty());
         assert!(e.redo());
         assert!(e.is_dirty());
+    }
+
+    #[test]
+    fn assigning_an_instrument_resets_one_slot_in_every_pattern_as_one_edit() {
+        let mut project = Project::new();
+        project.patterns.push(project.patterns[0].clone());
+        project.tracks[0].level = Percent::new(17).unwrap();
+        project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+            accent: false,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: TriggerCondition::Always,
+            retrigger_count: 1,
+            microtiming: Microtiming::ZERO,
+            locks: ParameterLocks::default(),
+        });
+        project.patterns[1].tracks[0].steps.resize(32, None);
+        project.patterns[1].tracks[0].steps[31] = project.patterns[0].tracks[0].steps[0];
+        let before = project.clone();
+        let mut editor = Editor::new(project);
+
+        assert!(editor.assign_instrument(0, TrackKind::Chord).unwrap());
+        assert_eq!(editor.project.tracks[0].kind, TrackKind::Chord);
+        assert_eq!(
+            editor.project.tracks[0],
+            Project::new().tracks[CHORD_TRACK_INDEX]
+        );
+        assert!(editor.project.patterns.iter().all(|pattern| {
+            pattern.tracks[0].steps.len() == crate::model::STEP_BANK_SIZE
+                && pattern.tracks[0].steps.iter().all(Option::is_none)
+        }));
+        assert!(editor.is_dirty());
+        let impact = editor.take_edit_impact();
+        assert_eq!(impact.tracks, 1);
+        assert_eq!(impact.sequences, vec![(0, 0), (1, 0)]);
+
+        assert!(editor.undo());
+        assert_eq!(editor.project, before);
+        assert!(editor.redo());
+        assert_eq!(editor.project.tracks[0].kind, TrackKind::Chord);
+    }
+
+    #[test]
+    fn assigning_the_current_instrument_is_a_noop() {
+        let mut editor = Editor::new(Project::new());
+
+        assert!(!editor.assign_instrument(0, TrackKind::Kick).unwrap());
+        assert!(!editor.is_dirty());
+        assert_eq!(editor.take_edit_impact(), EditImpact::default());
+        assert!(!editor.undo());
     }
 
     #[test]

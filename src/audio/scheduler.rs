@@ -1,3 +1,4 @@
+use super::voices::{ArpeggioState, DRUM_SILENCE};
 use super::{
     AudioProject, AudioTrack, ParameterSmoothing, Renderer, SCHEDULED_ACTION_COUNT,
     ScheduledTrackAction, TRACK_COUNT,
@@ -9,6 +10,62 @@ use crate::model::{
 use std::sync::atomic::Ordering;
 
 impl Renderer {
+    fn reset_track_runtime(&mut self, track: usize) {
+        for voice in [&mut self.drums[track], &mut self.preview_drums[track]] {
+            voice.envelope.value = DRUM_SILENCE;
+            voice.envelope.elapsed = voice.envelope.decay_samples;
+            voice.locks = ParameterLocks::default();
+        }
+        for voice in [&mut self.synth[track], &mut self.preview[track]] {
+            voice.gate_off();
+            voice.reset_to_idle();
+        }
+        for pool in [&mut self.voicings[track], &mut self.preview_voicings[track]] {
+            for voice in &mut pool.voices {
+                voice.gate_off();
+                voice.reset_to_idle();
+            }
+            pool.active = false;
+            pool.arpeggiated = false;
+            pool.group_voice_counts = [0; 2];
+            pool.arpeggio = ArpeggioState::default();
+            pool.preview_remaining = 0;
+        }
+        self.effects[track].clear();
+        self.preview_effects[track].clear();
+        for effect in self.voicing_effects[track]
+            .iter_mut()
+            .chain(self.preview_voicing_effects[track].iter_mut())
+        {
+            effect.clear();
+        }
+        for lfo in self.lfos[track]
+            .iter_mut()
+            .chain(self.preview_lfos[track].iter_mut())
+        {
+            lfo.reset();
+        }
+        self.lfo_offsets[track] = [0.0; ParameterId::ALL.len()];
+        self.preview_lfo_offsets[track] = [0.0; ParameterId::ALL.len()];
+        self.preview_activity[track] = false;
+        self.next_steps[track] = 0;
+        self.early_armed[track] = None;
+        self.cycle_counts[track] = [0; MAX_STEP_COUNT];
+        self.condition_rng[track] = 0x8a5c_9d31 ^ (track as u32).wrapping_mul(0x9e37_79b9);
+        self.probability_rng[track] = 0x3c6e_f372 ^ (track as u32).wrapping_mul(0x7f4a_7c15);
+        for action in &mut self.scheduled {
+            if action.is_some_and(|action| usize::from(action.track) == track) {
+                *action = None;
+            }
+        }
+        for action in &mut self.preview_scheduled {
+            if action.is_some_and(|action| usize::from(action.track) == track) {
+                *action = None;
+            }
+        }
+        self.status.playheads[track].store(u8::MAX, Ordering::Release);
+    }
+
     pub(super) fn reset_trigger_state(&mut self) {
         self.scheduled = [None; SCHEDULED_ACTION_COUNT];
         self.early_armed = [None; TRACK_COUNT];
@@ -164,6 +221,9 @@ impl Renderer {
             self.song_bar
                 .min(project.song[active_song].bars.saturating_sub(1))
         };
+        let changed_instruments: [bool; TRACK_COUNT] = std::array::from_fn(|track| {
+            self.project.tracks[track].instrument_kind() != project.tracks[track].instrument_kind()
+        });
         self.reconcile_lfos(&project);
         Self::invalidate_replaced_scheduled_actions(
             &mut self.scheduled,
@@ -189,6 +249,11 @@ impl Renderer {
                 .and_then(|sequence| sequence.steps.get(step).copied().flatten());
             if old_active_pattern != active_pattern || old_event != next_event {
                 self.early_armed[track] = None;
+            }
+        }
+        for (track, changed) in changed_instruments.into_iter().enumerate() {
+            if changed {
+                self.reset_track_runtime(track);
             }
         }
         let old = std::mem::replace(&mut self.project, project);

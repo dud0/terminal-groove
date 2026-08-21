@@ -10,7 +10,7 @@ Date: 2026-08-09
 - Profile: Cargo `release`
 - Baseline: current `HEAD` with only the strengthened fixture applied in a temporary clone
 
-The saturated fixture activates all drum and synth voices, two overlapping four-note Chord groups, every model-valid LFO destination, distortion/phaser/flanger on every track, maximum delay and reverb sends, 10-second reverb, and high delay feedback. Each configuration runs five independent trials with 128 warm-up callbacks and 512 measured callbacks. The 2,560 measured durations are pooled before calculating statistics.
+The current saturated fixture uses the worst-case assignable layout: all ten slots are Chord instruments, each with two overlapping four-note groups, every model-valid LFO destination, distortion/phaser/flanger, maximum delay and reverb sends, 10-second reverb, and high delay feedback. Each configuration runs five independent trials with 128 warm-up callbacks and 512 measured callbacks. The 2,560 measured durations are pooled before calculating statistics. The historical results below predate assignable instruments and remain baseline evidence only; a new result table must be recorded before making a performance claim for the expanded fixture.
 
 Command:
 
@@ -53,6 +53,24 @@ The saturated fixture was rerun after changing the dedicated Bass filter from th
 | 96 kHz | 512 | 61.4 / 93.4 / 98.4 / 144.7% | 6400.4 |
 
 The elevated 96 kHz tail latency remains best-effort host-scheduling evidence rather than a completion failure; median cost stays near 6.3 microseconds per frame.
+
+## Assignable-instrument worst-case follow-up
+
+On 2026-08-21 the release fixture was expanded to all ten slots running Chord, with two overlapping four-note groups per slot and the saturated effects/LFO configuration described above. The benchmark command completed successfully with finite output and no callback allocation/deallocation, but this deliberately maximal layout does not meet the historical supported-rate p95 target on this Linux x86_64 host.
+
+| Rate | Frames | Median / p95 / p99 / max | Median ns/frame |
+|---:|---:|---:|---:|---:|
+| 44.1 kHz | 128 | 138.0 / 140.1 / 154.6 / 302.2% | 31296.1 |
+| 44.1 kHz | 256 | 137.8 / 140.3 / 141.9 / 271.7% | 31239.8 |
+| 44.1 kHz | 512 | 137.8 / 139.4 / 148.5 / 158.5% | 31238.9 |
+| 48 kHz | 128 | 149.8 / 150.9 / 168.9 / 209.6% | 31200.9 |
+| 48 kHz | 256 | 150.1 / 152.6 / 173.0 / 323.8% | 31263.0 |
+| 48 kHz | 512 | 150.3 / 151.5 / 158.3 / 170.6% | 31302.4 |
+| 96 kHz | 128 | 300.3 / 306.7 / 379.0 / 431.7% | 31279.1 |
+| 96 kHz | 256 | 301.3 / 310.7 / 350.4 / 646.9% | 31386.3 |
+| 96 kHz | 512 | 301.1 / 309.9 / 328.3 / 351.5% | 31369.4 |
+
+These figures define a known performance ceiling, not a claim that ordinary projects regress to this cost. Functional support for arbitrary assignments remains deterministic and allocation-safe; a future optimization pass is required before claiming the 50% p95 target for the absolute all-voicing worst case.
 
 ## Evidence policy and device verification
 

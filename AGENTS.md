@@ -49,9 +49,9 @@ bounded lock-free communication. In particular:
 ## Persistence and Storage
 
 Project files are strict, pretty-printed UTF-8 JSON ending in a newline. Current
-projects save as format v25, reject duplicate keys, unknown fields, invalid
+projects save as format v26, reject duplicate keys, unknown fields, invalid
 ranges, incompatible events/locks/LFOs, invalid tie graphs, and invalid pattern
-or song references. Versions 21 through 24 are migrated as specified in
+or song references. Versions 21 through 25 are migrated as specified in
 `SPEC.md`; unsupported and malformed versions must be rejected without changing
 the current project or undo history. Saves validate first, write a temporary
 sibling, flush and sync it, then atomically rename it.
@@ -71,7 +71,7 @@ affect new untitled projects only.
 
 ## Feature Invariants
 
-- Projects have ten fixed track kinds in the documented order, one through 100 dynamic patterns, and one-based song references to those patterns.
+- Projects have ten stable track slots, each independently assignable to any documented instrument kind, one through 100 dynamic patterns, and one-based song references to those patterns.
 - Sequence data belongs to patterns; each pattern track has one through 64 steps. Structural pattern edits must preserve or correctly rebase active, queued, and song references.
 - The pattern-idea generator is session-only, deterministic from its seed, fills empty steps only, and is applied as one undoable project edit.
 - Audition voices and effects are independent from live playback. Recording is transport-independent and captures the final limited internal stereo pair until explicitly stopped or the application exits.

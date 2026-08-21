@@ -1,4 +1,4 @@
-use super::{AudioCommand, AudioStatus, Renderer, effect_slot};
+use super::{AudioCommand, AudioStatus, Renderer};
 use crate::model::ParameterLocks;
 use rtrb::Consumer;
 use std::{
@@ -30,35 +30,23 @@ impl Renderer {
             smoothing_samples,
         );
         for track in 0..super::TRACK_COUNT {
-            let Some(slot) = effect_slot(track) else {
-                continue;
-            };
-            self.effects[slot].configure(
+            self.effects[track].configure(
                 self.project.tracks[track].effects,
                 ParameterLocks::default(),
                 smoothing_samples,
             );
-            self.preview_effects[slot].configure(
+            self.preview_effects[track].configure(
                 self.project.tracks[track].effects,
                 ParameterLocks::default(),
                 smoothing_samples,
             );
-        }
-        let chord_effects = self.project.tracks[super::CHORD_TRACK_INDEX].effects;
-        for effect in self
-            .chord_effects
-            .iter_mut()
-            .chain(self.preview_chord_effects.iter_mut())
-        {
-            effect.configure(chord_effects, ParameterLocks::default(), smoothing_samples);
-        }
-        let fm_effects = self.project.tracks[super::FM_TRACK_INDEX].effects;
-        for effect in self
-            .fm_chord_effects
-            .iter_mut()
-            .chain(self.preview_fm_chord_effects.iter_mut())
-        {
-            effect.configure(fm_effects, ParameterLocks::default(), smoothing_samples);
+            let controls = self.project.tracks[track].effects;
+            for effect in self.voicing_effects[track]
+                .iter_mut()
+                .chain(self.preview_voicing_effects[track].iter_mut())
+            {
+                effect.configure(controls, ParameterLocks::default(), smoothing_samples);
+            }
         }
     }
 
@@ -70,26 +58,24 @@ impl Renderer {
         preview: bool,
     ) {
         let effects = self.project.tracks[track].effects;
-        if matches!(track, super::CHORD_TRACK_INDEX | super::FM_TRACK_INDEX) {
-            let chains = if track == super::CHORD_TRACK_INDEX && preview {
-                &mut self.preview_chord_effects
-            } else if track == super::CHORD_TRACK_INDEX {
-                &mut self.chord_effects
-            } else if preview {
-                &mut self.preview_fm_chord_effects
+        if self.project.tracks[track]
+            .instrument_kind()
+            .supports_voicing()
+        {
+            let chains = if preview {
+                &mut self.preview_voicing_effects[track]
             } else {
-                &mut self.fm_chord_effects
+                &mut self.voicing_effects[track]
             };
             for effect in chains {
                 effect.configure(effects, locks, smoothing_samples);
             }
             return;
         }
-        let slot = effect_slot(track).expect("track without voicing has an effect slot");
         if preview {
-            self.preview_effects[slot].configure(effects, locks, smoothing_samples);
+            self.preview_effects[track].configure(effects, locks, smoothing_samples);
         } else {
-            self.effects[slot].configure(effects, locks, smoothing_samples);
+            self.effects[track].configure(effects, locks, smoothing_samples);
         }
     }
 
@@ -98,10 +84,16 @@ impl Renderer {
             .effects
             .iter_mut()
             .chain(self.preview_effects.iter_mut())
-            .chain(self.chord_effects.iter_mut())
-            .chain(self.preview_chord_effects.iter_mut())
-            .chain(self.fm_chord_effects.iter_mut())
-            .chain(self.preview_fm_chord_effects.iter_mut())
+            .chain(
+                self.voicing_effects
+                    .iter_mut()
+                    .flat_map(|effects| effects.iter_mut()),
+            )
+            .chain(
+                self.preview_voicing_effects
+                    .iter_mut()
+                    .flat_map(|effects| effects.iter_mut()),
+            )
         {
             effect.clear();
         }

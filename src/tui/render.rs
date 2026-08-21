@@ -64,6 +64,8 @@ pub(super) fn mode_name(mode: &Mode) -> String {
         Mode::SidechainEdit { .. } => "Ducking editor".into(),
         Mode::TempoInput { .. } => "Tempo numeric input".into(),
         Mode::TrackLengthInput(_) => "Track length input".into(),
+        Mode::InstrumentDialog { .. } => "Instrument dialog".into(),
+        Mode::InstrumentChangeConfirm { .. } => "Instrument confirmation".into(),
         Mode::ProjectBrowser { .. } => "Project browser".into(),
         Mode::PresetBrowser { .. } => "Preset browser".into(),
         Mode::PresetDialog { .. } => "Track preset dialog".into(),
@@ -101,7 +103,7 @@ const HELP_TEXT: &str =
       Ctrl+Q quit · Ctrl+R record WAV · Ctrl+Z undo · Ctrl+Y redo · Ctrl+C/X/V copy/cut/paste selected step
 PATTERNS  Ctrl+P open dialog · ←/→ Home End move cursor · Enter select/queue
           N insert · D duplicate · C copy · X cut · V paste · Delete/Backspace remove · Esc close
-SEQUENCER  ↑/↓ rows · Shift+↑/↓ tracks · ←/→ steps · Shift+←/→ banks · = auto-advance
+SEQUENCER  ↑/↓ rows · Shift+↑/↓ tracks · ←/→ steps · Shift+←/→ banks · = auto-advance · Shift+I instrument
            Tab params · p LOCK params · ~ global · Shift+1..0 tracks · Enter event · Del/Bksp clear · Esc BASE
            g pattern generator · o audition selected step
            Ctrl+K / Shift+Delete clear selected track
@@ -127,18 +129,19 @@ PARAMETERS  v level · n pan · y delay send · b reverb send
 GLOBAL  t tempo · y delay division · f feedback · r reverb time
         b reverb tone · p pre-delay · m reverb return · k key · s scale · ←/→ select · ↑/↓ adjust";
 
-pub(super) fn track_label(t: &crate::model::Track) -> String {
+pub(super) fn track_label(index: usize, t: &crate::model::Track) -> String {
+    let identity = format!("{} {}", index + 1, t.kind.name());
     if t.kind.supports_voicing() {
         let mode = if t.input_voicing_shape() == Some(ChordShape::Single) {
             'M'
         } else {
             'C'
         };
-        format!("{} {mode} O{}", t.name, t.input_octave.unwrap_or(3))
+        format!("{identity} {mode} O{}", t.input_octave.unwrap_or(3))
     } else if matches!(t.kind, TrackKind::Bass | TrackKind::Lead) {
-        format!("{} O{}", t.name, t.input_octave.unwrap_or(3))
+        format!("{identity} O{}", t.input_octave.unwrap_or(3))
     } else {
-        t.name.clone()
+        identity
     }
 }
 
@@ -1730,7 +1733,7 @@ pub(super) fn render_parameter_bank(
     ) {
         format!(
             "{} · Step {} · {}{} · {} · Mute {}",
-            track_label(t),
+            track_label(track, t),
             a.step + 1,
             articulation_title(a, track),
             chord_shape,
@@ -1740,7 +1743,7 @@ pub(super) fn render_parameter_bank(
     } else {
         format!(
             "{} · Step {} · {} · {} · Mute {}",
-            t.name,
+            track_label(track, t),
             a.step + 1,
             articulation_title(a, track),
             scope_name(a.scope),
@@ -2628,7 +2631,7 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 } else {
                     track_style
                 };
-                ratatui::widgets::Cell::from(track_label(track)).style(style)
+                ratatui::widgets::Cell::from(track_label(ti, track)).style(style)
             } else {
                 ratatui::widgets::Cell::from("↳").style(track_style)
             });
@@ -2981,6 +2984,39 @@ pub(super) fn draw_with_device(f: &mut ratatui::Frame, a: &App, device_name: &st
                 ),
             )
         }
+        Mode::InstrumentDialog { track, selected } => {
+            let choices = TrackKind::ALL
+                .iter()
+                .map(|kind| {
+                    format!(
+                        "{} {}",
+                        if kind == selected { ">" } else { " " },
+                        kind.name()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            popup(
+                f,
+                area,
+                "Assign instrument",
+                &format!(
+                    "Track {}\n\n{choices}\n\n[↑/↓ Home/End] select  [Enter] choose  [Esc] cancel",
+                    track + 1
+                ),
+            );
+        }
+        Mode::InstrumentChangeConfirm { track, selected } => popup(
+            f,
+            area,
+            "Reset track instrument?",
+            &format!(
+                "Track {}: {} → {}\n\nThis clears its settings and sequence in every pattern.\n\nChange [Enter/I]  Back [Esc]",
+                track + 1,
+                a.editor.project.tracks[*track].kind.name(),
+                selected.name()
+            ),
+        ),
         Mode::ProjectBrowser { entries, selected } => {
             render_project_browser(f, area, entries, *selected, theme);
         }

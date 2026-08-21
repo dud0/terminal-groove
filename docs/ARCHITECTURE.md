@@ -18,6 +18,13 @@ intervening commands retain FIFO order. Replaced and superseded snapshots go to 
 sized to the command queue and are reaped on every UI iteration. Status returns through atomics;
 stream errors use a bounded queue and are logged outside the callback.
 
+Tracks are stable numbered slots; their assigned instrument is snapshot data rather than an audio
+array index. Every slot preallocates drum, monophonic synth, voicing-pool, live/preview LFO, and
+effect runtime so any of the ten instrument kinds can be assigned without callback allocation.
+Rendering dispatches by the slot's assigned kind. A changed kind resets only that slot's live and
+preview runtime before the replacement snapshot becomes active. All assigned Kicks contribute to
+one sidechain detector bus, whose gain is applied to every assigned pitched instrument.
+
 Live recording taps each final limited stereo frame before CPAL channel mapping. The callback sends
 frames and an ordered end marker through a preallocated two-second SPSC queue to a named WAV writer
 thread. That worker blocks on its command receiver while idle, then performs sample conversion,
@@ -57,7 +64,7 @@ model and reducer.
 
 The callback must not allocate, destroy project snapshots, block, lock, access files, or format
 messages. Keep live and audition state independent, while sharing plain allocation-free routing
-calculations where sidechain, mute, and tail semantics remain explicit. Prefer fixed arrays,
+calculations where sidechain, mute, and tail semantics remain explicit. Prefer fixed per-slot arrays,
 bounded queues, cached mappings, and control-rate coefficient updates.
 
 Recording never performs file access, allocation, formatting, waits, or sample conversion in the

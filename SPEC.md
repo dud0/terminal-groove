@@ -6,9 +6,9 @@ Application and executable name: `terminal-groove`
 
 ## 1. Product definition
 
-`terminal-groove` is a real-time terminal groovebox with a fast keyboard workflow, predictable state transitions, and visible selection, transport, editing state, parameters, events, locks, shortcuts, dirty state, and audio errors. It has ten independently looping 1–64-step tracks on a shared sixteenth-note clock; all sound is synthesized and tracks default to 16 steps.
+`terminal-groove` is a real-time terminal groovebox with a fast keyboard workflow, predictable state transitions, and visible selection, transport, editing state, parameters, events, locks, shortcuts, dirty state, and audio errors. It has ten stable, independently looping 1–64-step track slots on a shared sixteenth-note clock; all sound is synthesized and tracks default to 16 steps. Each slot can independently use any instrument kind, including a kind already assigned to another slot.
 
-The fixed track order is:
+New untitled projects use this default instrument layout:
 
 1. Kick drum
 2. Snare drum
@@ -306,9 +306,9 @@ Sends are post-fader and post-mute. Chord and FM group level, pan layout, delay 
 
 #### Kick sidechain ducking
 
-The global Ducking control is a fixed Kick → Bass/Chord/Lead/FM sidechain compressor. It is off by default. Depth is 0–100% and maps to 0–18 dB maximum attenuation; attack maps exponentially from 0.5–30 ms and release maps exponentially from 40–1000 ms. The detector follows the kick after its track effect chain and mute/fader, using a stereo peak envelope with attack/release smoothing. The resulting gain is `10^(-(depth_db × envelope)/20)`.
+The global Ducking control is an all-Kick → all-pitched-instruments sidechain compressor. It is off by default. Depth is 0–100% and maps to 0–18 dB maximum attenuation; attack maps exponentially from 0.5–30 ms and release maps exponentially from 40–1000 ms. The detector sums every assigned Kick after its own track effect chain and mute/fader, then follows that stereo key with attack/release smoothing. The resulting gain is `10^(-(depth_db × envelope)/20)`.
 
-The shared gain is applied to Bass, Chord, Lead, and FM after their track effects and before their faders, pans, and delay/reverb sends. The kick, drums, preview audition audio, and already-generated delay/reverb returns are not ducked. Detector state continues through live edits and pause and is cleared by Stop and project reset. The `Ducking` card uses shortcut `d`; Enter opens Depth, Attack, and Release fields, Left/Right selects a field, Up/Down changes 1%, Shift changes 10%, and number-row percentage entry edits Depth. Enter/Esc closes the editor and arrow edits remain applied on Esc; when opened from Global Parameter mode, closing returns there. Ducking is global-only and cannot be locked, LFO-modulated, or overridden per pattern.
+The shared gain is applied to every assigned Bass, Chord, Lead, and FM after its track effects and before its fader, pan, and delay/reverb sends. Kicks, other drums, preview audition audio, and already-generated delay/reverb returns are not ducked. Detector state continues through live edits and pause and is cleared by Stop and project reset. The `Ducking` card uses shortcut `d`; Enter opens Depth, Attack, and Release fields, Left/Right selects a field, Up/Down changes 1%, Shift changes 10%, and number-row percentage entry edits Depth. Enter/Esc closes the editor and arrow edits remain applied on Esc; when opened from Global Parameter mode, closing returns there. Ducking is global-only and cannot be locked, LFO-modulated, or overridden per pattern.
 
 The internal engine renders stereo. A mono output device receives the arithmetic average after master limiting. On devices with more than two channels, channels 1 and 2 receive left and right and additional channels receive silence.
 
@@ -394,6 +394,7 @@ The application uses ordinary portable terminal press events. It must not requir
 | Anywhere | `Ctrl+Shift+S` | Save as |
 | Anywhere | `Ctrl+O` | Open project browser |
 | Track Sequencer/Parameter mode | `Ctrl+L` | Open the selected track's preset dialog |
+| Track Sequencer/Parameter mode | `Shift+I` | Assign an instrument to the selected track slot |
 | Anywhere | `Ctrl+Q` | Quit, with dirty confirmation |
 | Sequencer/editor modes | `Ctrl+R` | Start or stop live WAV recording |
 | Anywhere | `Ctrl+Z` | Undo |
@@ -462,6 +463,8 @@ Track parameter shortcuts are resolved only in Parameter mode, while step, event
 
 ### 5.3 Track presets
 
+`Shift+I` opens the instrument chooser for the selected track slot. Up/Down and Home/End select from Kick, Snare, Hi-hat, Tom, Cymbal, Rimshot, Bass, Chord, Lead, and FM without wrapping; Enter selects and Esc cancels. Choosing a different instrument opens a destructive confirmation. Confirming is one undoable project edit: it replaces the selected slot's mixer, instrument, effects, LFO, probability, swing, mute, and input state with that instrument's factory defaults and replaces that slot's sequence in every pattern with 16 empty steps. Other slots, patterns, song references, transport, and global settings are preserved. The change may be confirmed while playing; the audio callback resets only that slot's live and audition voices, effects, LFOs, scheduled actions, and playhead. A full command queue rejects the operation before the project changes. Choosing the already-assigned instrument is a no-op. Duplicate instrument assignments are allowed.
+
 - User presets live outside project files in `Terminal Groove/Presets/<track-kind>/` below the OS Music folder and use the `.preset.json` extension. They are versioned strict JSON files and are not part of a saved project.
 - Preset format v4 contains only sound data: `format_version`, `kind`, `level`, `pan`, `delay_send`, `reverb_send`, `instrument`, `effects`, and `lfos`. It excludes the track name, mute, swing, probability, note-input defaults, voicing input shape/arpeggio, patterns, steps, and parameter locks. Format-v1 through v3 presets remain loadable; their legacy Chord spread and chorus values are discarded and only their remaining sound fields are extracted in memory. New named and default presets are always written as strict v4 JSON. Source-controlled built-in Chord presets retain their authored modes in `effects.chorus`.
 - `Ctrl+L` is available only in Sequencer or Parameter mode with a selected track. It opens a keyboard-driven preset dialog with `Save named`, `Save as default`, `Load preset`, and `Clear default` actions. Up/Down selects an available action, Enter continues, and Esc closes; `Clear default` remains visibly unavailable when that track kind has no default. On the global row, `Ctrl+L` reports that a track must be selected.
@@ -513,7 +516,7 @@ At `120x34` or larger, the standard screen contains:
 
 1. Header: one metadata-only line containing the application name, a text-visible `● REC` badge while recording or `WAV FINALIZING` while a take is being closed, project filename or `Untitled`, dirty marker, audio device/status, transport state, pattern state, and tempo. If the current audio stream has had callback deadline overruns, the header also shows a text-visible warning badge with the cumulative count and maximum callback load percentage. Persistent command shortcut hints are not shown there; the `?` overlay contains the complete key map.
 2. Global row: all ten global controls and current values; their local shortcuts are shown in the detail cards.
-3. Ten variable-length sequencer track blocks in fixed track order: track name, mute state, absolute step range, and compact fixed-width step cells. Each displayed logical track block begins with a non-interactive horizontal divider, including the top boundary above Track 1; continuation rows remain marked with `↳`. The displayed range communicates the track length.
+3. Ten variable-length sequencer slot blocks in stable slot order: one-based slot number plus assigned instrument, mute state, absolute step range, and compact fixed-width step cells. Duplicate assignments remain distinguishable (for example, `1 Kick` and `4 Kick`). Each displayed logical track block begins with a non-interactive horizontal divider, including the top boundary above Track 1; continuation rows remain marked with `↳`. The displayed range communicates the track length.
 4. A selected-control panel: vertical parameter faders for the selected track, or ten global parameter cards when the global row is selected. In Sequencer mode, track and global panels use compact five-segment cards without local shortcut labels, leaving the remaining vertical space for the sequencer. Track Parameter mode and Global Parameter mode expand their cards to the full ten-segment editor with local shortcuts. Global Parameter mode is entered with Tab or Shift+Tab from the global row; Left/Right selects cards, Up/Down edits the selected global value, and Tab, Shift+Tab, or Esc returns to Sequencer mode. Enter opens the detailed Tempo or Ducking editor when either is selected, while Enter on another global control returns to Sequencer mode; closing those detailed editors returns to Global Parameter mode when they were opened from it. The global row and detail panel share one selected global control. The global cards use the same centered, capped-width, borderless-card geometry as track parameters, with grouped headings for `CLOCK` (Tempo), `DELAY` (Delay division and feedback), `REVERB` (Time, tone, pre-delay, and return), `DUCKING`, and `SCALE` (Key and scale). Each group has a distinct color. The cards show a tempo numeric readout, delay-division/key/scale selectors, and faders for delay feedback, reverb time, reverb tone, reverb pre-delay, and reverb return. Global faders use their model ranges (`0–95%`, `0.2–10.0 s`, `0–100%`, `0–200 ms`, and `0–100%`) and show exact values with units beside the fader. The selected global and track cards use the same centered reverse highlight without adjacent side borders; semantic group colors remain visible on inactive cards.
 5. Status line: current mode, last successful operation or actionable error, and active-editor guidance. While a track parameter is being edited in `LOCK` scope, the selected-control panel and status line prominently show `LOCK PARAMETER EDITING` using contrasting styling.
 
@@ -589,7 +592,7 @@ Open and quit with a dirty project present a `Save`, `Discard`, `Cancel` choice.
 
 - Project files are UTF-8, pretty-printed JSON ending with a newline.
 - The conventional extension is `.groove.json`. TUI Save As appends this extension to bare names and does not duplicate it when already present; explicit CLI project paths are used literally.
-- Version 25 is strict: reject duplicate object keys at every depth, unknown fields, enum values, invalid numeric ranges, incorrect track layouts, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, incompatible events/locks/LFOs/recipes, invalid tie graphs, and song references outside the dynamic pattern list. Duplicate keys are rejected before any legacy migration. Canonical nine-track v21 files are upgraded by appending the built-in FM track and one empty 16-step FM sequence to every pattern; v22 adds contextual Chord/FM shape defaults; v21–v23 discard the removed Chord spread base value and step locks; and v21–v24 discard legacy Chord chorus values and chorus locks, initializing `effects.chorus` to Off on every track. Saves emit v25 only; version 20 and earlier, missing versions, malformed v21 layouts, and unknown future versions are rejected.
+- Version 26 is strict: reject duplicate object keys at every depth, unknown fields, enum values, invalid numeric ranges, track counts other than ten, incompatible instrument payloads/input state/events/locks/LFOs/recipes, top-level track sequences, pattern counts outside 1 through 100, step counts outside 1 through 64, invalid tie graphs, and song references outside the dynamic pattern list. Duplicate keys are rejected before any legacy migration. Canonical nine-track v21 files are upgraded by appending the built-in FM track and one empty 16-step FM sequence to every pattern; v22 adds contextual Chord/FM shape defaults; v21–v23 discard the removed Chord spread base value and step locks; and v21–v24 discard legacy Chord chorus values and chorus locks, initializing `effects.chorus` to Off on every track. Canonical fixed-layout v25 tracks migrate by replacing their `kind` and `name` fields with `instrument_kind`; malformed or noncanonical v25 layouts are rejected. Saves emit v26 only; version 20 and earlier, missing versions, malformed legacy layouts, and unknown future versions are rejected.
 - A failed load leaves the current project, undo history, dirty state, and engine untouched.
 - A successful save writes a temporary sibling file, flushes it, and atomically renames it over the destination. A failed save leaves the previous destination intact and the current project dirty.
 
@@ -599,7 +602,7 @@ The top-level object is:
 
 ```json
 {
-  "format_version": 25,
+  "format_version": 26,
   "globals": {},
   "tracks": [],
   "patterns": [],
@@ -632,10 +635,9 @@ The top-level object is:
 
 `scale` accepts the stable strings `major`, `dorian`, `phrygian`, `lydian`, `mixolydian`, `natural_minor`, and `locrian`.
 
-`tracks` contains exactly ten entries in the fixed instrument order. Every track stores:
+`tracks` contains exactly ten stable slot entries in slot order. Instrument kinds may appear in any order and may be repeated. Every track stores:
 
-- `kind`: `kick`, `snare`, `hat`, `tom`, `cymbal`, `rimshot`, `bass`, `chord`, `lead`, or `fm`
-- `name`: the fixed display identifier
+- `instrument_kind`: `kick`, `snare`, `hat`, `tom`, `cymbal`, `rimshot`, `bass`, `chord`, `lead`, or `fm`; it determines and must agree with the `instrument` payload shape
 - `level`: integer 0–100
 - `pan`: integer 0–100; omitted values load as 50
 - `muted`: Boolean
@@ -811,15 +813,15 @@ Cover musical degree/frequency mapping, input limits, tie creation/resolution/cl
 
 ### 12.2 Persistence tests
 
-Round-trip default and populated version-24 projects, including Chord/FM voicings, four-operator FM algorithms/operators, drum recipes, Rimshot, sidechain, track probability, microtiming at both bounds and zero, every event, lock, LFO, effect, flanger setting, and articulation variant. Migrate canonical released version-21 projects by adding the default four-operator FM track, migrate v22 with contextual Chord/FM shape defaults, and discard legacy Chord spread values and locks from v21–v23 projects and v1/v2 presets. Reject the unreleased two-operator version-22 FM shape, version 20 and other unsupported versions, incompatible recipes, Noise and Keyboard Tracking LFO assignments, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences. Preserve the active project on load failure and verify atomic-save failure behavior, dirty-state updates, history reset on load, and exact same-kind step clipboard behavior.
+Round-trip default and populated version-26 projects, including duplicate instrument assignments, Chord/FM voicings, four-operator FM algorithms/operators, drum recipes, Rimshot, sidechain, track probability, microtiming at both bounds and zero, every event, lock, LFO, effect, flanger setting, and articulation variant. Migrate canonical released version-21 projects by adding the default four-operator FM track, migrate v22 with contextual Chord/FM shape defaults, migrate canonical fixed-layout v25 projects to assignable instruments, and discard legacy Chord spread values and locks from v21–v23 projects and v1/v2 presets. Reject the unreleased two-operator version-22 FM shape, version 20 and other unsupported versions, mismatched instrument kinds/payloads, incompatible recipes, Noise and Keyboard Tracking LFO assignments, unknown fields, invalid percentages and other ranges/layouts/events/locks/LFOs/ties, and malformed sequences. Preserve the active project on load failure and verify atomic-save failure behavior, dirty-state updates, history reset on load, and exact same-kind step clipboard behavior.
 
 ### 12.3 TUI tests
 
-Use Ratatui `TestBackend` at `100x34`, `120x34`, and larger to cover the narrow two-bank grid, standard fixed-width grids, continuation rows, scrolling, width-aware navigation, length/doubling controls, small terminals, faders, switches, readouts, shortcuts, cursor/playhead styling, non-color indicators, BASE/LOCK scope, parameter precedence, event articulation, LFO/pitch-LFO/Voicing/FM-operator editors, dialogs, confirmations, help, and terminal restoration.
+Use Ratatui `TestBackend` at `100x34`, `120x34`, and larger to cover the narrow two-bank grid, standard fixed-width grids, continuation rows, scrolling, width-aware navigation, length/doubling controls, instrument assignment and duplicate slot labels, small terminals, faders, switches, readouts, shortcuts, cursor/playhead styling, non-color indicators, BASE/LOCK scope, parameter precedence, event articulation, LFO/pitch-LFO/Voicing/FM-operator editors, dialogs, confirmations, help, and terminal restoration.
 
 ### 12.4 DSP tests
 
-Cover all eight FM routings, carrier normalization, operator ratio/index/feedback bounds, algorithm smoothing and phase reset; bounded oscillator pitch; ADSR timing; filter stability; finite drum output; lock smoothing; LFO waveform/rate/phase behavior; pitch modulation; source-owned Lead portamento; Chord and FM group reuse; Bass contour cleanup; delay/reverb/flanger timing and feedback-tail decay; limiter ceiling and makeup gain; sample conversion; deterministic offline rendering; and callback-path allocation safety under active DSP and command transitions.
+Cover all eight FM routings, carrier normalization, operator ratio/index/feedback bounds, algorithm smoothing and phase reset; bounded oscillator pitch; ADSR timing; filter stability; finite drum output; lock smoothing; LFO waveform/rate/phase behavior; pitch modulation; source-owned Lead portamento; duplicate-instrument slot independence; Chord and FM group reuse; all-Kick sidechain keying; Bass contour cleanup; delay/reverb/flanger timing and feedback-tail decay; limiter ceiling and makeup gain; sample conversion; deterministic offline rendering; slot-local live reassignment resets; and callback-path allocation safety under worst-case assignable-instrument DSP and command transitions.
 
 ### 12.5 Manual acceptance scenarios
 

@@ -48,6 +48,134 @@ fn rendered_lines(app: &App, width: u16, height: u16) -> Vec<String> {
 }
 
 #[test]
+fn instrument_dialog_assigns_duplicate_kinds_and_clears_the_slot() {
+    let mut project = Project::new();
+    project.patterns.push(project.patterns[0].clone());
+    project.patterns[0].tracks[0].steps[0] = Some(StepEvent::Trigger {
+        accent: false,
+        recipe: crate::model::DrumRecipeSlot::ONE,
+        condition: Default::default(),
+        retrigger_count: 1,
+        microtiming: Microtiming::ZERO,
+        locks: Default::default(),
+    });
+    let mut app = App::new(project.clone(), None);
+    app.row = 1;
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 8);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT),
+    )
+    .unwrap();
+    assert!(matches!(
+        app.mode,
+        Mode::InstrumentDialog {
+            track: 0,
+            selected: TrackKind::Kick
+        }
+    ));
+    assert!(rendered(&app, 120, 34).contains("Assign instrument"));
+    let _ = rendered(&app, 80, 20);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+    )
+    .unwrap();
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert!(matches!(
+        app.mode,
+        Mode::InstrumentChangeConfirm {
+            track: 0,
+            selected: TrackKind::Snare
+        }
+    ));
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.mode, Mode::Navigation);
+    assert_eq!(app.editor.project.tracks[0].kind, TrackKind::Snare);
+    assert_eq!(app.editor.project.tracks[1].kind, TrackKind::Snare);
+    assert!(app.editor.project.patterns.iter().all(|pattern| {
+        pattern.tracks[0].steps.len() == STEP_BANK_SIZE
+            && pattern.tracks[0].steps.iter().all(Option::is_none)
+    }));
+    let screen = rendered(&app, 120, 34);
+    assert!(screen.contains("1 Snare"));
+    assert!(screen.contains("2 Snare"));
+}
+
+#[test]
+fn instrument_confirmation_can_return_without_changing_the_project() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.row = 1;
+    app.mode = Mode::InstrumentChangeConfirm {
+        track: 0,
+        selected: TrackKind::Fm,
+    };
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 4);
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .unwrap();
+
+    assert_eq!(app.editor.project, project);
+    assert!(matches!(
+        app.mode,
+        Mode::InstrumentDialog {
+            track: 0,
+            selected: TrackKind::Fm
+        }
+    ));
+}
+
+#[test]
+fn instrument_assignment_is_rejected_before_editing_when_audio_queue_is_full() {
+    let project = Project::new();
+    let mut app = App::new(project.clone(), None);
+    app.row = 1;
+    app.mode = Mode::InstrumentChangeConfirm {
+        track: 0,
+        selected: TrackKind::Fm,
+    };
+    let (mut audio, _commands) = crate::audio::Audio::test_queue_only(&project, 1);
+    audio.send(crate::audio::AudioCommand::Stop).unwrap();
+
+    handle_key(
+        &mut app,
+        &mut audio,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .unwrap();
+
+    assert_eq!(app.editor.project, project);
+    assert!(app.status.contains("queue full"));
+    assert!(matches!(
+        app.mode,
+        Mode::InstrumentChangeConfirm {
+            track: 0,
+            selected: TrackKind::Fm
+        }
+    ));
+}
+
+#[test]
 fn parameter_shortcuts_follow_track_context() {
     assert_eq!(
         parameter_shortcut(TrackKind::Kick, 'v'),
@@ -1072,9 +1200,14 @@ fn shifted_vertical_navigation_skips_continuation_rows() {
 }
 
 #[test]
-fn pitched_navigation_starts_after_all_drum_rows() {
-    assert!(!input::is_pitched_track_row(DRUM_TRACK_COUNT));
-    assert!(input::is_pitched_track_row(DRUM_TRACK_COUNT + 1));
+fn pitched_navigation_follows_the_assigned_instrument() {
+    let mut project = Project::new();
+    project.tracks[0] = project.tracks[CHORD_TRACK_INDEX].clone();
+    project.tracks[CHORD_TRACK_INDEX] = project.tracks[1].clone();
+    let app = App::new(project, None);
+
+    assert!(input::is_pitched_track_row(&app, 1));
+    assert!(!input::is_pitched_track_row(&app, CHORD_TRACK_INDEX + 1));
 }
 
 #[test]
@@ -3698,7 +3831,7 @@ fn track_identity_colors_apply_to_labels_and_empty_step_glyphs() {
             .unwrap();
 
         for track in 0..TRACK_COUNT {
-            let label = track_label(&app.editor.project.tracks[track]);
+            let label = track_label(track, &app.editor.project.tracks[track]);
             let color = theme.track_color(track);
             let row = terminal
                 .backend()
@@ -3774,7 +3907,7 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
         .buffer()
         .content
         .chunks(120)
-        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .find(|row| row.get(5).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick row should be visible");
     let populated_column = kick_row
         .iter()
@@ -3798,7 +3931,7 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
         .buffer()
         .content
         .chunks(120)
-        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .find(|row| row.get(5).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick row should be visible");
     let cursor_cell = &kick_row[populated_column];
     let selected = theme.selected();
@@ -3815,7 +3948,7 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
         .buffer()
         .content
         .chunks(120)
-        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .find(|row| row.get(5).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick row should be visible");
     assert_eq!(kick_row[populated_column].bg, theme.playing().bg.unwrap());
 
@@ -3828,7 +3961,7 @@ fn populated_steps_have_a_distinct_tint_from_cursor_and_playhead() {
         .buffer()
         .content
         .chunks(120)
-        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .find(|row| row.get(5).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick row should be visible");
     assert_eq!(
         kick_row[populated_column].bg,
@@ -3864,7 +3997,7 @@ fn theme_profiles_keep_occupied_step_rectangles_readable() {
             .buffer()
             .content
             .chunks(120)
-            .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+            .find(|row| row.get(5).is_some_and(|cell| cell.symbol() == "K"))
             .expect("Kick row should be visible");
         let populated_column = kick_row
             .iter()
@@ -3904,7 +4037,7 @@ fn selected_track_title_uses_the_selected_step_highlight() {
         .buffer()
         .content
         .chunks(120)
-        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .find(|row| row.get(5).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick track row should be visible");
     let selected = super::theme::Theme::new(app.theme_profile).selected_track();
     assert!(
@@ -3924,7 +4057,7 @@ fn selected_track_title_uses_the_selected_step_highlight() {
         .buffer()
         .content
         .chunks(120)
-        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .find(|row| row.get(5).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick track row should be visible");
     assert!(
         kick_title[3..7]
@@ -3950,7 +4083,7 @@ fn selected_multiline_track_highlight_only_covers_its_title_row() {
     let mut rows = terminal.backend().buffer().content.chunks(120);
     let kick_first = rows
         .clone()
-        .find(|row| row.get(3).is_some_and(|cell| cell.symbol() == "K"))
+        .find(|row| row.get(5).is_some_and(|cell| cell.symbol() == "K"))
         .expect("Kick title row should be visible");
     let kick_continuation = rows
         .find(|row| row.iter().any(|cell| cell.symbol() == "↳"))

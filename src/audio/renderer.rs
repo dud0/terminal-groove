@@ -100,14 +100,14 @@ impl Renderer {
     }
 
     fn preview_track_active(&self, track: usize) -> bool {
-        let voice_active = if track < super::DRUM_TRACK_COUNT {
+        let voice_active = if self.project.tracks[track].instrument_kind().is_drum() {
             !self.preview_drums[track].envelope.is_idle()
-        } else if matches!(track, super::CHORD_TRACK_INDEX | super::FM_TRACK_INDEX) {
-            let (pool, effects) = if track == super::CHORD_TRACK_INDEX {
-                (&self.preview_chord, &self.preview_chord_effects)
-            } else {
-                (&self.preview_fm_chord, &self.preview_fm_chord_effects)
-            };
+        } else if self.project.tracks[track]
+            .instrument_kind()
+            .supports_voicing()
+        {
+            let pool = &self.preview_voicings[track];
+            let effects = &self.preview_voicing_effects[track];
             pool.active
                 || pool.arpeggiated
                 || pool.preview_remaining != 0
@@ -117,7 +117,7 @@ impl Renderer {
                     .any(|voice| voice.env.stage != EnvStage::Idle)
                 || effects.iter().any(TrackEffectChain::is_active)
         } else {
-            !self.preview[track - super::SYNTH_TRACK_START].is_idle()
+            !self.preview[track].is_idle()
         };
         voice_active
             || effect_slot(track).is_some_and(|slot| self.preview_effects[slot].is_active())
@@ -159,28 +159,10 @@ impl Renderer {
             status: status.clone(),
             recording: super::recording::RecordingProducer::disconnected(status),
             drums: std::array::from_fn(|i| {
-                DrumVoice::new(
-                    [
-                        0x1234_abcd,
-                        0x9137_2468,
-                        0xdead_beef,
-                        0x71a2_4c9d,
-                        0x4f83_d2b1,
-                        0x2d74_a6c3,
-                    ][i],
-                )
+                DrumVoice::new(0x1234_abcd ^ (i as u32).wrapping_mul(0x9e37_79b9))
             }),
             preview_drums: std::array::from_fn(|i| {
-                DrumVoice::new(
-                    [
-                        0x4a31_27dd,
-                        0xa187_4c29,
-                        0x6d2b_f193,
-                        0x8c1e_5a77,
-                        0xb643_92e0,
-                        0x3e95_c841,
-                    ][i],
-                )
+                DrumVoice::new(0x4a31_27dd ^ (i as u32).wrapping_mul(0x7f4a_7c15))
             }),
             synth: std::array::from_fn(|index| {
                 SynthVoice::new_with_seed(
@@ -194,16 +176,16 @@ impl Renderer {
                     0x2468_ace1 ^ (index as u32).wrapping_mul(0x7f4a_7c15),
                 )
             }),
-            chord: ChordVoicePool::new(sr),
-            preview_chord: ChordVoicePool::new(sr),
-            fm_chord: ChordVoicePool::new(sr),
-            preview_fm_chord: ChordVoicePool::new(sr),
+            voicings: std::array::from_fn(|_| ChordVoicePool::new(sr)),
+            preview_voicings: std::array::from_fn(|_| ChordVoicePool::new(sr)),
             effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
             preview_effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
-            chord_effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
-            preview_chord_effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
-            fm_chord_effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
-            preview_fm_chord_effects: std::array::from_fn(|_| TrackEffectChain::new(sr)),
+            voicing_effects: std::array::from_fn(|_| {
+                std::array::from_fn(|_| TrackEffectChain::new(sr))
+            }),
+            preview_voicing_effects: std::array::from_fn(|_| {
+                std::array::from_fn(|_| TrackEffectChain::new(sr))
+            }),
             sidechain: SidechainCompressor::new(sr),
             delay: Delay::new(sr),
             reverb: Reverb::new(sr),
@@ -798,7 +780,13 @@ impl Renderer {
         }
         self.advance_chord_arpeggios();
         let mut mix = MixBus::default();
-        for i in 0..super::DRUM_TRACK_COUNT {
+        let mut kick_key_l = 0.0;
+        let mut kick_key_r = 0.0;
+        for i in 0..TRACK_COUNT {
+            let kind = self.project.tracks[i].instrument_kind();
+            if !kind.is_drum() {
+                continue;
+            }
             let (x, delay_send, reverb_send, pan) = Self::render_drum_input(
                 &mut self.drums[i],
                 i,
@@ -806,21 +794,18 @@ impl Renderer {
                 self.lfo_offsets[i][ParameterId::Level as usize],
                 self.lfo_offsets[i][ParameterId::Pan as usize],
             );
-            let (effect_l, effect_r) = self.effects[effect_slot(i).unwrap()].process(x);
+            let (effect_l, effect_r) = self.effects[i].process(x);
             let (pl, pr) = self.drums[i].pan_gains(pan);
             let level = modulated_percent(
                 self.drums[i].level.next_value(),
                 self.lfo_offsets[i][ParameterId::Level as usize],
             ) / 100.0;
             let gain = self.mute[i].next_value() * level.powi(2);
-            if i == 0 {
-                self.sidechain
-                    .process_stereo(effect_l * gain, effect_r * gain);
+            if kind == crate::model::TrackKind::Kick {
+                kick_key_l += effect_l * gain;
+                kick_key_r += effect_r * gain;
             }
             mix.add(effect_l * pl, effect_r * pr, delay_send, reverb_send, gain);
-        }
-        let duck_gain = self.sidechain.current_gain();
-        for i in 0..super::DRUM_TRACK_COUNT {
             if !self.preview_activity[i] {
                 continue;
             }
@@ -831,7 +816,7 @@ impl Renderer {
                 self.preview_lfo_offsets[i][ParameterId::Level as usize],
                 self.preview_lfo_offsets[i][ParameterId::Pan as usize],
             );
-            let (effect_l, effect_r) = self.preview_effects[effect_slot(i).unwrap()].process(x);
+            let (effect_l, effect_r) = self.preview_effects[i].process(x);
             let (pl, pr) = self.preview_drums[i].pan_gains(pan);
             let level = modulated_percent(
                 self.preview_drums[i].level.next_value(),
@@ -840,18 +825,45 @@ impl Renderer {
             let gain = level.powi(2);
             mix.add(effect_l * pl, effect_r * pr, delay_send, reverb_send, gain);
         }
-        for i in [0, 2] {
-            let track = i + super::SYNTH_TRACK_START;
+        self.sidechain.process_stereo(kick_key_l, kick_key_r);
+        let duck_gain = self.sidechain.current_gain();
+        for track in 0..TRACK_COUNT {
+            let kind = self.project.tracks[track].instrument_kind();
+            if !kind.is_pitched() {
+                continue;
+            }
+            if kind.supports_voicing() {
+                let mute = self.mute[track].next_value();
+                render_voicing_groups(
+                    &mut self.voicings[track],
+                    &mut self.voicing_effects[track],
+                    self.sr,
+                    &self.lfo_offsets[track],
+                    mute * duck_gain,
+                    &mut mix,
+                );
+                if self.preview_activity[track] {
+                    render_voicing_groups(
+                        &mut self.preview_voicings[track],
+                        &mut self.preview_voicing_effects[track],
+                        self.sr,
+                        &self.preview_lfo_offsets[track],
+                        1.0,
+                        &mut mix,
+                    );
+                }
+                continue;
+            }
             let (x, ds, rs) =
-                Self::render_synth(&mut self.synth[i], self.sr, &self.lfo_offsets[track]);
-            let (effect_l, effect_r) = self.effects[effect_slot(track).unwrap()].process(x);
+                Self::render_synth(&mut self.synth[track], self.sr, &self.lfo_offsets[track]);
+            let (effect_l, effect_r) = self.effects[track].process(x);
             let pan = modulated_percent(
-                self.synth[i].pan.next_value(),
+                self.synth[track].pan.next_value(),
                 self.lfo_offsets[track][ParameterId::Pan as usize],
             );
-            let (pl, pr) = self.synth[i].pan_gains(pan);
+            let (pl, pr) = self.synth[track].pan_gains(pan);
             let level = modulated_percent(
-                self.synth[i].level.next_value(),
+                self.synth[track].level.next_value(),
                 self.lfo_offsets[track][ParameterId::Level as usize],
             ) / 100.0;
             let gain = self.mute[track].next_value() * level.powi(2);
@@ -866,66 +878,22 @@ impl Renderer {
                 continue;
             }
             let (x, ds, rs) = Self::render_synth(
-                &mut self.preview[i],
+                &mut self.preview[track],
                 self.sr,
                 &self.preview_lfo_offsets[track],
             );
-            let (effect_l, effect_r) = self.preview_effects[effect_slot(track).unwrap()].process(x);
+            let (effect_l, effect_r) = self.preview_effects[track].process(x);
             let pan = modulated_percent(
-                self.preview[i].pan.next_value(),
+                self.preview[track].pan.next_value(),
                 self.preview_lfo_offsets[track][ParameterId::Pan as usize],
             );
-            let (pl, pr) = self.preview[i].pan_gains(pan);
+            let (pl, pr) = self.preview[track].pan_gains(pan);
             let level = modulated_percent(
-                self.preview[i].level.next_value(),
+                self.preview[track].level.next_value(),
                 self.preview_lfo_offsets[track][ParameterId::Level as usize],
             ) / 100.0;
             let gain = level.powi(2);
             mix.add(effect_l * pl, effect_r * pr, ds, rs, gain);
-        }
-        // Voicing groups overlap during release. Keep their post-effect mixer
-        // controls separate so a new lock cannot change an older tail.
-        let chord_track = super::CHORD_TRACK_INDEX;
-        let chord_mute = self.mute[chord_track].next_value();
-        render_voicing_groups(
-            &mut self.chord,
-            &mut self.chord_effects,
-            self.sr,
-            &self.lfo_offsets[chord_track],
-            chord_mute * duck_gain,
-            &mut mix,
-        );
-
-        if self.preview_activity[chord_track] {
-            render_voicing_groups(
-                &mut self.preview_chord,
-                &mut self.preview_chord_effects,
-                self.sr,
-                &self.preview_lfo_offsets[chord_track],
-                1.0,
-                &mut mix,
-            );
-        }
-
-        let fm_track = super::FM_TRACK_INDEX;
-        let fm_mute = self.mute[fm_track].next_value();
-        render_voicing_groups(
-            &mut self.fm_chord,
-            &mut self.fm_chord_effects,
-            self.sr,
-            &self.lfo_offsets[fm_track],
-            fm_mute * duck_gain,
-            &mut mix,
-        );
-        if self.preview_activity[fm_track] {
-            render_voicing_groups(
-                &mut self.preview_fm_chord,
-                &mut self.preview_fm_chord_effects,
-                self.sr,
-                &self.preview_lfo_offsets[fm_track],
-                1.0,
-                &mut mix,
-            );
         }
 
         let (dl, dr) = self.delay.process(mix.delay_l, mix.delay_r);
@@ -944,53 +912,27 @@ impl Renderer {
 
     pub(super) fn advance_chord_arpeggios(&mut self) {
         let bpm = self.project.globals.tempo_bpm;
-        if self.chord.arpeggiated && self.chord.active && self.chord.arpeggio.tick(self.sr, bpm) {
-            Self::trigger_arpeggio_tone(
-                &self.project,
-                self.sr,
-                super::CHORD_TRACK_INDEX,
-                &mut self.chord,
-            );
-        }
-        if self.preview_chord.arpeggiated && self.preview_chord.active {
-            if self.preview_chord.preview_remaining > 0 {
-                self.preview_chord.preview_remaining -= 1;
+        for track in 0..TRACK_COUNT {
+            if !self.project.tracks[track]
+                .instrument_kind()
+                .supports_voicing()
+            {
+                continue;
             }
-            if self.preview_chord.preview_remaining == 0 {
-                Self::release_chord(&mut self.preview_chord);
-            } else if self.preview_chord.arpeggio.tick(self.sr, bpm) {
-                Self::trigger_arpeggio_tone(
-                    &self.project,
-                    self.sr,
-                    super::CHORD_TRACK_INDEX,
-                    &mut self.preview_chord,
-                );
+            let pool = &mut self.voicings[track];
+            if pool.arpeggiated && pool.active && pool.arpeggio.tick(self.sr, bpm) {
+                Self::trigger_arpeggio_tone(&self.project, self.sr, track, pool);
             }
-        }
-        if self.fm_chord.arpeggiated
-            && self.fm_chord.active
-            && self.fm_chord.arpeggio.tick(self.sr, bpm)
-        {
-            Self::trigger_arpeggio_tone(
-                &self.project,
-                self.sr,
-                super::FM_TRACK_INDEX,
-                &mut self.fm_chord,
-            );
-        }
-        if self.preview_fm_chord.arpeggiated && self.preview_fm_chord.active {
-            if self.preview_fm_chord.preview_remaining > 0 {
-                self.preview_fm_chord.preview_remaining -= 1;
-            }
-            if self.preview_fm_chord.preview_remaining == 0 {
-                Self::release_chord(&mut self.preview_fm_chord);
-            } else if self.preview_fm_chord.arpeggio.tick(self.sr, bpm) {
-                Self::trigger_arpeggio_tone(
-                    &self.project,
-                    self.sr,
-                    super::FM_TRACK_INDEX,
-                    &mut self.preview_fm_chord,
-                );
+            let preview = &mut self.preview_voicings[track];
+            if preview.arpeggiated && preview.active {
+                if preview.preview_remaining > 0 {
+                    preview.preview_remaining -= 1;
+                }
+                if preview.preview_remaining == 0 {
+                    Self::release_chord(preview);
+                } else if preview.arpeggio.tick(self.sr, bpm) {
+                    Self::trigger_arpeggio_tone(&self.project, self.sr, track, preview);
+                }
             }
         }
     }

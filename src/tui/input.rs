@@ -23,10 +23,10 @@ use crate::{
     audio::{Audio, AudioCommand},
     generator::{ChordShapePool, Config as GeneratorConfig, Target as GeneratorTarget},
     model::{
-        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, DRUM_TRACK_COUNT, DrumRecipeSlot,
-        FmAlgorithm, FmOperatorField, FmRatio, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
-        MAX_STEP_COUNT, ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, StepEvent,
-        TRACK_COUNT, TrackKind, TriggerCondition, Waveform,
+        ArpeggioRate, ArpeggioType, ChordShape, ChorusMode, DrumRecipeSlot, FmAlgorithm,
+        FmOperatorField, FmRatio, LfoConfig, LfoDivision, LfoRate, LfoWaveform, MAX_STEP_COUNT,
+        ParameterId, ParameterValue, Percent, STEP_BANK_SIZE, StepEvent, TRACK_COUNT, TrackKind,
+        TriggerCondition, Waveform,
     },
     reducer::{Editor, Scope},
 };
@@ -108,6 +108,14 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     if matches!(a.mode, Mode::TrackLengthInput(_)) {
         return handle_track_length_input(a, audio, k);
     }
+    if matches!(a.mode, Mode::InstrumentDialog { .. }) {
+        handle_instrument_dialog(a, k);
+        return Ok(());
+    }
+    if matches!(a.mode, Mode::InstrumentChangeConfirm { .. }) {
+        handle_instrument_change_confirm(a, audio, k);
+        return Ok(());
+    }
     if matches!(a.mode, Mode::OpenConfirm(_)) {
         return handle_open_confirm(a, audio, k);
     }
@@ -147,6 +155,23 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
     }
     if is_preset_dialog_shortcut(&a.mode, k) {
         open_preset_dialog(a);
+        return Ok(());
+    }
+    if matches!(k.code, KeyCode::Char('I'))
+        && k.modifiers.contains(KeyModifiers::SHIFT)
+        && matches!(a.mode, Mode::Navigation | Mode::ParameterEdit(_))
+    {
+        if a.row == 0 {
+            a.status = "Select a track before changing its instrument".into();
+        } else {
+            let track = a.row - 1;
+            a.editor.end_coalescing();
+            a.mode = Mode::InstrumentDialog {
+                track,
+                selected: a.editor.project.tracks[track].kind,
+            };
+            a.status = format!("Choose an instrument for Track {}", track + 1);
+        }
         return Ok(());
     }
     if k.modifiers.contains(KeyModifiers::CONTROL) {
@@ -463,9 +488,9 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 enter_global_edit(a, id)
             }
         }
-        KeyCode::Char('[') if is_pitched_track_row(a.row) => change_octave(a, audio, -1),
-        KeyCode::Char(']') if is_pitched_track_row(a.row) => change_octave(a, audio, 1),
-        KeyCode::Char('t') if is_pitched_track_row(a.row) => {
+        KeyCode::Char('[') if is_pitched_track_row(a, a.row) => change_octave(a, audio, -1),
+        KeyCode::Char(']') if is_pitched_track_row(a, a.row) => change_octave(a, audio, 1),
+        KeyCode::Char('t') if is_pitched_track_row(a, a.row) => {
             let (track, step) = (a.row - 1, a.step);
             if apply(a, audio, |e| e.toggle_tie(track, step))
                 && sync_project(a, audio)
@@ -474,13 +499,92 @@ pub(super) fn handle_key(a: &mut App, audio: &mut Audio, k: KeyEvent) -> Result<
                 advance_after_event_entry(a);
             }
         }
-        KeyCode::Char(c @ '1'..='8') if is_pitched_track_row(a.row) => {
+        KeyCode::Char(c @ '1'..='8') if is_pitched_track_row(a, a.row) => {
             enter_selected_note(a, audio, c.to_digit(10).unwrap() as u8);
         }
         KeyCode::Esc => a.scope = Scope::Base,
         _ => {}
     }
     Ok(())
+}
+
+fn handle_instrument_dialog(a: &mut App, k: KeyEvent) {
+    let Mode::InstrumentDialog {
+        track,
+        mut selected,
+    } = a.mode
+    else {
+        return;
+    };
+    match k.code {
+        KeyCode::Up => {
+            selected = TrackKind::ALL[selected.index().saturating_sub(1)];
+            a.mode = Mode::InstrumentDialog { track, selected };
+        }
+        KeyCode::Down => {
+            selected = TrackKind::ALL[(selected.index() + 1).min(TRACK_COUNT - 1)];
+            a.mode = Mode::InstrumentDialog { track, selected };
+        }
+        KeyCode::Home => {
+            a.mode = Mode::InstrumentDialog {
+                track,
+                selected: TrackKind::ALL[0],
+            };
+        }
+        KeyCode::End => {
+            a.mode = Mode::InstrumentDialog {
+                track,
+                selected: TrackKind::ALL[TRACK_COUNT - 1],
+            };
+        }
+        KeyCode::Enter => {
+            if a.editor.project.tracks[track].kind == selected {
+                a.mode = Mode::Navigation;
+                a.status = format!("Track {} already uses {}", track + 1, selected.name());
+            } else {
+                a.mode = Mode::InstrumentChangeConfirm { track, selected };
+            }
+        }
+        KeyCode::Esc => a.mode = Mode::Navigation,
+        _ => {}
+    }
+}
+
+fn handle_instrument_change_confirm(a: &mut App, audio: &mut Audio, k: KeyEvent) {
+    let Mode::InstrumentChangeConfirm { track, selected } = a.mode else {
+        return;
+    };
+    match k.code {
+        KeyCode::Esc => a.mode = Mode::InstrumentDialog { track, selected },
+        KeyCode::Enter | KeyCode::Char('I') => {
+            if audio.available_commands() == 0 {
+                a.status = "Audio command queue full; instrument was not changed".into();
+                return;
+            }
+            let previous = a.editor.project.tracks[track].kind;
+            match a.editor.assign_instrument(track, selected) {
+                Ok(true) if sync_project(a, audio) => {
+                    a.row = track + 1;
+                    a.step = 0;
+                    a.scope = Scope::Base;
+                    a.parameter_bank = ParameterBank::Params;
+                    a.parameter_recipe = DrumRecipeSlot::ONE;
+                    a.remembered_parameters[track] = [None; 2];
+                    a.playheads[track] = None;
+                    a.mode = Mode::Navigation;
+                    a.status = format!(
+                        "Track {}: {} → {}",
+                        track + 1,
+                        previous.name(),
+                        selected.name()
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => a.status = error.to_string(),
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(super) fn is_preset_dialog_shortcut(mode: &Mode, k: KeyEvent) -> bool {
@@ -595,8 +699,10 @@ fn advance_after_event_entry(a: &mut App) {
     }
 }
 
-pub(super) fn is_pitched_track_row(row: usize) -> bool {
-    row > DRUM_TRACK_COUNT
+pub(super) fn is_pitched_track_row(a: &App, row: usize) -> bool {
+    row.checked_sub(1)
+        .and_then(|track| a.editor.project.tracks.get(track))
+        .is_some_and(|track| track.kind.is_pitched())
 }
 
 pub(super) fn track_jump_index(k: KeyEvent) -> Option<usize> {

@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::model::{CHORD_TRACK_INDEX, DRUM_TRACK_COUNT, SYNTH_TRACK_START};
 pub use crate::model::{PatternIndexMap, SongIndexMap};
 use crate::{
     dsp::{
@@ -5,9 +7,8 @@ use crate::{
     },
     engine::StepClock,
     model::{
-        ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, FM_TRACK_INDEX, Globals,
-        Instrument, LfoAssignments, MAX_STEP_COUNT, ParameterId, Percent, Project,
-        SYNTH_TRACK_START, SongEntry, StepEvent, TRACK_COUNT, TrackEffects,
+        ArpeggioConfig, ChordShape, Globals, Instrument, LfoAssignments, MAX_STEP_COUNT,
+        ParameterId, Percent, Project, SongEntry, StepEvent, TRACK_COUNT, TrackEffects,
     },
     storage,
 };
@@ -43,6 +44,11 @@ struct AudioTrack {
     input_accent: bool,
     input_chord_shape: ChordShape,
     input_chord_arpeggio: ArpeggioConfig,
+}
+impl AudioTrack {
+    const fn instrument_kind(self) -> crate::model::TrackKind {
+        self.instrument.kind()
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AudioSequence {
@@ -247,20 +253,16 @@ struct Renderer {
     playing: bool,
     sr: f32,
     status: Arc<AudioStatus>,
-    drums: [DrumVoice; DRUM_TRACK_COUNT],
-    preview_drums: [DrumVoice; DRUM_TRACK_COUNT],
-    synth: [SynthVoice; 4],
-    preview: [SynthVoice; 4],
-    chord: ChordVoicePool,
-    preview_chord: ChordVoicePool,
-    fm_chord: ChordVoicePool,
-    preview_fm_chord: ChordVoicePool,
-    effects: [TrackEffectChain; NON_CHORD_TRACK_COUNT],
-    preview_effects: [TrackEffectChain; NON_CHORD_TRACK_COUNT],
-    chord_effects: [TrackEffectChain; 2],
-    preview_chord_effects: [TrackEffectChain; 2],
-    fm_chord_effects: [TrackEffectChain; 2],
-    preview_fm_chord_effects: [TrackEffectChain; 2],
+    drums: [DrumVoice; TRACK_COUNT],
+    preview_drums: [DrumVoice; TRACK_COUNT],
+    synth: [SynthVoice; TRACK_COUNT],
+    preview: [SynthVoice; TRACK_COUNT],
+    voicings: [ChordVoicePool; TRACK_COUNT],
+    preview_voicings: [ChordVoicePool; TRACK_COUNT],
+    effects: [TrackEffectChain; TRACK_COUNT],
+    preview_effects: [TrackEffectChain; TRACK_COUNT],
+    voicing_effects: [[TrackEffectChain; 2]; TRACK_COUNT],
+    preview_voicing_effects: [[TrackEffectChain; 2]; TRACK_COUNT],
     sidechain: SidechainCompressor,
     delay: Delay,
     reverb: Reverb,
@@ -284,18 +286,11 @@ struct Renderer {
     recording: recording::RecordingProducer,
 }
 
-const NON_CHORD_TRACK_COUNT: usize = TRACK_COUNT - 2;
 const SCHEDULED_ACTION_COUNT: usize = 96;
 
-/// Maps a logical track to its ordinary effect-chain slot. Voicing-capable
-/// tracks use two independent group chains and have no ordinary slot.
 const fn effect_slot(track: usize) -> Option<usize> {
-    if track == CHORD_TRACK_INDEX || track == crate::model::FM_TRACK_INDEX {
-        None
-    } else if track < CHORD_TRACK_INDEX {
+    if track < TRACK_COUNT {
         Some(track)
-    } else if track < TRACK_COUNT {
-        Some(track - 1)
     } else {
         None
     }

@@ -50,10 +50,10 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
                     v.gate_off();
                     v.active = false;
                 }
-                Renderer::release_chord(&mut renderer.chord);
-                Renderer::release_chord(&mut renderer.fm_chord);
-                renderer.chord.arpeggio = ArpeggioState::default();
-                renderer.fm_chord.arpeggio = ArpeggioState::default();
+                for pool in &mut renderer.voicings {
+                    Renderer::release_chord(pool);
+                    pool.arpeggio = ArpeggioState::default();
+                }
             }
         }
         AudioCommand::Stop => {
@@ -72,30 +72,20 @@ pub(super) fn handle(renderer: &mut Renderer, command: AudioCommand) {
                 v.gate_off();
                 v.reset_to_idle();
             }
-            for v in renderer
-                .chord
-                .voices
+            for pool in renderer
+                .voicings
                 .iter_mut()
-                .chain(renderer.preview_chord.voices.iter_mut())
-                .chain(renderer.fm_chord.voices.iter_mut())
-                .chain(renderer.preview_fm_chord.voices.iter_mut())
+                .chain(renderer.preview_voicings.iter_mut())
             {
-                v.gate_off();
-                v.reset_to_idle();
+                for v in &mut pool.voices {
+                    v.gate_off();
+                    v.reset_to_idle();
+                }
+                pool.active = false;
+                pool.group_voice_counts = [0; 2];
+                pool.arpeggio = ArpeggioState::default();
             }
-            renderer.chord.active = false;
-            renderer.preview_chord.active = false;
-            renderer.fm_chord.active = false;
-            renderer.preview_fm_chord.active = false;
-            renderer.chord.group_voice_counts = [0; 2];
-            renderer.preview_chord.group_voice_counts = [0; 2];
-            renderer.fm_chord.group_voice_counts = [0; 2];
-            renderer.preview_fm_chord.group_voice_counts = [0; 2];
             renderer.preview_activity = [false; TRACK_COUNT];
-            renderer.chord.arpeggio = ArpeggioState::default();
-            renderer.preview_chord.arpeggio = ArpeggioState::default();
-            renderer.fm_chord.arpeggio = ArpeggioState::default();
-            renderer.preview_fm_chord.arpeggio = ArpeggioState::default();
             renderer.delay.clear();
             renderer.reverb.clear();
             renderer.sidechain.reset();

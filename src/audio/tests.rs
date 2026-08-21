@@ -5,7 +5,7 @@ mod tests {
     use crate::model::{
         ArpeggioRate, ArpeggioType, ChordShape, DistortionParameters,
         FlangerParameters, LEAD_TRACK_INDEX, FM_TRACK_INDEX, FmAlgorithm, LfoConfig, LfoDivision, LfoRate, LfoWaveform,
-        ParameterValue, PhaserParameters, RIMSHOT_TRACK_INDEX, TrackEffects,
+        ParameterValue, PhaserParameters, RIMSHOT_TRACK_INDEX, TrackEffects, TrackKind,
         Microtiming,
     };
     use std::{fs, time::Instant};
@@ -126,6 +126,28 @@ mod tests {
         project
     }
 
+    fn assignable_worst_case_project() -> Project {
+        let mut project = performance_project();
+        let chord = project.tracks[CHORD_TRACK_INDEX].clone();
+        for track in 0..TRACK_COUNT {
+            project.tracks[track] = chord.clone();
+            for step in 0..16 {
+                project.patterns[0].tracks[track].steps[step] = Some(StepEvent::Note {
+                    degree: (step % 7 + 1) as u8,
+                    octave: 3,
+                    accent: step % 4 == 0,
+                    chord_shape: Some(ChordShape::SeventhRoot),
+                    arpeggio: ArpeggioConfig::default(),
+                    condition: Default::default(),
+                    retrigger_count: 4,
+                    microtiming: Microtiming::ZERO,
+                    locks: Default::default(),
+                });
+            }
+        }
+        project
+    }
+
     fn arm_second_worst_case_voicing_groups(renderer: &mut Renderer) {
         let trigger = SynthTrigger {
             degree: 5,
@@ -135,10 +157,14 @@ mod tests {
             chord_shape: Some(ChordShape::SeventhRoot),
             arpeggio: ArpeggioConfig::default(),
         };
-        for (track, pool) in [
-            (CHORD_TRACK_INDEX, &mut renderer.chord),
-            (FM_TRACK_INDEX, &mut renderer.fm_chord),
-        ] {
+        for track in 0..TRACK_COUNT {
+            if !renderer.project.tracks[track]
+                .instrument_kind()
+                .supports_voicing()
+            {
+                continue;
+            }
+            let pool = &mut renderer.voicings[track];
             Renderer::trigger_chord(
                 &renderer.project,
                 renderer.sr,
@@ -161,16 +187,12 @@ mod tests {
     }
 
     #[test]
-    fn effect_slots_cover_only_non_voicing_tracks() {
-        let mut slots = [false; NON_CHORD_TRACK_COUNT];
+    fn effect_slots_cover_every_track() {
+        let mut slots = [false; TRACK_COUNT];
         for track in 0..TRACK_COUNT {
-            if matches!(track, CHORD_TRACK_INDEX | FM_TRACK_INDEX) {
-                assert_eq!(effect_slot(track), None);
-            } else {
-                let slot = effect_slot(track).unwrap();
-                assert!(!slots[slot], "slot {slot} is shared by logical tracks");
-                slots[slot] = true;
-            }
+            let slot = effect_slot(track).unwrap();
+            assert!(!slots[slot], "slot {slot} is shared by logical tracks");
+            slots[slot] = true;
         }
         assert!(slots.into_iter().all(|used| used));
         assert_eq!(effect_slot(TRACK_COUNT), None);
@@ -390,7 +412,7 @@ mod tests {
 
     #[test]
     fn callback_paths_do_not_allocate_or_deallocate() {
-        let project = performance_project();
+        let project = assignable_worst_case_project();
         let status = Arc::new(AudioStatus::default());
         let (retire, _retired) = RingBuffer::new(32);
         let mut renderer = Renderer::new_with_retirement(
@@ -441,6 +463,23 @@ mod tests {
             );
             assert_eq!(allocator_counts(), before);
         }
+
+        let mut reassigned = project.clone();
+        reassigned.tracks[0] = reassigned.tracks[CHORD_TRACK_INDEX].clone();
+        reassigned.patterns[0].tracks[0].steps.fill(None);
+        producer.push(Audio::snapshot(&reassigned)).unwrap();
+        crate::test_allocator::reset();
+        let before = allocator_counts();
+        render(
+            &mut output,
+            2,
+            48_000,
+            &status,
+            &mut renderer,
+            &mut commands,
+            |sample| sample,
+        );
+        assert_eq!(allocator_counts(), before);
     }
 
     #[test]
@@ -490,7 +529,7 @@ mod tests {
 
     #[test]
     fn pending_snapshot_path_is_allocation_free_when_retirement_is_full() {
-        let project = performance_project();
+        let project = assignable_worst_case_project();
         let status = Arc::new(AudioStatus::default());
         let (mut retire, _retired) = RingBuffer::new(1);
         retire
@@ -737,7 +776,7 @@ mod tests {
         });
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
-        let lead = LEAD_TRACK_INDEX - SYNTH_TRACK_START;
+        let lead = LEAD_TRACK_INDEX;
         renderer.audition_once(LEAD_TRACK_INDEX, 0);
         assert_eq!(renderer.preview[lead].locks.percent(ParameterId::Level), Percent::new(20));
         assert!(renderer.preview[lead].active);
@@ -800,7 +839,7 @@ mod tests {
             eprintln!("audio fixture: skipped; rerun with cargo test --release");
             return;
         }
-        let project = performance_project();
+        let project = assignable_worst_case_project();
         eprintln!(
             "audio fixture: os={} arch={} profile={}",
             std::env::consts::OS,
@@ -1352,10 +1391,10 @@ mod tests {
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
         renderer.boundary(0);
-        assert!(renderer.synth[0].active);
+        assert!(renderer.synth[SYNTH_TRACK_START].active);
         renderer.project.tracks[SYNTH_TRACK_START].probability = Percent::ZERO;
         renderer.boundary(1);
-        assert!(!renderer.synth[0].active);
+        assert!(!renderer.synth[SYNTH_TRACK_START].active);
 
         renderer.project.patterns[0].tracks[SYNTH_TRACK_START].steps[1] = Some(StepEvent::Tie {
             locks: Default::default(),
@@ -1363,11 +1402,11 @@ mod tests {
         renderer.project.tracks[SYNTH_TRACK_START].probability = Percent::new(100).unwrap();
         renderer.next_steps[SYNTH_TRACK_START] = 0;
         renderer.boundary(2);
-        assert!(renderer.synth[0].active);
+        assert!(renderer.synth[SYNTH_TRACK_START].active);
         renderer.project.tracks[SYNTH_TRACK_START].probability = Percent::ZERO;
         renderer.next_steps[SYNTH_TRACK_START] = 1;
         renderer.boundary(3);
-        assert!(renderer.synth[0].active);
+        assert!(renderer.synth[SYNTH_TRACK_START].active);
     }
 
     #[test]
@@ -1431,7 +1470,7 @@ mod tests {
             .unwrap()
             .remaining;
         assert_eq!(remaining_after, remaining_before);
-        assert!(!renderer.synth[0].active);
+        assert!(!renderer.synth[SYNTH_TRACK_START].active);
     }
 
     #[test]
@@ -1548,52 +1587,51 @@ mod tests {
         renderer.boundary(0);
         renderer.audition_once(SYNTH_TRACK_START, 0);
         renderer.audition_once(FM_TRACK_INDEX, 0);
-        let fm_live = renderer.fm_chord.group * CHORD_GROUP_SIZE;
-        let fm_preview = renderer.preview_fm_chord.group * CHORD_GROUP_SIZE;
+        let fm_live = renderer.voicings[FM_TRACK_INDEX].group * CHORD_GROUP_SIZE;
+        let fm_preview = renderer.preview_voicings[FM_TRACK_INDEX].group * CHORD_GROUP_SIZE;
         for _ in 0..64 {
             Renderer::render_synth(
-                &mut renderer.synth[0],
+                &mut renderer.synth[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
             Renderer::render_synth(
-                &mut renderer.preview[0],
+                &mut renderer.preview[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
             Renderer::render_synth(
-                &mut renderer.fm_chord.voices[fm_live],
+                &mut renderer.voicings[FM_TRACK_INDEX].voices[fm_live],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
             Renderer::render_synth(
-                &mut renderer.preview_fm_chord.voices[fm_preview],
+                &mut renderer.preview_voicings[FM_TRACK_INDEX].voices[fm_preview],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
         }
-        assert!(renderer.synth[0].bass_vca.value() > 0.0);
-        assert!(renderer.preview[0].bass_vca.value() > 0.0);
-        assert!(renderer.fm_chord.voices[fm_live]
+        assert!(renderer.synth[SYNTH_TRACK_START].bass_vca.value() > 0.0);
+        assert!(renderer.preview[SYNTH_TRACK_START].bass_vca.value() > 0.0);
+        assert!(renderer.voicings[FM_TRACK_INDEX].voices[fm_live]
             .fm_phases
             .iter()
             .any(|phase| *phase != 0.0));
-        assert!(renderer.preview_fm_chord.voices[fm_preview]
+        assert!(renderer.preview_voicings[FM_TRACK_INDEX].voices[fm_preview]
             .fm_phases
             .iter()
             .any(|phase| *phase != 0.0));
 
         renderer.command(AudioCommand::Stop);
 
-        assert!(!renderer.synth[0].is_idle());
-        assert!(!renderer.preview[0].is_idle());
-        assert_eq!(renderer.fm_chord.group_voice_counts, [0; 2]);
-        assert_eq!(renderer.preview_fm_chord.group_voice_counts, [0; 2]);
-        for voice in renderer
-            .fm_chord
+        assert!(!renderer.synth[SYNTH_TRACK_START].is_idle());
+        assert!(!renderer.preview[SYNTH_TRACK_START].is_idle());
+        assert_eq!(renderer.voicings[FM_TRACK_INDEX].group_voice_counts, [0; 2]);
+        assert_eq!(renderer.preview_voicings[FM_TRACK_INDEX].group_voice_counts, [0; 2]);
+        for voice in renderer.voicings[FM_TRACK_INDEX]
             .voices
             .iter_mut()
-            .chain(renderer.preview_fm_chord.voices.iter_mut())
+            .chain(renderer.preview_voicings[FM_TRACK_INDEX].voices.iter_mut())
         {
             assert_eq!(voice.fm_phases, [0.0; 4]);
             assert_eq!(voice.fm_previous, [0.0; 4]);
@@ -1601,18 +1639,18 @@ mod tests {
         }
         for _ in 0..1_000 {
             Renderer::render_synth(
-                &mut renderer.synth[0],
+                &mut renderer.synth[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
             Renderer::render_synth(
-                &mut renderer.preview[0],
+                &mut renderer.preview[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
         }
-        assert!(renderer.synth[0].is_idle());
-        assert!(renderer.preview[0].is_idle());
+        assert!(renderer.synth[SYNTH_TRACK_START].is_idle());
+        assert!(renderer.preview[SYNTH_TRACK_START].is_idle());
     }
 
     #[test]
@@ -1633,7 +1671,7 @@ mod tests {
             FM_TRACK_INDEX,
             trigger,
             ParameterLocks::default(),
-            &mut renderer.fm_chord,
+            &mut renderer.voicings[FM_TRACK_INDEX],
         );
         Renderer::trigger_chord(
             &renderer.project,
@@ -1641,16 +1679,16 @@ mod tests {
             FM_TRACK_INDEX,
             trigger,
             ParameterLocks::default(),
-            &mut renderer.fm_chord,
+            &mut renderer.voicings[FM_TRACK_INDEX],
         );
-        assert_eq!(renderer.fm_chord.group_voice_counts, [4; 2]);
-        for voice in &mut renderer.fm_chord.voices {
+        assert_eq!(renderer.voicings[FM_TRACK_INDEX].group_voice_counts, [4; 2]);
+        for voice in &mut renderer.voicings[FM_TRACK_INDEX].voices {
             voice.reset_to_idle();
         }
 
         renderer.next();
 
-        assert_eq!(renderer.fm_chord.group_voice_counts, [0; 2]);
+        assert_eq!(renderer.voicings[FM_TRACK_INDEX].group_voice_counts, [0; 2]);
     }
 
     #[test]
@@ -1659,15 +1697,15 @@ mod tests {
         let mut renderer = Renderer::new(AudioProject::from_project(&Project::new()), 8_000, status);
         let mut enabled = TrackEffects::default();
         enabled.distortion.mix = Percent::new(100).unwrap();
-        renderer.chord_effects[0].configure(enabled, ParameterLocks::default(), 0);
-        renderer.chord_effects[0].configure(TrackEffects::default(), ParameterLocks::default(), 8);
+        renderer.voicing_effects[CHORD_TRACK_INDEX][0].configure(enabled, ParameterLocks::default(), 0);
+        renderer.voicing_effects[CHORD_TRACK_INDEX][0].configure(TrackEffects::default(), ParameterLocks::default(), 8);
 
-        assert!(!renderer.chord_effects[0].is_active());
-        assert!(renderer.chord_effects[0].needs_processing());
+        assert!(!renderer.voicing_effects[CHORD_TRACK_INDEX][0].is_active());
+        assert!(renderer.voicing_effects[CHORD_TRACK_INDEX][0].needs_processing());
         for _ in 0..8 {
             renderer.next();
         }
-        assert!(!renderer.chord_effects[0].needs_processing());
+        assert!(!renderer.voicing_effects[CHORD_TRACK_INDEX][0].needs_processing());
     }
 
     #[test]
@@ -1980,7 +2018,7 @@ mod tests {
             (0..400)
                 .map(|_| {
                     Renderer::render_synth(
-                        &mut renderer.synth[0],
+                        &mut renderer.synth[SYNTH_TRACK_START],
                         renderer.sr,
                         &[0.0; ParameterId::ALL.len()],
                     )
@@ -2028,7 +2066,7 @@ mod tests {
             let mut count = 0;
             for sample in 0..4_096 {
                 let output = Renderer::render_synth(
-                    &mut renderer.synth[0],
+                    &mut renderer.synth[SYNTH_TRACK_START],
                     renderer.sr,
                     &[0.0; ParameterId::ALL.len()],
                 )
@@ -2107,16 +2145,16 @@ mod tests {
             let mut count = 0;
             for sample in 0..12_000 {
                 let output = if track == CHORD_TRACK_INDEX {
-                    let index = renderer.chord.group * CHORD_GROUP_SIZE;
+                    let index = renderer.voicings[CHORD_TRACK_INDEX].group * CHORD_GROUP_SIZE;
                     Renderer::render_synth(
-                        &mut renderer.chord.voices[index],
+                        &mut renderer.voicings[CHORD_TRACK_INDEX].voices[index],
                         renderer.sr,
                         &[0.0; ParameterId::ALL.len()],
                     )
                     .0
                 } else {
                     Renderer::render_synth(
-                        &mut renderer.synth[track - SYNTH_TRACK_START],
+                        &mut renderer.synth[track],
                         renderer.sr,
                         &[0.0; ParameterId::ALL.len()],
                     )
@@ -2163,12 +2201,12 @@ mod tests {
         renderer.boundary(0);
         for _ in 0..40 {
             Renderer::render_synth(
-                &mut renderer.synth[0],
+                &mut renderer.synth[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
         }
-        assert!(renderer.synth[0].bass_accent_envelope.value() > 0.7);
+        assert!(renderer.synth[SYNTH_TRACK_START].bass_accent_envelope.value() > 0.7);
 
         renderer.boundary(0);
         project.patterns[0].tracks[SYNTH_TRACK_START].steps[0] = Some(StepEvent::BassNote {
@@ -2184,12 +2222,12 @@ mod tests {
         renderer.command(Audio::snapshot(&project));
         for _ in 0..40 {
             Renderer::render_synth(
-                &mut renderer.synth[0],
+                &mut renderer.synth[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
         }
-        assert!(renderer.synth[0].bass_accent_envelope.value() > 0.5);
+        assert!(renderer.synth[SYNTH_TRACK_START].bass_accent_envelope.value() > 0.5);
     }
 
     #[test]
@@ -2221,35 +2259,35 @@ mod tests {
         renderer.boundary(0);
         for _ in 0..80 {
             Renderer::render_synth(
-                &mut renderer.synth[0],
+                &mut renderer.synth[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
         }
-        let vca_before_slide = renderer.synth[0].bass_vca.value();
-        let contour_before_slide = renderer.synth[0].bass_filter_envelope.value();
-        let starting_frequency = renderer.synth[0].freq.next_value();
+        let vca_before_slide = renderer.synth[SYNTH_TRACK_START].bass_vca.value();
+        let contour_before_slide = renderer.synth[SYNTH_TRACK_START].bass_filter_envelope.value();
+        let starting_frequency = renderer.synth[SYNTH_TRACK_START].freq.next_value();
 
         renderer.boundary(0);
-        assert_eq!(renderer.synth[0].bass_vca.value(), vca_before_slide);
+        assert_eq!(renderer.synth[SYNTH_TRACK_START].bass_vca.value(), vca_before_slide);
         assert_eq!(
-            renderer.synth[0].bass_filter_envelope.value(),
+            renderer.synth[SYNTH_TRACK_START].bass_filter_envelope.value(),
             contour_before_slide
         );
-        let first_frequency = renderer.synth[0].freq.next_value();
+        let first_frequency = renderer.synth[SYNTH_TRACK_START].freq.next_value();
         assert!(first_frequency > starting_frequency);
         assert!(first_frequency < starting_frequency * 2.0);
         Renderer::render_synth(
-            &mut renderer.synth[0],
+            &mut renderer.synth[SYNTH_TRACK_START],
             renderer.sr,
             &[0.0; ParameterId::ALL.len()],
         );
-        assert!(renderer.synth[0].bass_vca.value() >= vca_before_slide);
-        assert!(renderer.synth[0].bass_filter_envelope.value() < contour_before_slide);
+        assert!(renderer.synth[SYNTH_TRACK_START].bass_vca.value() >= vca_before_slide);
+        assert!(renderer.synth[SYNTH_TRACK_START].bass_filter_envelope.value() < contour_before_slide);
         for _ in 1..480 {
-            renderer.synth[0].freq.next_value();
+            renderer.synth[SYNTH_TRACK_START].freq.next_value();
         }
-        let final_frequency = renderer.synth[0].freq.next_value();
+        let final_frequency = renderer.synth[SYNTH_TRACK_START].freq.next_value();
         assert!((final_frequency - starting_frequency * 2.0).abs() < 0.01);
     }
 
@@ -2278,7 +2316,7 @@ mod tests {
         });
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
-        let lead = LEAD_TRACK_INDEX - SYNTH_TRACK_START;
+        let lead = LEAD_TRACK_INDEX;
 
         renderer.boundary(0);
         for _ in 0..1_000 {
@@ -2329,7 +2367,7 @@ mod tests {
         project.patterns[0].tracks[LEAD_TRACK_INDEX].steps[1] = Some(note(8, false, 0));
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
-        let lead = LEAD_TRACK_INDEX - SYNTH_TRACK_START;
+        let lead = LEAD_TRACK_INDEX;
 
         renderer.boundary(0);
         let source = renderer.synth[lead].freq.value();
@@ -2369,31 +2407,31 @@ mod tests {
         renderer.boundary(0);
         for _ in 0..40 {
             Renderer::render_synth(
-                &mut renderer.synth[0],
+                &mut renderer.synth[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
         }
-        assert!(renderer.synth[0].bass_accent_envelope.value() > 0.7);
-        renderer.synth[0].gate_off();
-        renderer.synth[0].active = false;
+        assert!(renderer.synth[SYNTH_TRACK_START].bass_accent_envelope.value() > 0.7);
+        renderer.synth[SYNTH_TRACK_START].gate_off();
+        renderer.synth[SYNTH_TRACK_START].active = false;
         for _ in 0..1_000 {
             Renderer::render_synth(
-                &mut renderer.synth[0],
+                &mut renderer.synth[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
         }
-        assert_eq!(renderer.synth[0].bass_accent_envelope.value(), 0.0);
-        assert_eq!(renderer.synth[0].bass_filter_envelope.value(), 0.0);
+        assert_eq!(renderer.synth[SYNTH_TRACK_START].bass_accent_envelope.value(), 0.0);
+        assert_eq!(renderer.synth[SYNTH_TRACK_START].bass_filter_envelope.value(), 0.0);
 
         renderer.boundary(0);
         Renderer::render_synth(
-            &mut renderer.synth[0],
+            &mut renderer.synth[SYNTH_TRACK_START],
             renderer.sr,
             &[0.0; ParameterId::ALL.len()],
         );
-        assert_eq!(renderer.synth[0].bass_accent_envelope.value(), 0.0);
+        assert_eq!(renderer.synth[SYNTH_TRACK_START].bass_accent_envelope.value(), 0.0);
     }
 
     #[test]
@@ -2415,22 +2453,22 @@ mod tests {
         renderer.boundary(0);
         for _ in 0..80 {
             Renderer::render_synth(
-                &mut renderer.synth[0],
+                &mut renderer.synth[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
         }
-        assert!(renderer.synth[0].bass_vca.value() > 0.99);
+        assert!(renderer.synth[SYNTH_TRACK_START].bass_vca.value() > 0.99);
 
         renderer.boundary(1);
         for _ in 0..500 {
             Renderer::render_synth(
-                &mut renderer.synth[0],
+                &mut renderer.synth[SYNTH_TRACK_START],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
         }
-        assert!(renderer.synth[0].is_idle());
+        assert!(renderer.synth[SYNTH_TRACK_START].is_idle());
     }
 
     #[test]
@@ -2650,7 +2688,7 @@ mod tests {
         renderer.command(AudioCommand::PlayPause);
         renderer.boundary(0);
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Cutoff),
             Percent::new(20)
         );
 
@@ -2666,13 +2704,13 @@ mod tests {
         );
         renderer.command(Audio::snapshot(&edited));
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Cutoff),
             Percent::new(20)
         );
 
         renderer.boundary(0);
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Cutoff),
             Percent::new(80)
         );
     }
@@ -2701,43 +2739,43 @@ mod tests {
 
         renderer.boundary(0);
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Level),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Level),
             Percent::new(30)
         );
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Cutoff),
             Percent::new(20)
         );
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Resonance),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Resonance),
             None
         );
 
         renderer.boundary(0);
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Level),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Level),
             Percent::new(30)
         );
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Cutoff),
             Percent::new(20)
         );
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Resonance),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Resonance),
             Percent::new(70)
         );
 
         renderer.boundary(0);
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Level),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Level),
             Percent::new(30)
         );
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Cutoff),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Cutoff),
             Percent::new(20)
         );
         assert_eq!(
-            renderer.synth[0].locks.percent(ParameterId::Resonance),
+            renderer.synth[SYNTH_TRACK_START].locks.percent(ParameterId::Resonance),
             Percent::new(70)
         );
     }
@@ -2896,9 +2934,9 @@ mod tests {
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
 
         renderer.boundary(0);
-        let first_group = renderer.chord.group;
+        let first_group = renderer.voicings[CHORD_TRACK_INDEX].group;
         let frequencies = std::array::from_fn::<_, 3, _>(|voice| {
-            renderer.chord.voices[first_group * CHORD_GROUP_SIZE + voice]
+            renderer.voicings[CHORD_TRACK_INDEX].voices[first_group * CHORD_GROUP_SIZE + voice]
                 .freq
                 .next_value()
         });
@@ -2906,15 +2944,15 @@ mod tests {
         for (actual, expected) in frequencies.into_iter().zip(expected) {
             assert!((actual - expected).abs() < 0.001);
         }
-        for voice in &renderer.chord.voices
+        for voice in &renderer.voicings[CHORD_TRACK_INDEX].voices
             [first_group * CHORD_GROUP_SIZE..first_group * CHORD_GROUP_SIZE + 3]
         {
             assert_eq!(voice.locks.percent(ParameterId::Cutoff), Percent::new(20));
         }
 
         renderer.boundary(0);
-        assert_eq!(renderer.chord.group, first_group);
-        for voice in &renderer.chord.voices
+        assert_eq!(renderer.voicings[CHORD_TRACK_INDEX].group, first_group);
+        for voice in &renderer.voicings[CHORD_TRACK_INDEX].voices
             [first_group * CHORD_GROUP_SIZE..first_group * CHORD_GROUP_SIZE + 3]
         {
             assert_eq!(voice.locks.percent(ParameterId::Cutoff), Percent::new(20));
@@ -2924,20 +2962,20 @@ mod tests {
             );
         }
         renderer.boundary(0);
-        assert_ne!(renderer.chord.group, first_group);
-        for voice in &renderer.chord.voices
+        assert_ne!(renderer.voicings[CHORD_TRACK_INDEX].group, first_group);
+        for voice in &renderer.voicings[CHORD_TRACK_INDEX].voices
             [first_group * CHORD_GROUP_SIZE..first_group * CHORD_GROUP_SIZE + 3]
         {
             assert_eq!(voice.env.stage, crate::dsp::EnvStage::Release);
         }
-        for voice in &renderer.chord.voices
-            [renderer.chord.group * CHORD_GROUP_SIZE..renderer.chord.group * CHORD_GROUP_SIZE + 3]
+        for voice in &renderer.voicings[CHORD_TRACK_INDEX].voices
+            [renderer.voicings[CHORD_TRACK_INDEX].group * CHORD_GROUP_SIZE..renderer.voicings[CHORD_TRACK_INDEX].group * CHORD_GROUP_SIZE + 3]
         {
             assert_eq!(voice.env.stage, crate::dsp::EnvStage::Attack);
         }
 
         renderer.boundary(0);
-        assert!(!renderer.chord.active);
+        assert!(!renderer.voicings[CHORD_TRACK_INDEX].active);
     }
 
     #[test]
@@ -2957,11 +2995,11 @@ mod tests {
         let status = Arc::new(AudioStatus::default());
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
         renderer.boundary(0);
-        assert_eq!(renderer.chord.voice_count, 4);
-        let group = renderer.chord.group;
+        assert_eq!(renderer.voicings[CHORD_TRACK_INDEX].voice_count, 4);
+        let group = renderer.voicings[CHORD_TRACK_INDEX].group;
         let expected = [48, 52, 55, 59];
         for (voice, midi) in expected.into_iter().enumerate() {
-            let frequency = renderer.chord.voices[group * CHORD_GROUP_SIZE + voice]
+            let frequency = renderer.voicings[CHORD_TRACK_INDEX].voices[group * CHORD_GROUP_SIZE + voice]
                 .freq
                 .next_value();
             let expected = 440.0 * 2.0_f32.powf((midi as f32 - 69.0) / 12.0);
@@ -3105,20 +3143,20 @@ mod tests {
 
             let initial = [0.0, 33.3333, 66.6667, 100.0];
             if track == CHORD_TRACK_INDEX {
-                assert_pans(pans(&mut renderer.chord), initial);
-                assert_pans(pans(&mut renderer.preview_chord), initial);
+                assert_pans(pans(&mut renderer.voicings[CHORD_TRACK_INDEX]), initial);
+                assert_pans(pans(&mut renderer.preview_voicings[CHORD_TRACK_INDEX]), initial);
             } else {
-                assert_pans(pans(&mut renderer.fm_chord), initial);
-                assert_pans(pans(&mut renderer.preview_fm_chord), initial);
+                assert_pans(pans(&mut renderer.voicings[FM_TRACK_INDEX]), initial);
+                assert_pans(pans(&mut renderer.preview_voicings[FM_TRACK_INDEX]), initial);
             }
 
             renderer.process_track_action(track, 1, false, true);
             let smoothing = ParameterSmoothing::Default.samples(renderer.sr);
             {
                 let (live, preview) = if track == CHORD_TRACK_INDEX {
-                    (&mut renderer.chord, &mut renderer.preview_chord)
+                    (&mut renderer.voicings[CHORD_TRACK_INDEX], &mut renderer.preview_voicings[CHORD_TRACK_INDEX])
                 } else {
-                    (&mut renderer.fm_chord, &mut renderer.preview_fm_chord)
+                    (&mut renderer.voicings[FM_TRACK_INDEX], &mut renderer.preview_voicings[FM_TRACK_INDEX])
                 };
                 for _ in 0..smoothing {
                     for pool in [&mut *live, &mut *preview] {
@@ -3136,9 +3174,9 @@ mod tests {
             let shifted = [20.0, 53.3333, 86.6667, 100.0];
             {
                 let (live, preview) = if track == CHORD_TRACK_INDEX {
-                    (&mut renderer.chord, &mut renderer.preview_chord)
+                    (&mut renderer.voicings[CHORD_TRACK_INDEX], &mut renderer.preview_voicings[CHORD_TRACK_INDEX])
                 } else {
-                    (&mut renderer.fm_chord, &mut renderer.preview_fm_chord)
+                    (&mut renderer.voicings[FM_TRACK_INDEX], &mut renderer.preview_voicings[FM_TRACK_INDEX])
                 };
                 assert_pans(pans(live), shifted);
                 assert_pans(pans(preview), shifted);
@@ -3154,11 +3192,11 @@ mod tests {
             renderer.refresh_active_parameters(0);
             let released = [0.0, 23.3333, 56.6667, 90.0];
             if track == CHORD_TRACK_INDEX {
-                assert_pans(pans(&mut renderer.chord), released);
-                assert_pans(pans(&mut renderer.preview_chord), released);
+                assert_pans(pans(&mut renderer.voicings[CHORD_TRACK_INDEX]), released);
+                assert_pans(pans(&mut renderer.preview_voicings[CHORD_TRACK_INDEX]), released);
             } else {
-                assert_pans(pans(&mut renderer.fm_chord), released);
-                assert_pans(pans(&mut renderer.preview_fm_chord), released);
+                assert_pans(pans(&mut renderer.voicings[FM_TRACK_INDEX]), released);
+                assert_pans(pans(&mut renderer.preview_voicings[FM_TRACK_INDEX]), released);
             }
         }
     }
@@ -3274,9 +3312,9 @@ mod tests {
             renderer.next();
         }
         renderer.process_track_action(CHORD_TRACK_INDEX, 1, false, true);
-        let releasing_group = 1 - renderer.chord.group;
+        let releasing_group = 1 - renderer.voicings[CHORD_TRACK_INDEX].group;
         assert_eq!(
-            renderer.chord.voices[releasing_group * CHORD_GROUP_SIZE]
+            renderer.voicings[CHORD_TRACK_INDEX].voices[releasing_group * CHORD_GROUP_SIZE]
                 .level
                 .value(),
             100.0
@@ -3461,7 +3499,7 @@ mod tests {
             moving
         );
 
-        renderer.synth[0].active = false;
+        renderer.synth[SYNTH_TRACK_START].active = false;
         renderer.process_track_action(track, 1, false, true);
         assert!((renderer.lfo_offsets[track][ParameterId::Level as usize] - 40.0).abs() < 0.000_1);
     }
@@ -3506,10 +3544,10 @@ mod tests {
             renderer.advance_lfos();
         }
         let moving = renderer.lfo_offsets[track][ParameterId::Level as usize];
-        let position = renderer.chord.arpeggio.position;
-        renderer.chord.arpeggio.phase = 0.0;
+        let position = renderer.voicings[CHORD_TRACK_INDEX].arpeggio.position;
+        renderer.voicings[CHORD_TRACK_INDEX].arpeggio.phase = 0.0;
         renderer.advance_chord_arpeggios();
-        assert_ne!(renderer.chord.arpeggio.position, position);
+        assert_ne!(renderer.voicings[CHORD_TRACK_INDEX].arpeggio.position, position);
         assert_eq!(
             renderer.lfo_offsets[track][ParameterId::Level as usize],
             moving
@@ -3726,6 +3764,107 @@ mod tests {
         assert_eq!(renderer.song_bar, 0);
     }
 
+    #[test]
+    fn duplicate_drum_and_voicing_instruments_use_independent_slot_runtime() {
+        let mut project = Project::new();
+        project.tracks[1] = project.tracks[0].clone();
+        project.tracks[2] = project.tracks[CHORD_TRACK_INDEX].clone();
+        for track in [0, 1] {
+            project.patterns[0].tracks[track].steps[0] = Some(StepEvent::Trigger {
+                accent: track == 1,
+                recipe: crate::model::DrumRecipeSlot::ONE,
+                condition: Default::default(),
+                retrigger_count: 1,
+                microtiming: Microtiming::ZERO,
+                locks: Default::default(),
+            });
+        }
+        for track in [2, CHORD_TRACK_INDEX] {
+            project.patterns[0].tracks[track].steps[0] = Some(StepEvent::Note {
+                degree: 1,
+                octave: 3,
+                accent: false,
+                chord_shape: Some(ChordShape::TriadRoot),
+                arpeggio: Default::default(),
+                condition: Default::default(),
+                retrigger_count: 1,
+                microtiming: Microtiming::ZERO,
+                locks: Default::default(),
+            });
+        }
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
+
+        renderer.process_track_action(0, 0, false, true);
+        renderer.process_track_action(1, 0, false, true);
+        renderer.process_track_action(2, 0, false, true);
+        renderer.process_track_action(CHORD_TRACK_INDEX, 0, false, true);
+
+        assert!(!renderer.drums[0].envelope.is_idle());
+        assert!(!renderer.drums[1].envelope.is_idle());
+        assert!(renderer.voicings[2].active);
+        assert!(renderer.voicings[CHORD_TRACK_INDEX].active);
+        assert_ne!(
+            renderer.voicings[2].voices.as_ptr(),
+            renderer.voicings[CHORD_TRACK_INDEX].voices.as_ptr()
+        );
+    }
+
+    #[test]
+    fn a_kick_assigned_to_another_slot_drives_the_shared_sidechain() {
+        let mut project = Project::new();
+        project.tracks[1] = project.tracks[0].clone();
+        project.globals.sidechain.depth = Percent::new(100).unwrap();
+        project.globals.sidechain.attack = Percent::ZERO;
+        project.patterns[0].tracks[1].steps[0] = Some(StepEvent::Trigger {
+            accent: true,
+            recipe: crate::model::DrumRecipeSlot::ONE,
+            condition: Default::default(),
+            retrigger_count: 1,
+            microtiming: Microtiming::ZERO,
+            locks: Default::default(),
+        });
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
+
+        renderer.process_track_action(1, 0, false, true);
+        for _ in 0..256 {
+            renderer.next();
+        }
+
+        assert!(renderer.sidechain.current_gain() < 0.99);
+    }
+
+    #[test]
+    fn replacing_an_instrument_resets_only_that_slots_runtime() {
+        let project = Project::new();
+        let status = Arc::new(AudioStatus::default());
+        let mut renderer = Renderer::new(AudioProject::from_project(&project), 48_000, status);
+        renderer.synth[SYNTH_TRACK_START].active = true;
+        renderer.synth[LEAD_TRACK_INDEX].active = true;
+        renderer.preview_activity[SYNTH_TRACK_START] = true;
+        renderer.next_steps[SYNTH_TRACK_START] = 7;
+
+        let mut changed = project;
+        changed.tracks[SYNTH_TRACK_START] = changed.tracks[0].clone();
+        changed.patterns[0].tracks[SYNTH_TRACK_START].steps.fill(None);
+        renderer.replace_project(
+            Box::new(AudioProject::from_project(&changed)),
+            ParameterSmoothing::Default,
+            PatternIndexMap::identity(),
+            SongIndexMap::identity(),
+        );
+
+        assert_eq!(
+            renderer.project.tracks[SYNTH_TRACK_START].instrument_kind(),
+            TrackKind::Kick
+        );
+        assert!(!renderer.synth[SYNTH_TRACK_START].active);
+        assert!(!renderer.preview_activity[SYNTH_TRACK_START]);
+        assert_eq!(renderer.next_steps[SYNTH_TRACK_START], 0);
+        assert!(renderer.synth[LEAD_TRACK_INDEX].active);
+    }
+
     fn project_with_fm_note() -> Project {
         let mut project = Project::new();
         project.patterns[0].tracks[FM_TRACK_INDEX].steps[0] = Some(StepEvent::Note {
@@ -3782,36 +3921,36 @@ mod tests {
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
         renderer.boundary(0);
         renderer.audition_once(FM_TRACK_INDEX, 0);
-        let live = renderer.fm_chord.group * CHORD_GROUP_SIZE;
-        let preview = renderer.preview_fm_chord.group * CHORD_GROUP_SIZE;
-        assert!(renderer.fm_chord.voices[live].active);
-        assert!(renderer.preview_fm_chord.voices[preview].active);
+        let live = renderer.voicings[FM_TRACK_INDEX].group * CHORD_GROUP_SIZE;
+        let preview = renderer.preview_voicings[FM_TRACK_INDEX].group * CHORD_GROUP_SIZE;
+        assert!(renderer.voicings[FM_TRACK_INDEX].voices[live].active);
+        assert!(renderer.preview_voicings[FM_TRACK_INDEX].voices[preview].active);
 
         edit_fm_parameters(&mut project);
         renderer.command(Audio::snapshot_with_smoothing(
             &project,
             ParameterSmoothing::Fader,
         ));
-        assert_eq!(renderer.fm_chord.voices[live].fm_algorithm, FmAlgorithm::Pairs);
-        assert_eq!(renderer.preview_fm_chord.voices[preview].fm_algorithm, FmAlgorithm::Pairs);
+        assert_eq!(renderer.voicings[FM_TRACK_INDEX].voices[live].fm_algorithm, FmAlgorithm::Pairs);
+        assert_eq!(renderer.preview_voicings[FM_TRACK_INDEX].voices[preview].fm_algorithm, FmAlgorithm::Pairs);
         for _ in 0..ParameterSmoothing::Fader.samples(renderer.sr) {
             Renderer::render_synth(
-                &mut renderer.fm_chord.voices[live],
+                &mut renderer.voicings[FM_TRACK_INDEX].voices[live],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
-            renderer.fm_chord.voices[live].level.next_value();
-            renderer.fm_chord.voices[live].pan.next_value();
+            renderer.voicings[FM_TRACK_INDEX].voices[live].level.next_value();
+            renderer.voicings[FM_TRACK_INDEX].voices[live].pan.next_value();
             Renderer::render_synth(
-                &mut renderer.preview_fm_chord.voices[preview],
+                &mut renderer.preview_voicings[FM_TRACK_INDEX].voices[preview],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
-            renderer.preview_fm_chord.voices[preview].level.next_value();
-            renderer.preview_fm_chord.voices[preview].pan.next_value();
+            renderer.preview_voicings[FM_TRACK_INDEX].voices[preview].level.next_value();
+            renderer.preview_voicings[FM_TRACK_INDEX].voices[preview].pan.next_value();
         }
-        assert_edited_fm_parameters(&renderer.fm_chord.voices[live]);
-        assert_edited_fm_parameters(&renderer.preview_fm_chord.voices[preview]);
+        assert_edited_fm_parameters(&renderer.voicings[FM_TRACK_INDEX].voices[live]);
+        assert_edited_fm_parameters(&renderer.preview_voicings[FM_TRACK_INDEX].voices[preview]);
 
         let mut locks = ParameterLocks::default();
         assert!(locks.set(
@@ -3823,8 +3962,8 @@ mod tests {
             ParameterValue::Percent(Percent::new(17).unwrap()),
         ));
         for voice in [
-            &mut renderer.fm_chord.voices[live],
-            &mut renderer.preview_fm_chord.voices[preview],
+            &mut renderer.voicings[FM_TRACK_INDEX].voices[live],
+            &mut renderer.preview_voicings[FM_TRACK_INDEX].voices[preview],
         ] {
             Renderer::configure_synth_voice(
                 &renderer.project,
@@ -3849,14 +3988,14 @@ mod tests {
         parameters.algorithm = FmAlgorithm::Cascade;
         parameters.operators[1].level = Percent::new(99).unwrap();
         renderer.command(Audio::snapshot(&lock_edit));
-        assert_eq!(renderer.fm_chord.voices[live].fm_algorithm, FmAlgorithm::Additive);
-        assert_eq!(renderer.preview_fm_chord.voices[preview].fm_algorithm, FmAlgorithm::Additive);
+        assert_eq!(renderer.voicings[FM_TRACK_INDEX].voices[live].fm_algorithm, FmAlgorithm::Additive);
+        assert_eq!(renderer.preview_voicings[FM_TRACK_INDEX].voices[preview].fm_algorithm, FmAlgorithm::Additive);
         for _ in 0..ParameterSmoothing::Default.samples(renderer.sr) {
-            renderer.fm_chord.voices[live].fm_levels[1].next_value();
-            renderer.preview_fm_chord.voices[preview].fm_levels[1].next_value();
+            renderer.voicings[FM_TRACK_INDEX].voices[live].fm_levels[1].next_value();
+            renderer.preview_voicings[FM_TRACK_INDEX].voices[preview].fm_levels[1].next_value();
         }
-        assert_eq!(renderer.fm_chord.voices[live].fm_levels[1].value(), 17.0);
-        assert_eq!(renderer.preview_fm_chord.voices[preview].fm_levels[1].value(), 17.0);
+        assert_eq!(renderer.voicings[FM_TRACK_INDEX].voices[live].fm_levels[1].value(), 17.0);
+        assert_eq!(renderer.preview_voicings[FM_TRACK_INDEX].voices[preview].fm_levels[1].value(), 17.0);
     }
 
     #[test]
@@ -3866,23 +4005,23 @@ mod tests {
         let mut renderer = Renderer::new(AudioProject::from_project(&project), 8_000, status);
         renderer.boundary(0);
         renderer.audition_once(FM_TRACK_INDEX, 0);
-        let live = renderer.fm_chord.group * CHORD_GROUP_SIZE;
-        let preview = renderer.preview_fm_chord.group * CHORD_GROUP_SIZE;
+        let live = renderer.voicings[FM_TRACK_INDEX].group * CHORD_GROUP_SIZE;
+        let preview = renderer.preview_voicings[FM_TRACK_INDEX].group * CHORD_GROUP_SIZE;
         for _ in 0..64 {
             Renderer::render_synth(
-                &mut renderer.fm_chord.voices[live],
+                &mut renderer.voicings[FM_TRACK_INDEX].voices[live],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
             Renderer::render_synth(
-                &mut renderer.preview_fm_chord.voices[preview],
+                &mut renderer.preview_voicings[FM_TRACK_INDEX].voices[preview],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
         }
         for voice in [
-            &mut renderer.fm_chord.voices[live],
-            &mut renderer.preview_fm_chord.voices[preview],
+            &mut renderer.voicings[FM_TRACK_INDEX].voices[live],
+            &mut renderer.preview_voicings[FM_TRACK_INDEX].voices[preview],
         ] {
             voice.gate_off();
             voice.active = false;
@@ -3897,22 +4036,22 @@ mod tests {
         ));
         for _ in 0..ParameterSmoothing::Fader.samples(renderer.sr) {
             Renderer::render_synth(
-                &mut renderer.fm_chord.voices[live],
+                &mut renderer.voicings[FM_TRACK_INDEX].voices[live],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
-            renderer.fm_chord.voices[live].level.next_value();
-            renderer.fm_chord.voices[live].pan.next_value();
+            renderer.voicings[FM_TRACK_INDEX].voices[live].level.next_value();
+            renderer.voicings[FM_TRACK_INDEX].voices[live].pan.next_value();
             Renderer::render_synth(
-                &mut renderer.preview_fm_chord.voices[preview],
+                &mut renderer.preview_voicings[FM_TRACK_INDEX].voices[preview],
                 renderer.sr,
                 &[0.0; ParameterId::ALL.len()],
             );
-            renderer.preview_fm_chord.voices[preview].level.next_value();
-            renderer.preview_fm_chord.voices[preview].pan.next_value();
+            renderer.preview_voicings[FM_TRACK_INDEX].voices[preview].level.next_value();
+            renderer.preview_voicings[FM_TRACK_INDEX].voices[preview].pan.next_value();
         }
-        assert_edited_fm_parameters(&renderer.fm_chord.voices[live]);
-        assert_edited_fm_parameters(&renderer.preview_fm_chord.voices[preview]);
+        assert_edited_fm_parameters(&renderer.voicings[FM_TRACK_INDEX].voices[live]);
+        assert_edited_fm_parameters(&renderer.preview_voicings[FM_TRACK_INDEX].voices[preview]);
     }
 
     #[test]

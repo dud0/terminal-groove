@@ -10,9 +10,8 @@ use super::{
 use crate::dsp::EnvelopeProfile;
 use crate::engine::{GateAction, synth_action};
 use crate::model::{
-    ArpeggioConfig, CHORD_TRACK_INDEX, ChordShape, DRUM_TRACK_COUNT, DrumRecipeSlot,
-    FM_TRACK_INDEX, FmOperatorField, Instrument, LEAD_TRACK_INDEX, ParameterId, ParameterLocks,
-    Percent, SYNTH_TRACK_START, StepEvent,
+    ArpeggioConfig, ChordShape, DrumRecipeSlot, FmOperatorField, Instrument, ParameterId,
+    ParameterLocks, Percent, StepEvent,
 };
 use std::sync::atomic::Ordering;
 
@@ -879,122 +878,75 @@ impl Renderer {
     }
     pub(super) fn refresh_active_parameters(&mut self, smoothing: u32) {
         for track in 0..TRACK_COUNT {
-            let live_locks = match track {
-                0..DRUM_TRACK_COUNT => self.drums[track].locks,
-                SYNTH_TRACK_START | LEAD_TRACK_INDEX => self.synth[track - SYNTH_TRACK_START].locks,
-                CHORD_TRACK_INDEX => self
-                    .chord
-                    .voices
-                    .get(self.chord.group * CHORD_GROUP_SIZE)
-                    .map_or(ParameterLocks::default(), |voice| voice.locks),
-                FM_TRACK_INDEX => self
-                    .fm_chord
-                    .voices
-                    .get(self.fm_chord.group * CHORD_GROUP_SIZE)
-                    .map_or(ParameterLocks::default(), |voice| voice.locks),
-                _ => ParameterLocks::default(),
+            let kind = self.project.tracks[track].instrument_kind();
+            let live_locks = if kind.is_drum() {
+                self.drums[track].locks
+            } else if kind.supports_voicing() {
+                let pool = &self.voicings[track];
+                pool.voices
+                    .get(pool.group * CHORD_GROUP_SIZE)
+                    .map_or(ParameterLocks::default(), |voice| voice.locks)
+            } else {
+                self.synth[track].locks
             };
-            let preview_locks = match track {
-                0..DRUM_TRACK_COUNT => self.preview_drums[track].locks,
-                SYNTH_TRACK_START | LEAD_TRACK_INDEX => {
-                    self.preview[track - SYNTH_TRACK_START].locks
-                }
-                CHORD_TRACK_INDEX => self
-                    .preview_chord
-                    .voices
-                    .get(self.preview_chord.group * CHORD_GROUP_SIZE)
-                    .map_or(ParameterLocks::default(), |voice| voice.locks),
-                FM_TRACK_INDEX => self
-                    .preview_fm_chord
-                    .voices
-                    .get(self.preview_fm_chord.group * CHORD_GROUP_SIZE)
-                    .map_or(ParameterLocks::default(), |voice| voice.locks),
-                _ => ParameterLocks::default(),
+            let preview_locks = if kind.is_drum() {
+                self.preview_drums[track].locks
+            } else if kind.supports_voicing() {
+                let pool = &self.preview_voicings[track];
+                pool.voices
+                    .get(pool.group * CHORD_GROUP_SIZE)
+                    .map_or(ParameterLocks::default(), |voice| voice.locks)
+            } else {
+                self.preview[track].locks
             };
             self.configure_track_effects(track, live_locks, smoothing, false);
             self.configure_track_effects(track, preview_locks, smoothing, true);
-        }
-        for track in 0..DRUM_TRACK_COUNT {
             let params = self.project.tracks[track];
-            // Locks are captured at the step boundary. A live project snapshot may
-            // change the current step, but that edit must not affect its active hit.
-            let locks = self.drums[track].locks;
-            Self::apply_drum_mix(&mut self.drums[track], params, locks, smoothing);
-            let locks = self.preview_drums[track].locks;
-            Self::apply_drum_mix(&mut self.preview_drums[track], params, locks, smoothing);
-        }
-        for track in [SYNTH_TRACK_START, LEAD_TRACK_INDEX] {
-            let index = track - SYNTH_TRACK_START;
-            if self.synth[index].active {
-                // Keep the effective lock chain latched until the next boundary.
-                let locks = self.synth[index].locks;
-                Self::apply_synth_params_core(
-                    &self.project,
-                    track,
-                    locks,
-                    &mut self.synth[index],
+            if kind.is_drum() {
+                let live_locks = self.drums[track].locks;
+                let preview_locks = self.preview_drums[track].locks;
+                Self::apply_drum_mix(&mut self.drums[track], params, live_locks, smoothing);
+                Self::apply_drum_mix(
+                    &mut self.preview_drums[track],
+                    params,
+                    preview_locks,
                     smoothing,
                 );
-            }
-            if self.preview[index].active {
-                let locks = self.preview[index].locks;
-                Self::apply_synth_params_core(
-                    &self.project,
-                    track,
-                    locks,
-                    &mut self.preview[index],
-                    smoothing,
-                );
-            }
-        }
-        if self.chord.active {
-            for voice in &mut self.chord.voices[self.chord.group * CHORD_GROUP_SIZE
-                ..self.chord.group * CHORD_GROUP_SIZE + self.chord.voice_count]
-            {
-                let locks = voice.locks;
-                Self::apply_synth_params_core(
-                    &self.project,
-                    CHORD_TRACK_INDEX,
-                    locks,
-                    voice,
-                    smoothing,
-                );
-            }
-        }
-        if self.preview_chord.active {
-            for voice in &mut self.preview_chord.voices[self.preview_chord.group * CHORD_GROUP_SIZE
-                ..self.preview_chord.group * CHORD_GROUP_SIZE + self.preview_chord.voice_count]
-            {
-                let locks = voice.locks;
-                Self::apply_synth_params_core(
-                    &self.project,
-                    CHORD_TRACK_INDEX,
-                    locks,
-                    voice,
-                    smoothing,
-                );
-            }
-        }
-        for voice in &mut self.fm_chord.voices {
-            if !voice.is_idle() {
-                Self::apply_synth_params_core(
-                    &self.project,
-                    FM_TRACK_INDEX,
-                    voice.locks,
-                    voice,
-                    smoothing,
-                );
-            }
-        }
-        for voice in &mut self.preview_fm_chord.voices {
-            if !voice.is_idle() {
-                Self::apply_synth_params_core(
-                    &self.project,
-                    FM_TRACK_INDEX,
-                    voice.locks,
-                    voice,
-                    smoothing,
-                );
+            } else if kind.supports_voicing() {
+                for voice in self.voicings[track]
+                    .voices
+                    .iter_mut()
+                    .chain(self.preview_voicings[track].voices.iter_mut())
+                {
+                    if !voice.is_idle() {
+                        Self::apply_synth_params_core(
+                            &self.project,
+                            track,
+                            voice.locks,
+                            voice,
+                            smoothing,
+                        );
+                    }
+                }
+            } else {
+                if self.synth[track].active {
+                    Self::apply_synth_params_core(
+                        &self.project,
+                        track,
+                        self.synth[track].locks,
+                        &mut self.synth[track],
+                        smoothing,
+                    );
+                }
+                if self.preview[track].active {
+                    Self::apply_synth_params_core(
+                        &self.project,
+                        track,
+                        self.preview[track].locks,
+                        &mut self.preview[track],
+                        smoothing,
+                    );
+                }
             }
         }
     }
@@ -1037,7 +989,8 @@ impl Renderer {
             ParameterSmoothing::Default.samples(self.sr),
             true,
         );
-        if track < DRUM_TRACK_COUNT {
+        let kind = self.project.tracks[track].instrument_kind();
+        if kind.is_drum() {
             let (accent, recipe) =
                 match self.project.patterns[self.active_pattern].tracks[track].steps[step] {
                     Some(StepEvent::Trigger { accent, recipe, .. }) => (accent, recipe),
@@ -1157,9 +1110,9 @@ impl Renderer {
                 self.project.tracks[track].input_octave,
                 self.project.tracks[track].input_accent,
                 false,
-                matches!(track, CHORD_TRACK_INDEX | FM_TRACK_INDEX)
+                kind.supports_voicing()
                     .then_some(self.project.tracks[track].input_chord_shape),
-                if matches!(track, CHORD_TRACK_INDEX | FM_TRACK_INDEX) {
+                if kind.supports_voicing() {
                     self.project.tracks[track].input_chord_arpeggio
                 } else {
                     ArpeggioConfig::default()
@@ -1176,12 +1129,8 @@ impl Renderer {
             arpeggio,
         };
         self.restart_preview_trigger_lfos(track);
-        if matches!(track, CHORD_TRACK_INDEX | FM_TRACK_INDEX) {
-            let pool = if track == CHORD_TRACK_INDEX {
-                &mut self.preview_chord
-            } else {
-                &mut self.preview_fm_chord
-            };
+        if kind.supports_voicing() {
+            let pool = &mut self.preview_voicings[track];
             Self::trigger_chord(&self.project, self.sr, track, trigger, locks, pool);
             let remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
             for voice in &mut pool.voices
@@ -1196,7 +1145,7 @@ impl Renderer {
             }
             return;
         }
-        let v = &mut self.preview[track - SYNTH_TRACK_START];
+        let v = &mut self.preview[track];
         Self::configure_synth_voice(&self.project, self.sr, track, trigger, locks, v);
         v.remaining = (self.sr * 60.0 / self.project.globals.tempo_bpm as f32) as u32;
     }
@@ -1338,8 +1287,9 @@ impl Renderer {
                 voice.gate_off();
                 voice.active = false;
             }
-            Self::release_chord(&mut self.chord);
-            Self::release_chord(&mut self.fm_chord);
+            for pool in &mut self.voicings {
+                Self::release_chord(pool);
+            }
         }
         for track in 0..TRACK_COUNT {
             let step = self.next_steps[track];
@@ -1416,7 +1366,8 @@ impl Renderer {
                 false,
             );
         }
-        if track < DRUM_TRACK_COUNT {
+        let kind = self.project.tracks[track].instrument_kind();
+        if kind.is_drum() {
             if !retrigger {
                 self.update_drum_mix(track, step, ParameterSmoothing::Default.samples(self.sr));
             }
@@ -1433,11 +1384,10 @@ impl Renderer {
             }
             return;
         }
-        let vi = track - SYNTH_TRACK_START;
-        let active = match track {
-            CHORD_TRACK_INDEX => self.chord.active,
-            FM_TRACK_INDEX => self.fm_chord.active,
-            _ => self.synth[vi].active,
+        let active = if kind.supports_voicing() {
+            self.voicings[track].active
+        } else {
+            self.synth[track].active
         };
         let action = if !trigger_allowed
             && !retrigger
@@ -1471,23 +1421,14 @@ impl Renderer {
                     arpeggio,
                 };
                 self.restart_trigger_lfos(track);
-                if track == CHORD_TRACK_INDEX {
+                if kind.supports_voicing() {
                     Self::trigger_chord(
                         &self.project,
                         self.sr,
                         track,
                         trigger,
                         locks,
-                        &mut self.chord,
-                    );
-                } else if track == FM_TRACK_INDEX {
-                    Self::trigger_chord(
-                        &self.project,
-                        self.sr,
-                        track,
-                        trigger,
-                        locks,
-                        &mut self.fm_chord,
+                        &mut self.voicings[track],
                     );
                 } else {
                     Self::configure_synth_voice(
@@ -1496,27 +1437,19 @@ impl Renderer {
                         track,
                         trigger,
                         locks,
-                        &mut self.synth[vi],
+                        &mut self.synth[track],
                     );
                 }
             }
             GateAction::Hold if !retrigger => {
                 if matches!(sequence.steps[step], Some(StepEvent::Tie { .. })) {
                     let locks = self.locks_at(track, step);
-                    if track == CHORD_TRACK_INDEX {
+                    if kind.supports_voicing() {
                         Self::apply_voicing_tie(
                             &self.project,
                             track,
                             locks,
-                            &mut self.chord,
-                            ParameterSmoothing::Default.samples(self.sr),
-                        );
-                    } else if track == FM_TRACK_INDEX {
-                        Self::apply_voicing_tie(
-                            &self.project,
-                            track,
-                            locks,
-                            &mut self.fm_chord,
+                            &mut self.voicings[track],
                             ParameterSmoothing::Default.samples(self.sr),
                         );
                     } else {
@@ -1524,7 +1457,7 @@ impl Renderer {
                             &self.project,
                             track,
                             locks,
-                            &mut self.synth[vi],
+                            &mut self.synth[track],
                             ParameterSmoothing::Default.samples(self.sr),
                         );
                     }
@@ -1537,24 +1470,22 @@ impl Renderer {
                     ParameterSmoothing::Default.samples(self.sr),
                     false,
                 );
-                if track == CHORD_TRACK_INDEX {
+                if kind.supports_voicing() {
                     // The group has finished its step but may still be in
                     // release.  Keep its latched mixer and voice controls;
                     // only the shared track effect controls return to base.
-                    Self::release_chord(&mut self.chord);
-                } else if track == FM_TRACK_INDEX {
-                    Self::release_chord(&mut self.fm_chord);
+                    Self::release_chord(&mut self.voicings[track]);
                 } else {
                     Self::apply_synth_params_core(
                         &self.project,
                         track,
                         ParameterLocks::default(),
-                        &mut self.synth[vi],
+                        &mut self.synth[track],
                         ParameterSmoothing::Default.samples(self.sr),
                     );
-                    self.synth[vi].gate_off();
-                    self.synth[vi].active = false;
-                    self.synth[vi].slide_armed = false;
+                    self.synth[track].gate_off();
+                    self.synth[track].active = false;
+                    self.synth[track].slide_armed = false;
                 }
             }
             _ => {}

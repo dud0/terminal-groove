@@ -67,6 +67,14 @@ pub(crate) enum Mode {
         return_to_global_parameter: bool,
     },
     TrackLengthInput(String),
+    InstrumentDialog {
+        track: usize,
+        selected: TrackKind,
+    },
+    InstrumentChangeConfirm {
+        track: usize,
+        selected: TrackKind,
+    },
     ProjectBrowser {
         entries: Vec<PathBuf>,
         selected: usize,

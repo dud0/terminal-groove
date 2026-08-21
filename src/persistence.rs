@@ -326,10 +326,9 @@ fn migrate_v21(
         }
     }
     let default = Project::new();
-    tracks.push(
-        serde_json::to_value(&default.tracks[crate::model::FM_TRACK_INDEX])
-            .expect("default FM track serializes"),
-    );
+    tracks.push(legacy_track_value(
+        &default.tracks[crate::model::FM_TRACK_INDEX],
+    ));
     let patterns = value
         .get_mut("patterns")
         .and_then(serde_json::Value::as_array_mut)
@@ -346,6 +345,19 @@ fn migrate_v21(
     }
     value["format_version"] = 23.into();
     Ok(value)
+}
+
+fn legacy_track_value(track: &Track) -> serde_json::Value {
+    let mut value = serde_json::to_value(track).expect("track serializes");
+    let object = value
+        .as_object_mut()
+        .expect("track serializes as an object");
+    let kind = object
+        .remove("instrument_kind")
+        .expect("track has an instrument kind");
+    object.insert("kind".into(), kind);
+    object.insert("name".into(), track.kind.name().into());
+    value
 }
 
 fn migrate_fixed_voicing_spread(
@@ -477,6 +489,58 @@ fn discard_legacy_preset_chorus(mut value: serde_json::Value) -> serde_json::Val
     value
 }
 
+fn migrate_v25_assignable_instruments(
+    mut value: serde_json::Value,
+) -> Result<serde_json::Value, crate::model::ValidationError> {
+    let expected = [
+        ("kick", "Kick"),
+        ("snare", "Snare"),
+        ("hat", "Hi-hat"),
+        ("tom", "Tom"),
+        ("cymbal", "Cymbal"),
+        ("rimshot", "Rimshot"),
+        ("bass", "Bass"),
+        ("chord", "Chord"),
+        ("lead", "Lead"),
+        ("fm", "FM"),
+    ];
+    let tracks = value
+        .get_mut("tracks")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or(crate::model::ValidationError::TrackCount)?;
+    if tracks.len() != expected.len() {
+        return Err(crate::model::ValidationError::TrackCount);
+    }
+    for (index, (track, (expected_kind, expected_name))) in
+        tracks.iter_mut().zip(expected).enumerate()
+    {
+        let object = track
+            .as_object_mut()
+            .ok_or(crate::model::ValidationError::TrackOrder(
+                index,
+                expected_name,
+            ))?;
+        if object.get("kind").and_then(serde_json::Value::as_str) != Some(expected_kind)
+            || object.get("name").and_then(serde_json::Value::as_str) != Some(expected_name)
+        {
+            return Err(crate::model::ValidationError::TrackOrder(
+                index,
+                expected_name,
+            ));
+        }
+        let kind = object
+            .remove("kind")
+            .ok_or(crate::model::ValidationError::TrackOrder(
+                index,
+                expected_name,
+            ))?;
+        object.remove("name");
+        object.insert("instrument_kind".into(), kind);
+    }
+    value["format_version"] = 26.into();
+    Ok(value)
+}
+
 pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
     let bytes = fs::read(path).map_err(|source| ProjectIoError::Read {
         path: path.into(),
@@ -489,7 +553,7 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
             source,
         })?;
     let version = value.get("format_version").and_then(|value| value.as_u64());
-    if !matches!(version, Some(21..=25)) {
+    if !matches!(version, Some(21..=26)) {
         return Err(ProjectIoError::Validation {
             path: path.into(),
             source: crate::model::ValidationError::Version(version.unwrap_or_default() as u32),
@@ -503,17 +567,25 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
     } else if version == Some(22) {
         value["format_version"] = 23.into();
     }
-    if !matches!(version, Some(24 | 25)) {
+    if !matches!(version, Some(24..=26)) {
         value =
             migrate_fixed_voicing_spread(value).map_err(|source| ProjectIoError::Validation {
                 path: path.into(),
                 source,
             })?;
     }
-    if version != Some(25) {
+    if !matches!(version, Some(25 | 26)) {
         value = discard_legacy_chorus(value).map_err(|source| ProjectIoError::Validation {
             path: path.into(),
             source,
+        })?;
+    }
+    if version != Some(26) {
+        value = migrate_v25_assignable_instruments(value).map_err(|source| {
+            ProjectIoError::Validation {
+                path: path.into(),
+                source,
+            }
         })?;
     }
     let project: Project =
@@ -602,6 +674,7 @@ pub fn load_track_preset(path: &Path) -> Result<TrackPreset, PresetIoError> {
                 })?;
             if value["track"]
                 .get("kind")
+                .or_else(|| value["track"].get("instrument_kind"))
                 .and_then(serde_json::Value::as_str)
                 == Some("chord")
             {
@@ -705,6 +778,18 @@ pub fn save_track_preset_atomic(path: &Path, preset: &TrackPreset) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn legacy_project_value(project: &Project) -> serde_json::Value {
+        let mut value = serde_json::to_value(project).unwrap();
+        value["tracks"] = project
+            .tracks
+            .iter()
+            .map(legacy_track_value)
+            .collect::<Vec<_>>()
+            .into();
+        value
+    }
+
     #[test]
     fn round_trip_and_newline() {
         let d = tempfile::tempdir().unwrap();
@@ -716,14 +801,66 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_instrument_assignments_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("duplicates.groove.json");
+        let mut project = Project::new();
+        project.tracks[1] = project.tracks[0].clone();
+        project.tracks[8] = project.tracks[7].clone();
+
+        save_atomic(&path, &project).unwrap();
+
+        assert_eq!(load(&path).unwrap(), project);
+    }
+
+    #[test]
+    fn canonical_v25_tracks_migrate_to_assignable_instruments() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("v25.groove.json");
+        let mut value = legacy_project_value(&Project::new());
+        value["format_version"] = 25.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let project = load(&path).unwrap();
+        assert_eq!(project.format_version, 26);
+        assert_eq!(project.tracks[0].kind, crate::model::TrackKind::Kick);
+        assert_eq!(project.tracks[9].kind, crate::model::TrackKind::Fm);
+        let current = serde_json::to_value(project).unwrap();
+        assert_eq!(current["tracks"][0]["instrument_kind"], "kick");
+        assert!(current["tracks"][0].get("kind").is_none());
+        assert!(current["tracks"][0].get("name").is_none());
+    }
+
+    #[test]
+    fn v26_rejects_legacy_track_identity_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy-fields.groove.json");
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        value["tracks"][0]["name"] = "Kick".into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+
+        let mut value = serde_json::to_value(Project::new()).unwrap();
+        let kind = value["tracks"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("instrument_kind")
+            .unwrap();
+        value["tracks"][0]["kind"] = kind;
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(load(&path), Err(ProjectIoError::Json { .. })));
+    }
+
+    #[test]
     fn project_loading_rejects_duplicate_keys_at_every_depth() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("duplicate.groove.json");
         let json = serde_json::to_string_pretty(&Project::new()).unwrap();
 
         let duplicate_version = json.replacen(
-            "\"format_version\": 25",
-            "\"format_version\": 25,\n  \"format_version\": 25",
+            "\"format_version\": 26",
+            "\"format_version\": 26,\n  \"format_version\": 26",
             1,
         );
         fs::write(&path, duplicate_version).unwrap();
@@ -1014,19 +1151,18 @@ mod tests {
         ));
     }
     #[test]
-    fn default_schema_uses_required_names() {
+    fn default_schema_uses_assignable_instruments_without_track_names() {
         let value = serde_json::to_value(Project::new()).unwrap();
-        assert_eq!(value["format_version"], 25);
+        assert_eq!(value["format_version"], 26);
         assert_eq!(value["globals"]["key"], "C");
         assert_eq!(value["globals"]["delay_division"], "eighth");
         assert_eq!(value["globals"]["reverb_tone"], 40);
         assert_eq!(value["globals"]["reverb_pre_delay_ms"], 20);
         assert_eq!(value["globals"]["reverb_return"], 30);
         assert_eq!(value["tracks"].as_array().unwrap().len(), 10);
-        assert_eq!(value["tracks"][0]["name"], "Kick");
-        assert_eq!(value["tracks"][4]["kind"], "cymbal");
-        assert_eq!(value["tracks"][4]["name"], "Cymbal");
-        assert_eq!(value["tracks"][3]["kind"], "tom");
+        assert!(value["tracks"][0].get("name").is_none());
+        assert_eq!(value["tracks"][4]["instrument_kind"], "cymbal");
+        assert_eq!(value["tracks"][3]["instrument_kind"], "tom");
         assert_eq!(value["tracks"][2]["instrument"]["open"]["decay"], 85);
         assert_eq!(value["tracks"][3]["instrument"]["tune"], 15);
         assert_eq!(value["tracks"][3]["instrument"]["tone"], 35);
@@ -1034,13 +1170,12 @@ mod tests {
         assert_eq!(value["tracks"][3]["instrument"]["medium"]["tune"], 50);
         assert_eq!(value["tracks"][3]["instrument"]["high"]["tune"], 85);
         assert_eq!(value["tracks"][4]["instrument"]["tone"], 55);
-        assert_eq!(value["tracks"][5]["kind"], "rimshot");
-        assert_eq!(value["tracks"][5]["name"], "Rimshot");
+        assert_eq!(value["tracks"][5]["instrument_kind"], "rimshot");
         assert_eq!(value["tracks"][5]["instrument"]["tune"], 50);
         assert_eq!(value["tracks"][5]["instrument"]["tone"], 50);
         assert_eq!(value["tracks"][5]["instrument"]["decay"], 50);
-        assert_eq!(value["tracks"][7]["kind"], "chord");
-        assert_eq!(value["tracks"][7]["name"], "Chord");
+        assert_eq!(value["tracks"][7]["instrument_kind"], "chord");
+        assert!(value["tracks"][7].get("name").is_none());
         assert_eq!(value["tracks"][7]["reverb_send"], 20);
         assert!(value["tracks"][7]["instrument"].get("chorus").is_none());
         assert_eq!(value["tracks"][7]["effects"]["chorus"], "off");
@@ -1050,8 +1185,8 @@ mod tests {
         assert_eq!(value["tracks"][0]["effects"]["bit_crusher"]["bits"], 50);
         assert_eq!(value["tracks"][0]["effects"]["bit_crusher"]["rate"], 50);
         assert_eq!(value["tracks"][0]["effects"]["bit_crusher"]["mix"], 0);
-        assert_eq!(value["tracks"][8]["kind"], "lead");
-        assert_eq!(value["tracks"][8]["name"], "Lead");
+        assert_eq!(value["tracks"][8]["instrument_kind"], "lead");
+        assert!(value["tracks"][8].get("name").is_none());
         assert_eq!(value["tracks"][8]["reverb_send"], 20);
         assert_eq!(value["tracks"][0]["lfos"], serde_json::json!({}));
         assert!(value["tracks"][0].get("input_degree").is_none());
@@ -1349,11 +1484,11 @@ mod tests {
         save_atomic(&path, &project).unwrap();
         assert_eq!(load(&path).unwrap(), project);
 
-        let mut value = serde_json::to_value(Project::new()).unwrap();
+        let mut value = legacy_project_value(&Project::new());
         value["format_version"] = 22.into();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 25);
+        assert_eq!(loaded.format_version, 26);
         assert_eq!(
             loaded.tracks[crate::model::CHORD_TRACK_INDEX].input_voicing_shape(),
             Some(crate::model::ChordShape::TriadRoot)
@@ -1381,7 +1516,7 @@ mod tests {
                 microtiming: Default::default(),
                 locks: Default::default(),
             });
-        let mut value = serde_json::to_value(project).unwrap();
+        let mut value = legacy_project_value(&project);
         value["format_version"] = 23.into();
         value["tracks"][crate::model::CHORD_TRACK_INDEX]["instrument"]["spread"] = "narrow".into();
         value["patterns"][0]["tracks"][crate::model::CHORD_TRACK_INDEX]["steps"][0]["locks"] =
@@ -1389,7 +1524,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
 
         let migrated = load(&path).unwrap();
-        assert_eq!(migrated.format_version, 25);
+        assert_eq!(migrated.format_version, 26);
         assert!(
             migrated.patterns[0].tracks[crate::model::CHORD_TRACK_INDEX].steps[0]
                 .unwrap()
@@ -1427,7 +1562,7 @@ mod tests {
                     crate::model::ParameterValue::Chorus(crate::model::ChorusMode::Ii),
                 )]),
             });
-        let mut value = serde_json::to_value(project).unwrap();
+        let mut value = legacy_project_value(&project);
         value["format_version"] = 24.into();
         for track in value["tracks"].as_array_mut().unwrap() {
             track["effects"].as_object_mut().unwrap().remove("chorus");
@@ -1436,7 +1571,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
 
         let migrated = load(&path).unwrap();
-        assert_eq!(migrated.format_version, 25);
+        assert_eq!(migrated.format_version, 26);
         assert!(
             migrated
                 .tracks
@@ -1554,7 +1689,7 @@ mod tests {
             .remove("bit_crusher");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.format_version, 25);
+        assert_eq!(loaded.format_version, 26);
         assert_eq!(
             loaded.tracks[0].effects.flanger,
             crate::model::FlangerParameters::default()
@@ -1713,7 +1848,7 @@ mod tests {
         let mut project = Project::new();
         project.patterns.push(project.patterns[0].clone());
         project.patterns[1].tracks[0].steps[3] = project.patterns[0].tracks[0].steps[0];
-        let mut value = serde_json::to_value(&project).unwrap();
+        let mut value = legacy_project_value(&project);
         value["format_version"] = 21.into();
         value["tracks"].as_array_mut().unwrap().pop();
         for pattern in value["patterns"].as_array_mut().unwrap() {
@@ -1722,7 +1857,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
 
         let migrated = load(&path).unwrap();
-        assert_eq!(migrated.format_version, 25);
+        assert_eq!(migrated.format_version, 26);
         assert_eq!(migrated.tracks.len(), 10);
         assert_eq!(migrated.patterns.len(), 2);
         assert!(migrated.patterns.iter().all(|pattern| pattern.tracks[crate::model::FM_TRACK_INDEX].steps == vec![None; 16]));

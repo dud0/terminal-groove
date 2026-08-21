@@ -909,6 +909,60 @@ pub enum TrackKind {
 }
 
 impl TrackKind {
+    pub const ALL: [Self; TRACK_COUNT] = [
+        Self::Kick,
+        Self::Snare,
+        Self::Hat,
+        Self::Tom,
+        Self::Cymbal,
+        Self::Rimshot,
+        Self::Bass,
+        Self::Chord,
+        Self::Lead,
+        Self::Fm,
+    ];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Kick => "Kick",
+            Self::Snare => "Snare",
+            Self::Hat => "Hi-hat",
+            Self::Tom => "Tom",
+            Self::Cymbal => "Cymbal",
+            Self::Rimshot => "Rimshot",
+            Self::Bass => "Bass",
+            Self::Chord => "Chord",
+            Self::Lead => "Lead",
+            Self::Fm => "FM",
+        }
+    }
+
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Kick => 0,
+            Self::Snare => 1,
+            Self::Hat => 2,
+            Self::Tom => 3,
+            Self::Cymbal => 4,
+            Self::Rimshot => 5,
+            Self::Bass => 6,
+            Self::Chord => 7,
+            Self::Lead => 8,
+            Self::Fm => 9,
+        }
+    }
+
+    pub const fn is_drum(self) -> bool {
+        matches!(
+            self,
+            Self::Kick | Self::Snare | Self::Hat | Self::Tom | Self::Cymbal | Self::Rimshot
+        )
+    }
+
+    pub const fn is_pitched(self) -> bool {
+        matches!(self, Self::Bass | Self::Chord | Self::Lead | Self::Fm)
+    }
+
     pub const fn supports_voicing(self) -> bool {
         matches!(self, Self::Chord | Self::Fm)
     }
@@ -1375,6 +1429,23 @@ pub enum Instrument {
     Chord(ChordParameters),
     Lead(LeadParameters),
     Fm(FmParameters),
+}
+
+impl Instrument {
+    pub const fn kind(self) -> TrackKind {
+        match self {
+            Self::Kick(_) => TrackKind::Kick,
+            Self::Snare(_) => TrackKind::Snare,
+            Self::Hat(_) => TrackKind::Hat,
+            Self::Tom(_) => TrackKind::Tom,
+            Self::Cymbal(_) => TrackKind::Cymbal,
+            Self::Rimshot(_) => TrackKind::Rimshot,
+            Self::Bass(_) => TrackKind::Bass,
+            Self::Chord(_) => TrackKind::Chord,
+            Self::Lead(_) => TrackKind::Lead,
+            Self::Fm(_) => TrackKind::Fm,
+        }
+    }
 }
 
 const PARAMETER_COUNT: usize = ParameterId::COUNT;
@@ -1884,42 +1955,37 @@ impl StepEvent {
 }
 pub type Step = Option<StepEvent>;
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Track {
     pub kind: TrackKind,
     pub name: String,
     pub level: Percent,
-    #[serde(default = "default_pan")]
     pub pan: Percent,
     pub muted: bool,
     pub delay_send: Percent,
     pub reverb_send: Percent,
-    #[serde(default)]
     pub swing: Percent,
-    #[serde(default = "default_probability")]
     pub probability: Percent,
     pub instrument: Instrument,
-    #[serde(default)]
     pub effects: TrackEffects,
     pub lfos: LfoAssignments,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub input_degree: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub input_octave: Option<u8>,
-    #[serde(default, skip_serializing_if = "bool_is_false")]
     pub input_accent: bool,
-    #[serde(default, skip_serializing_if = "chord_shape_is_default")]
     pub input_chord_shape: Option<ChordShape>,
-    #[serde(default, skip_serializing_if = "arpeggio_is_default")]
     pub input_chord_arpeggio: Option<ArpeggioConfig>,
+}
+
+impl Track {
+    pub const fn instrument_kind(&self) -> TrackKind {
+        self.kind
+    }
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TrackWire {
-    kind: TrackKind,
-    name: String,
+    instrument_kind: TrackKind,
     level: Percent,
     #[serde(default = "default_pan")]
     pan: Percent,
@@ -1938,18 +2004,18 @@ struct TrackWire {
     input_degree: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     input_octave: Option<u8>,
-    #[serde(default, skip_serializing_if = "bool_is_false")]
+    #[serde(default)]
     input_accent: bool,
     #[serde(default, skip_serializing_if = "chord_shape_is_default")]
     input_chord_shape: Option<ChordShape>,
-    #[serde(default, skip_serializing_if = "arpeggio_is_default")]
+    #[serde(default)]
     input_chord_arpeggio: Option<ArpeggioConfig>,
 }
 
 impl<'de> Deserialize<'de> for Track {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let wire = TrackWire::deserialize(deserializer)?;
-        let instrument = match wire.kind {
+        let instrument = match wire.instrument_kind {
             TrackKind::Kick => Instrument::Kick(
                 serde_json::from_str(wire.instrument.get()).map_err(serde::de::Error::custom)?,
             ),
@@ -1982,8 +2048,8 @@ impl<'de> Deserialize<'de> for Track {
             ),
         };
         Ok(Self {
-            kind: wire.kind,
-            name: wire.name,
+            kind: wire.instrument_kind,
+            name: wire.instrument_kind.name().to_owned(),
             level: wire.level,
             pan: wire.pan,
             muted: wire.muted,
@@ -2000,6 +2066,41 @@ impl<'de> Deserialize<'de> for Track {
             input_chord_shape: wire.input_chord_shape,
             input_chord_arpeggio: wire.input_chord_arpeggio,
         })
+    }
+}
+
+impl Serialize for Track {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("instrument_kind", &self.kind)?;
+        map.serialize_entry("level", &self.level)?;
+        map.serialize_entry("pan", &self.pan)?;
+        map.serialize_entry("muted", &self.muted)?;
+        map.serialize_entry("delay_send", &self.delay_send)?;
+        map.serialize_entry("reverb_send", &self.reverb_send)?;
+        map.serialize_entry("swing", &self.swing)?;
+        map.serialize_entry("probability", &self.probability)?;
+        map.serialize_entry("instrument", &self.instrument)?;
+        map.serialize_entry("effects", &self.effects)?;
+        map.serialize_entry("lfos", &self.lfos)?;
+        if let Some(value) = self.input_degree {
+            map.serialize_entry("input_degree", &value)?;
+        }
+        if let Some(value) = self.input_octave {
+            map.serialize_entry("input_octave", &value)?;
+        }
+        if self.input_accent {
+            map.serialize_entry("input_accent", &true)?;
+        }
+        if let Some(value) = self.input_chord_shape {
+            map.serialize_entry("input_chord_shape", &value)?;
+        }
+        if let Some(value) = self.input_chord_arpeggio
+            && !value.is_default()
+        {
+            map.serialize_entry("input_chord_arpeggio", &value)?;
+        }
+        map.end()
     }
 }
 
@@ -2046,14 +2147,8 @@ fn default_pan() -> Percent {
 fn default_probability() -> Percent {
     Percent(100)
 }
-fn bool_is_false(value: &bool) -> bool {
-    !*value
-}
 fn chord_shape_is_default(value: &Option<ChordShape>) -> bool {
     value.is_none()
-}
-fn arpeggio_is_default(value: &Option<ArpeggioConfig>) -> bool {
-    value.is_none() || value.is_some_and(|config| config.is_default())
 }
 impl Project {
     pub fn new() -> Self {
@@ -2099,7 +2194,7 @@ impl Project {
             input_chord_arpeggio: None,
         };
         Self {
-            format_version: 25,
+            format_version: 26,
             globals: Globals::default(),
             tracks: vec![
                 track(
@@ -2274,24 +2369,12 @@ impl Project {
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.format_version != 25 {
+        if self.format_version != 26 {
             return Err(ValidationError::Version(self.format_version));
         }
         if self.tracks.len() != TRACK_COUNT {
             return Err(ValidationError::TrackCount);
         }
-        let expected = [
-            (TrackKind::Kick, "Kick"),
-            (TrackKind::Snare, "Snare"),
-            (TrackKind::Hat, "Hi-hat"),
-            (TrackKind::Tom, "Tom"),
-            (TrackKind::Cymbal, "Cymbal"),
-            (TrackKind::Rimshot, "Rimshot"),
-            (TrackKind::Bass, "Bass"),
-            (TrackKind::Chord, "Chord"),
-            (TrackKind::Lead, "Lead"),
-            (TrackKind::Fm, "FM"),
-        ];
         if !(40..=240).contains(&self.globals.tempo_bpm)
             || !self.globals.reverb_time_seconds.is_finite()
             || !(0.2..=10.0).contains(&self.globals.reverb_time_seconds)
@@ -2316,13 +2399,7 @@ impl Project {
             }
         }
         for (ti, t) in self.tracks.iter().enumerate() {
-            if t.kind != expected[ti].0 || t.name != expected[ti].1 {
-                return Err(ValidationError::TrackOrder(ti, expected[ti].1));
-            }
-            let pitched = matches!(
-                t.kind,
-                TrackKind::Bass | TrackKind::Chord | TrackKind::Lead | TrackKind::Fm
-            );
+            let pitched = t.kind.is_pitched();
             let instrument_ok = matches!(
                 (t.kind, t.instrument),
                 (TrackKind::Kick, Instrument::Kick(_))
@@ -2342,7 +2419,10 @@ impl Project {
                 || (!t.kind.supports_voicing()
                     && (t.input_chord_shape.is_some() || t.input_chord_arpeggio.is_some()))
             {
-                return Err(ValidationError::TrackOrder(ti, expected[ti].1));
+                return Err(ValidationError::TrackOrder(
+                    ti,
+                    "compatible instrument and input state",
+                ));
             }
             if t.swing.get() > 75 {
                 return Err(ValidationError::Swing(ti));
@@ -3804,9 +3884,37 @@ mod tests {
     }
 
     #[test]
+    fn project_accepts_duplicate_instruments_in_any_slot() {
+        let mut project = Project::new();
+        project.tracks[9] = project.tracks[0].clone();
+
+        assert!(project.validate().is_ok());
+        assert_eq!(project.tracks[0].kind, TrackKind::Kick);
+        assert_eq!(project.tracks[9].kind, TrackKind::Kick);
+
+        let value = serde_json::to_value(&project).unwrap();
+        assert_eq!(value["tracks"][0]["instrument_kind"], "kick");
+        assert_eq!(value["tracks"][9]["instrument_kind"], "kick");
+    }
+
+    #[test]
+    fn project_rejects_an_instrument_that_disagrees_with_its_kind() {
+        let mut project = Project::new();
+        project.tracks[0].kind = TrackKind::Chord;
+
+        assert!(matches!(
+            project.validate(),
+            Err(ValidationError::TrackOrder(
+                0,
+                "compatible instrument and input state"
+            ))
+        ));
+    }
+
+    #[test]
     fn effects_have_shared_defaults_and_are_lockable_on_every_track() {
         let project = Project::new();
-        assert_eq!(project.format_version, 25);
+        assert_eq!(project.format_version, 26);
         assert_eq!(project.globals.sidechain, SidechainParameters::default());
         assert_eq!(project.globals.sidechain.depth_db(), 0.0);
         assert!((project.globals.sidechain.attack_ms() - 1.134).abs() < 0.01);
