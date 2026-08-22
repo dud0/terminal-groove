@@ -102,6 +102,20 @@ fn is_anchor(kind: TrackKind, step: usize, groove: Option<&[bool]>) -> bool {
     }
 }
 
+fn drum_groove(project: &Project, tracks: &[Vec<Step>]) -> Vec<bool> {
+    let length = tracks.iter().map(Vec::len).max().unwrap_or(0);
+    let mut groove = vec![false; length];
+    for (kind, steps) in project.tracks.iter().map(|track| track.kind).zip(tracks) {
+        if !matches!(kind, TrackKind::Kick | TrackKind::Hat) {
+            continue;
+        }
+        for (step, event) in steps.iter().enumerate() {
+            groove[step] |= event.is_some();
+        }
+    }
+    groove
+}
+
 #[derive(Clone, Copy)]
 struct Rng(u64);
 impl Rng {
@@ -170,22 +184,7 @@ pub fn generate_for_pattern(project: &Project, pattern: usize, config: Config) -
             );
         }
     }
-    let groove: Vec<bool> = tracks
-        .first()
-        .map(|steps| {
-            steps
-                .iter()
-                .enumerate()
-                .map(|(i, e)| {
-                    e.is_some()
-                        || tracks
-                            .get(2)
-                            .and_then(|h| h.get(i))
-                            .is_some_and(Option::is_some)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let groove = drum_groove(project, &tracks);
     for (index, track) in project.tracks.iter().enumerate() {
         if !selected(index)
             || matches!(
@@ -438,6 +437,49 @@ mod tests {
                 .iter()
                 .all(|s| s.iter().all(Option::is_none))
         );
+    }
+
+    #[test]
+    fn groove_uses_all_assigned_kick_and_hat_slots() {
+        let mut project = Project::new();
+        let kick = project.tracks[0].clone();
+        let hat = project.tracks[2].clone();
+        project.tracks[0] = project.tracks[SYNTH_TRACK_START].clone();
+        project.tracks[2] = project.tracks[crate::model::CHORD_TRACK_INDEX].clone();
+        project.tracks[6] = kick;
+        project.tracks[7] = hat.clone();
+        project.tracks[8] = hat;
+
+        let trigger = || {
+            Some(StepEvent::Trigger {
+                accent: false,
+                recipe: crate::model::DrumRecipeSlot::ONE,
+                condition: Default::default(),
+                retrigger_count: 1,
+                microtiming: Default::default(),
+                locks: Default::default(),
+            })
+        };
+        let mut tracks: Vec<Vec<Step>> = project.patterns[0]
+            .tracks
+            .iter()
+            .map(|track| track.steps.clone())
+            .collect();
+        tracks[0][1] = trigger();
+        tracks[2][2] = trigger();
+        tracks[6].truncate(4);
+        tracks[6][3] = trigger();
+        tracks[7].resize(32, None);
+        tracks[7][8] = trigger();
+        tracks[8][12] = trigger();
+
+        let groove = drum_groove(&project, &tracks);
+        assert_eq!(groove.len(), 32);
+        assert!(groove[3]);
+        assert!(groove[8]);
+        assert!(groove[12]);
+        assert!(!groove[1]);
+        assert!(!groove[2]);
     }
 
     fn generated_octaves(steps: &[Step]) -> Vec<u8> {

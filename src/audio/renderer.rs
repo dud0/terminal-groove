@@ -641,7 +641,7 @@ impl Renderer {
             v.reverb_send.next_value(),
         )
     }
-    fn render_drum_raw(
+    pub(super) fn render_drum_raw(
         voice: &mut DrumVoice,
         _track: usize,
         sr: f32,

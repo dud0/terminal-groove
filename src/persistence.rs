@@ -672,6 +672,19 @@ pub fn load_track_preset(path: &Path) -> Result<TrackPreset, PresetIoError> {
                     path: path.into(),
                     source,
                 })?;
+            // Released v1 presets used the project-era track identity fields.
+            // Normalize them before the current strict Track deserializer sees
+            // the value, retaining support for v1 files produced during
+            // development with `instrument_kind` already present.
+            if let Some(track) = value
+                .get_mut("track")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                if let Some(kind) = track.remove("kind") {
+                    track.entry("instrument_kind").or_insert(kind);
+                }
+                track.remove("name");
+            }
             if value["track"]
                 .get("kind")
                 .or_else(|| value["track"].get("instrument_kind"))
@@ -985,11 +998,15 @@ mod tests {
         source.muted = true;
         source.swing = Percent::new(41).unwrap();
         source.input_degree = Some(7);
-        let mut value = serde_json::json!({"format_version":1,"track":source});
+        let mut value = serde_json::json!({
+            "format_version": 1,
+            "track": legacy_track_value(&source),
+        });
         value["track"]["instrument"]["spread"] = "narrow".into();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let preset = load_track_preset(&path).unwrap();
         assert_eq!(preset.format_version, 4);
+        assert_eq!(preset.kind, TrackKind::Chord);
         let mut target = Project::new().tracks[crate::model::CHORD_TRACK_INDEX].clone();
         target.muted = false;
         target.swing = Percent::new(23).unwrap();

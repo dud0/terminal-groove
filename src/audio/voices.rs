@@ -377,6 +377,7 @@ impl KickPitchEnvelope {
 }
 
 pub(super) struct DrumVoice {
+    seed: u32,
     pub(super) kind: DrumVoiceKind,
     pub(super) envelope: DrumEnvelope,
     pub(super) kick_pitch: KickPitchEnvelope,
@@ -423,6 +424,7 @@ pub(super) struct DrumControls {
 impl DrumVoice {
     pub(super) fn new(seed: u32) -> Self {
         Self {
+            seed,
             kind: DrumVoiceKind::Kick,
             envelope: DrumEnvelope::new(),
             kick_pitch: KickPitchEnvelope::new(),
@@ -456,6 +458,11 @@ impl DrumVoice {
             locks: ParameterLocks::default(),
         }
     }
+
+    pub(super) fn reset_runtime(&mut self) {
+        *self = Self::new(self.seed);
+    }
+
     pub(super) fn noise(&mut self) -> f32 {
         let mut x = self.noise;
         x ^= x << 13;

@@ -1,4 +1,4 @@
-use super::voices::{ArpeggioState, DRUM_SILENCE};
+use super::voices::ArpeggioState;
 use super::{
     AudioProject, AudioTrack, ParameterSmoothing, Renderer, SCHEDULED_ACTION_COUNT,
     ScheduledTrackAction, TRACK_COUNT,
@@ -12,9 +12,7 @@ use std::sync::atomic::Ordering;
 impl Renderer {
     fn reset_track_runtime(&mut self, track: usize) {
         for voice in [&mut self.drums[track], &mut self.preview_drums[track]] {
-            voice.envelope.value = DRUM_SILENCE;
-            voice.envelope.elapsed = voice.envelope.decay_samples;
-            voice.locks = ParameterLocks::default();
+            voice.reset_runtime();
         }
         for voice in [&mut self.synth[track], &mut self.preview[track]] {
             voice.gate_off();

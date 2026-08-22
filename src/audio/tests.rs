@@ -465,7 +465,7 @@ mod tests {
         }
 
         let mut reassigned = project.clone();
-        reassigned.tracks[0] = reassigned.tracks[CHORD_TRACK_INDEX].clone();
+        reassigned.tracks[0] = Project::new().tracks[1].clone();
         reassigned.patterns[0].tracks[0].steps.fill(None);
         producer.push(Audio::snapshot(&reassigned)).unwrap();
         crate::test_allocator::reset();
@@ -3845,8 +3845,35 @@ mod tests {
         renderer.preview_activity[SYNTH_TRACK_START] = true;
         renderer.next_steps[SYNTH_TRACK_START] = 7;
 
+        let hat_controls = Renderer::drum_controls(
+            renderer.project.tracks[2],
+            crate::model::DrumRecipeSlot::ONE,
+            ParameterLocks::default(),
+            &[0.0; ParameterId::ALL.len()],
+        )
+        .unwrap();
+        Renderer::start_drum_voice(&mut renderer.drums[0], hat_controls, true, 48_000.0);
+        Renderer::start_drum_voice(
+            &mut renderer.preview_drums[0],
+            hat_controls,
+            true,
+            48_000.0,
+        );
+        for _ in 0..32 {
+            let _ = Renderer::render_drum_raw(&mut renderer.drums[0], 0, 48_000.0, 0.0, 0.0);
+            let _ = Renderer::render_drum_raw(
+                &mut renderer.preview_drums[0],
+                0,
+                48_000.0,
+                0.0,
+                0.0,
+            );
+        }
+
         let mut changed = project;
-        changed.tracks[SYNTH_TRACK_START] = changed.tracks[0].clone();
+        changed.tracks[0] = changed.tracks[1].clone();
+        changed.patterns[0].tracks[0].steps.fill(None);
+        changed.tracks[SYNTH_TRACK_START] = Project::new().tracks[0].clone();
         changed.patterns[0].tracks[SYNTH_TRACK_START].steps.fill(None);
         renderer.replace_project(
             Box::new(AudioProject::from_project(&changed)),
@@ -3863,6 +3890,46 @@ mod tests {
         assert!(!renderer.preview_activity[SYNTH_TRACK_START]);
         assert_eq!(renderer.next_steps[SYNTH_TRACK_START], 0);
         assert!(renderer.synth[LEAD_TRACK_INDEX].active);
+
+        let snare_controls = Renderer::drum_controls(
+            renderer.project.tracks[0],
+            crate::model::DrumRecipeSlot::ONE,
+            ParameterLocks::default(),
+            &[0.0; ParameterId::ALL.len()],
+        )
+        .unwrap();
+        let mut expected_live = DrumVoice::new(0x1234_abcd);
+        let mut expected_preview = DrumVoice::new(0x4a31_27dd);
+        Renderer::start_drum_voice(&mut expected_live, snare_controls, true, 48_000.0);
+        Renderer::start_drum_voice(&mut expected_preview, snare_controls, true, 48_000.0);
+        renderer.trigger_drum(
+            0,
+            true,
+            crate::model::DrumRecipeSlot::ONE,
+            ParameterLocks::default(),
+        );
+        renderer.trigger_preview_drum(
+            0,
+            true,
+            crate::model::DrumRecipeSlot::ONE,
+            ParameterLocks::default(),
+        );
+        for _ in 0..32 {
+            assert_eq!(
+                Renderer::render_drum_raw(&mut renderer.drums[0], 0, 48_000.0, 0.0, 0.0),
+                Renderer::render_drum_raw(&mut expected_live, 0, 48_000.0, 0.0, 0.0),
+            );
+            assert_eq!(
+                Renderer::render_drum_raw(
+                    &mut renderer.preview_drums[0],
+                    0,
+                    48_000.0,
+                    0.0,
+                    0.0,
+                ),
+                Renderer::render_drum_raw(&mut expected_preview, 0, 48_000.0, 0.0, 0.0),
+            );
+        }
     }
 
     fn project_with_fm_note() -> Project {
